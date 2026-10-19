@@ -1,0 +1,29 @@
+name = "upwork-autobidder"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Every 5 minutes: scan + bid (the pipeline skips runs outside active hours or while paused).
+# 23:00 UTC (6 pm Ecuador): daily report + Loom copy cleanup.
+[triggers]
+crons = ["*/5 * * * *", "0 23 * * *"]
+
+# The dashboard HTML is bundled into the Worker as text.
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "autobidder"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+[vars]
+CLAUDE_MODEL = "claude-sonnet-5-5"
+UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
+
+# Secrets (set with `wrangler secret put NAME`, or in .dev.vars for local dev):
+#   DASH_USER, DASH_PASSWORD   dashboard login
+#   TOKEN_KEY                  32+ random chars, encrypts stored Upwork/Loom sessions
+#   ANTHROPIC_API_KEY          cover letters + match scoring
+#   RESEND_API_KEY             daily report email

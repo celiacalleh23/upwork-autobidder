@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upwork Auto-Bidder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: dark header bar, then a single max-width column; dashboard = stats row, queue + side panel, log table; settings = stacked sections */
+:root{
+  --bg:#F3F4F2; --surface:#FFFFFF; --sunken:#F8F9F7; --fg:#16181D; --muted:#5B615A; --line:#DDE0DB; --line-soft:#ECEEEA;
+  --head-bg:#16181D; --head-fg:#F3F4F2; --head-muted:#A9AFAB; --head-chip:#262A31;
+  --accent:#1F5F4F; --accent-strong:#2E8B6E; --accent-fg:#FFFFFF; --accent-soft:#E3F1EC;
+  --warn-bg:#FDF0D9; --warn-fg:#7A4800; --bad-bg:#FBE9E4; --bad-fg:#8A2A15; --info-bg:#E8EEF8; --info-fg:#24467A;
+  --font-body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#111312; --surface:#1A1D1B; --sunken:#151816; --fg:#E7EAE6; --muted:#A1A8A0; --line:#2C312D; --line-soft:#232724;
+  --head-bg:#0B0C0B; --head-fg:#E7EAE6; --head-muted:#8E958D; --head-chip:#1E2220;
+  --accent:#5CC4A2; --accent-strong:#3FA584; --accent-fg:#0C1A15; --accent-soft:#183129;
+  --warn-bg:#36290F; --warn-fg:#F1C67A; --bad-bg:#3A1B14; --bad-fg:#F3A693; --info-bg:#1A2638; --info-fg:#A9C3EA;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:15px; line-height:1.45}
+a{color:var(--accent)} a:hover{color:var(--accent-strong)}
+button,input,select,textarea{font:inherit; color:inherit}
+:focus-visible{outline:2px solid var(--accent-strong); outline-offset:2px}
+.mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+[hidden]{display:none!important}
+
+/* Header */
+.top{background:var(--head-bg); color:var(--head-fg); padding-block:14px; padding-inline:max(16px, env(safe-area-inset-left,0px)) max(16px, env(safe-area-inset-right,0px))}
+.top-in{max-width:1376px; margin:0 auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px 20px}
+.brand{display:flex; align-items:center; gap:12px; min-width:0}
+.logo{width:34px; height:34px; border-radius:8px; background:var(--accent-strong); display:grid; place-items:center; flex:none}
+.brand b{display:block; font-size:17px; font-weight:600}
+.brand small{display:block; font-size:13px; color:var(--head-muted)}
+.controls{display:flex; flex-wrap:wrap; align-items:center; gap:10px}
+.seg{display:flex; background:var(--head-chip); border-radius:10px; padding:4px; gap:4px}
+.seg button{border:0; background:transparent; color:var(--head-muted); border-radius:7px; padding:8px 14px; font-size:14px; font-weight:500; min-height:36px; cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--accent-strong); color:#fff; font-weight:600}
+.pill{display:flex; align-items:center; gap:8px; background:var(--head-chip); border-radius:10px; padding:9px 14px; font-size:14px}
+.pill span{color:var(--head-muted)}
+.btn-pause{border:1px solid #8A3A26; background:transparent; color:#F6B7A6; border-radius:10px; padding:9px 16px; font-size:14px; font-weight:600; min-height:40px; cursor:pointer}
+.btn-pause.resume{background:var(--accent-strong); border-color:var(--accent-strong); color:#fff}
+nav.tabs{max-width:1376px; margin:12px auto 0; display:flex; gap:4px}
+nav.tabs a{color:var(--head-muted); text-decoration:none; padding:8px 12px; border-radius:8px; font-size:14px; font-weight:500}
+nav.tabs a[aria-current="page"]{color:var(--head-fg); background:var(--head-chip)}
+
+/* Banners */
+.banner{padding-block:12px; padding-inline:max(16px, env(safe-area-inset-left,0px)) max(16px, env(safe-area-inset-right,0px)); font-size:14px}
+.banner-in{max-width:1376px; margin:0 auto; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between}
+.banner.bad{background:var(--bad-bg); color:var(--bad-fg)}
+.banner.warn{background:var(--warn-bg); color:var(--warn-fg)}
+.banner.info{background:var(--info-bg); color:var(--info-fg)}
+.banner button{font-size:14px}
+
+main{max-width:1376px; margin:0 auto; padding-block:24px 64px; padding-inline:max(16px, env(safe-area-inset-left,0px)) max(16px, env(safe-area-inset-right,0px)); display:flex; flex-direction:column; gap:22px}
+h1,h2,h3{margin:0; text-wrap:balance}
+h2{font-size:19px; font-weight:600}
+h3{font-size:16px; font-weight:600}
+p{margin:0}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+
+/* Status row + stats */
+.status{display:flex; flex-wrap:wrap; align-items:center; gap:8px 22px; font-size:14px; color:var(--muted)}
+.status strong{color:var(--fg); font-weight:600}
+.dot{width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle}
+.stats{display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:14px}
+.stat{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:4px; min-width:0}
+.stat .label{font-size:13px; color:var(--muted)}
+.stat .value{font-size:28px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.15}
+.stat .value small{font-size:14px; font-weight:400; color:var(--muted)}
+.stat .sub{font-size:13px; color:var(--muted)}
+.bar{height:6px; background:var(--line-soft); border-radius:3px; margin-top:6px; overflow:hidden}
+.bar i{display:block; height:100%; background:var(--accent-strong); border-radius:3px}
+.v-warn{color:var(--warn-fg)} .v-bad{color:var(--bad-fg)}
+
+/* Queue + side */
+.cols{display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start}
+.queue{flex:999 1 620px; min-width:0; display:flex; flex-direction:column; gap:14px}
+.side{flex:1 1 320px; min-width:0; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:12px}
+.side ol{margin:0; padding-left:20px; display:flex; flex-direction:column; gap:8px; font-size:14px}
+.side .rules{border-top:1px solid var(--line-soft); padding-top:12px; font-size:13px; color:var(--muted)}
+.row-head{display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:12px; min-width:0}
+.card-top{display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; align-items:flex-start}
+.card-top > div:first-child{min-width:0; flex:1 1 300px}
+.card h3 a{color:var(--fg); text-decoration:none} .card h3 a:hover{text-decoration:underline}
+.meta{font-size:13px; color:var(--muted); margin-top:4px}
+.chips{display:flex; flex-wrap:wrap; gap:6px}
+.chip{font-size:12.5px; font-weight:500; padding:3px 10px; border-radius:999px; white-space:nowrap; background:var(--line-soft); color:var(--fg)}
+.chip.good{background:var(--accent-soft); color:var(--accent)}
+.chip.warn{background:var(--warn-bg); color:var(--warn-fg)}
+.chip.bad{background:var(--bad-bg); color:var(--bad-fg)}
+.chip.info{background:var(--info-bg); color:var(--info-fg)}
+.kw{font-family:var(--font-mono); font-size:12px; border:1px solid var(--line); background:var(--sunken); padding:2px 8px; border-radius:6px}
+.letter{background:var(--sunken); border:1px solid var(--line-soft); border-radius:8px; padding:12px 14px; font-size:14px; white-space:pre-line; overflow-wrap:anywhere; max-height:260px; overflow:auto}
+.card-foot{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px}
+.loom{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); min-width:0}
+.loom a{overflow-wrap:anywhere}
+.actions{display:flex; gap:8px; flex-wrap:wrap}
+.btn{border-radius:8px; padding:9px 16px; font-size:14px; font-weight:500; min-height:42px; cursor:pointer; border:1px solid var(--line); background:transparent}
+.btn.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-fg); font-weight:600}
+.btn.outline{border-color:var(--accent); color:var(--accent); background:var(--surface)}
+.btn.danger{border-color:var(--bad-fg); color:var(--bad-fg)}
+.btn:disabled{opacity:.5; cursor:not-allowed}
+.empty{background:var(--surface); border:1px dashed var(--line); border-radius:12px; padding:28px; text-align:center; color:var(--muted); display:flex; flex-direction:column; gap:6px; align-items:center}
+textarea, input[type=text], input[type=number], input[type=email], input[type=url], input[type=time], select{
+  width:100%; border:1px solid var(--line); background:var(--surface); border-radius:8px; padding:10px 12px; min-height:44px; font-size:15px}
+textarea{resize:vertical; line-height:1.5; font-size:14px}
+.count{font-size:12.5px; color:var(--muted); text-align:right}
+.count.over{color:var(--bad-fg); font-weight:600}
+
+/* Log table */
+.panel{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:12px; min-width:0}
+.tools{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+.tools select{width:auto; min-width:170px}
+.tablewrap{overflow-x:auto}
+table{width:100%; min-width:760px; border-collapse:collapse; font-size:14px}
+th{text-align:left; font-size:12.5px; font-weight:500; color:var(--muted); padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap}
+td{padding:11px 12px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+td.when{font-family:var(--font-mono); font-size:13px; white-space:nowrap}
+td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
+
+/* Settings */
+.settings{display:flex; flex-direction:column; gap:18px; max-width:1040px}
+.section{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:22px; display:flex; flex-direction:column; gap:16px}
+.section > header p{margin-top:4px; font-size:14px; color:var(--muted)}
+.grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:14px 16px}
+.field{display:flex; flex-direction:column; gap:6px; min-width:0}
+.field label, .field .lbl{font-size:14px; font-weight:500}
+.hint{font-size:12.5px; color:var(--muted)}
+.check{display:flex; gap:10px; align-items:flex-start; font-size:14px}
+.check input{width:18px; height:18px; margin-top:2px; flex:none; accent-color:var(--accent)}
+.tags{display:flex; flex-wrap:wrap; gap:8px}
+.tag{display:flex; align-items:center; gap:4px; background:var(--accent-soft); color:var(--accent); font-size:14px; padding:4px 4px 4px 12px; border-radius:999px}
+.tag.ex{background:var(--bad-bg); color:var(--bad-fg)}
+.tag button{border:0; background:transparent; color:inherit; width:28px; height:28px; border-radius:50%; cursor:pointer; font-size:16px; line-height:1}
+.addrow{display:flex; gap:8px; max-width:480px}
+.addrow input{flex:1; min-width:0}
+.note{border-radius:8px; padding:12px 14px; font-size:14px; background:var(--warn-bg); color:var(--warn-fg)}
+.note.info{background:var(--info-bg); color:var(--info-fg)}
+.conn{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--line-soft); padding-top:14px}
+.savebar{position:sticky; bottom:0; background:var(--bg); border-top:1px solid var(--line); padding-block:12px calc(12px + env(safe-area-inset-bottom,0px)); display:flex; gap:12px; align-items:center; justify-content:flex-end; flex-wrap:wrap; z-index:5}
+.savebar .msg{flex:1 1 260px; font-size:14px}
+.msg.bad{color:var(--bad-fg)} .msg.good{color:var(--accent)}
+
+/* Confirm panel + toast */
+.confirm{background:var(--surface); border:1px solid var(--warn-fg); border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:12px}
+.toast{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(20px + env(safe-area-inset-bottom,0px)); background:var(--fg); color:var(--bg); padding:12px 18px; border-radius:10px; font-size:14px; max-width:min(560px, calc(100vw - 32px)); z-index:20; box-shadow:0 6px 24px rgba(0,0,0,.18)}
+.toast.bad{background:var(--bad-fg); color:#fff}
+@media (prefers-reduced-motion: reduce){*{transition:none!important; animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="top-in">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+      <div><b>Upwork Auto-Bidder</b><small id="account">Loading…</small></div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Sending mode">
+        <button type="button" id="modeReview" aria-pressed="true">Review first</button>
+        <button type="button" id="modeAuto" aria-pressed="false">Auto-submit</button>
+      </div>
+      <div class="pill"><span>Connects</span><b class="mono" id="connects">–</b></div>
+      <button type="button" class="btn-pause" id="pauseBtn">Pause all</button>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#dashboard" id="tabDash" aria-current="page">Dashboard</a>
+    <a href="#settings" id="tabSettings">Settings</a>
+  </nav>
+</div>
+
+<div class="banner bad" id="pausedBanner" hidden><div class="banner-in"><span id="pausedText">Bidding is paused.</span><button type="button" class="btn" id="resumeInline">Resume bidding</button></div></div>
+<div class="banner info" id="exampleBanner" hidden><div class="banner-in"><span>You're looking at example proposals. Real ones appear here once Upwork is connected.</span><button type="button" class="btn" id="clearExamples">Remove examples</button></div></div>
+
+<main>
+  <section class="confirm" id="autoConfirm" hidden aria-labelledby="autoH">
+    <h2 id="autoH">Turn on Auto-submit?</h2>
+    <p>Proposals will be sent without your approval, inside your caps: <b id="capLine">15 a day, 3 an hour, 10 minutes apart</b>, during active hours only. We recommend switching after about two weeks in Review with no warnings from Upwork.</p>
+    <p class="small muted">If Upwork ever stops allowing automatic confirmation, the tool switches itself back to Review and tells you.</p>
+    <div class="actions"><button type="button" class="btn" id="autoCancel">Keep Review first</button><button type="button" class="btn primary" id="autoOk">Turn on Auto-submit</button></div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <div id="viewDash" style="display:flex; flex-direction:column; gap:22px">
+    <section class="status" aria-label="Pipeline status">
+      <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
+      <span>Last scan: <strong id="lastScan">–</strong></span>
+      <span>Scans every <strong id="scanEvery">5</strong> min</span>
+      <span>Active hours: <strong id="activeHours">–</strong></span>
+      <span>Mode: <strong id="modeText">Review first</strong></span>
+    </section>
+
+    <section class="stats" aria-label="Today">
+      <div class="stat"><span class="label">Jobs scanned today</span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
+      <div class="stat"><span class="label">Proposals sent today</span><span class="value"><span id="sSent">0</span> <small id="sCap">/ 15 cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
+      <div class="stat"><span class="label">Waiting for review</span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
+      <div class="stat"><span class="label">Connects spent today</span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
+      <div class="stat"><span class="label">Failed today</span><span class="value" id="sFailed">0</span><a href="#log" class="sub">See the log</a></div>
+    </section>
+
+    <div class="cols">
+      <section class="queue" aria-labelledby="qH">
+        <div class="row-head"><h2 id="qH">Review queue</h2><span class="small muted" id="qCount"></span></div>
+        <div id="queueList" style="display:flex; flex-direction:column; gap:14px"></div>
+      </section>
+      <aside class="side" aria-labelledby="pH">
+        <h3 id="pH">What happens to each job</h3>
+        <ol>
+          <li><b>Find.</b> Upwork is searched for your keywords every few minutes.</li>
+          <li><b>Filter.</b> Budget, rate, verified payment, proposal count, then an AI match score.</li>
+          <li><b>Write.</b> Claude drafts the letter from your template and the job post.</li>
+          <li><b>Loom.</b> Your video is copied and renamed to the job title.</li>
+          <li><b>Review.</b> It waits here for you, or goes straight out in Auto-submit.</li>
+          <li><b>Send.</b> Approved proposals go out one at a time, spaced apart, in active hours.</li>
+          <li><b>Log.</b> Result, Connects and Loom link are saved; daily report by email.</li>
+        </ol>
+        <p class="rules" id="rulesLine">Guardrails: 15 a day · 3 an hour · 10 min apart · stop below 20 Connects · auto-stop after 3 errors.</p>
+      </aside>
+    </div>
+
+    <section class="panel" id="log" aria-labelledby="lH">
+      <div class="row-head">
+        <h2 id="lH">Activity log</h2>
+        <div class="tools">
+          <label class="small muted" for="logFilter">Show</label>
+          <select id="logFilter">
+            <option value="">All proposals</option>
+            <option value="submitted">Submitted</option>
+            <option value="approved">Approved, sending soon</option>
+            <option value="pending">Waiting for review</option>
+            <option value="failed">Failed</option>
+            <option value="unknown">Check on Upwork</option>
+            <option value="skipped">Skipped</option>
+          </select>
+          <a class="btn" href="/api/log.csv" download>Export CSV</a>
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Time</th><th>Job</th><th>Status</th><th>Score</th><th>Connects</th><th>Loom</th></tr></thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+      <p class="small muted" id="logEmpty" hidden>Nothing here yet.</p>
+      <div><button type="button" class="btn" id="logMore" hidden>Load more</button></div>
+    </section>
+  </div>
+
+  <!-- SETTINGS -->
+  <form id="viewSettings" class="settings" hidden novalidate>
+    <section class="section" aria-labelledby="s1">
+      <header><h2 id="s1">Which jobs to bid on</h2><p>A job must match at least one keyword and none of the exclusions.</p></header>
+      <div class="field">
+        <span class="lbl" id="kwLbl">Keywords</span>
+        <div class="tags" id="kwTags" aria-labelledby="kwLbl"></div>
+        <div class="addrow"><input type="text" id="kwInput" placeholder="Add a keyword" aria-labelledby="kwLbl" maxlength="60"><button type="button" class="btn outline" id="kwAdd">Add</button></div>
+        <label class="check" for="titleOnly"><input type="checkbox" id="titleOnly"><span>Match keywords in the job title only (less noise)</span></label>
+      </div>
+      <div class="field">
+        <span class="lbl" id="exLbl">Skip jobs containing</span>
+        <div class="tags" id="exTags" aria-labelledby="exLbl"></div>
+        <div class="addrow"><input type="text" id="exInput" placeholder="Add a word to exclude" aria-labelledby="exLbl" maxlength="60"><button type="button" class="btn outline" id="exAdd">Add</button></div>
+      </div>
+      <div class="grid">
+        <div class="field"><label for="minFixedBudget">Minimum fixed budget (USD)</label><input type="number" id="minFixedBudget" min="0" step="10"></div>
+        <div class="field"><label for="minHourlyRate">Minimum hourly rate (USD)</label><input type="number" id="minHourlyRate" min="0" step="1"></div>
+        <div class="field"><label for="maxExistingProposals">Skip if it already has more than</label>
+          <select id="maxExistingProposals"><option value="10">10 proposals</option><option value="20">20 proposals</option><option value="50">50 proposals</option><option value="0">No limit</option></select></div>
+        <div class="field"><label for="minScore">Minimum AI match score</label><input type="number" id="minScore" min="0" max="100"><span class="hint">0–100. Jobs below it are skipped and logged.</span></div>
+      </div>
+      <label class="check" for="verifiedOnly"><input type="checkbox" id="verifiedOnly"><span>Only clients with verified payment</span></label>
+    </section>
+
+    <section class="section" aria-labelledby="s2">
+      <header><h2 id="s2">Cover letter</h2><p>Claude writes each letter from these instructions and the job post. Upwork's limit is 5,000 characters, with no contact details.</p></header>
+      <div class="field"><label for="letterTemplate">Template or two past winning proposals</label><textarea id="letterTemplate" rows="8" placeholder="Paste a proposal that worked, or the structure you want every letter to follow."></textarea></div>
+      <div class="field"><label for="letterRules">Rules</label><textarea id="letterRules" rows="6"></textarea></div>
+      <label class="check" for="discOn"><input type="checkbox" id="discOn"><span>Add an AI disclosure line to every letter</span></label>
+      <div class="field"><label for="discLine">Disclosure line</label><input type="text" id="discLine" maxlength="200"></div>
+      <p class="note">Upwork's terms (section 9.7) ask for AI use to be disclosed when a client would reasonably assume a person wrote the text. Leaving this off is your decision and adds account risk.</p>
+    </section>
+
+    <section class="section" aria-labelledby="s3">
+      <header><h2 id="s3">Bids</h2></header>
+      <div class="grid">
+        <div class="field"><label for="bidHourly">Hourly jobs</label><select id="bidHourly"><option value="profile">Profile rate</option><option value="client_max">Top of the client's range</option></select></div>
+        <div class="field"><label for="bidFixed">Fixed-price jobs</label><select id="bidFixed"><option value="client_budget">Client's budget</option><option value="budget_plus_10">Budget + 10%</option></select></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="s4">
+      <header><h2 id="s4">Loom video</h2><p>Each proposal gets a copy of this video renamed to the job title. The video itself never changes.</p></header>
+      <div class="grid">
+        <div class="field" style="grid-column:1/-1"><label for="loomUrl">Source video link</label><input type="url" id="loomUrl" placeholder="https://www.loom.com/share/…"><span class="hint">Must be recorded from the connected Loom account; Loom only lets the owner duplicate a video.</span></div>
+        <div class="field"><label for="loomDelete">Delete copies after (days)</label><input type="number" id="loomDelete" min="7" max="365"></div>
+      </div>
+      <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div></div><span class="chip warn" id="loomChip">Connect on the setup call</span></div>
+    </section>
+
+    <section class="section" aria-labelledby="s5">
+      <header><h2 id="s5">Caps and guardrails</h2><p>Your account sends 15–30 proposals a day today. Start at 15 in Review; raise toward 30 after about two quiet weeks in Auto-submit.</p></header>
+      <div class="grid">
+        <div class="field"><label for="scanEvery">Scan Upwork every</label><select id="scanEvery"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
+        <div class="field"><label for="capDaily">Proposals per day</label><input type="number" id="capDaily" min="1" max="40"></div>
+        <div class="field"><label for="capHourly">Proposals per hour</label><input type="number" id="capHourly" min="1" max="6"></div>
+        <div class="field"><label for="capGap">Minutes between proposals</label><input type="number" id="capGap" min="5" max="120"></div>
+        <div class="field"><label for="activeStart">Active from</label><input type="time" id="activeStart"></div>
+        <div class="field"><label for="activeEnd">Active until</label><input type="time" id="activeEnd"></div>
+        <div class="field"><label for="timezone">Time zone</label>
+          <select id="timezone">
+            <option value="America/New_York">US Eastern</option><option value="America/Chicago">US Central</option>
+            <option value="America/Denver">US Mountain</option><option value="America/Los_Angeles">US Pacific</option>
+            <option value="America/Guayaquil">Ecuador</option><option value="Europe/London">UK</option>
+          </select></div>
+        <div class="field"><label for="floor">Stop when Connects drop below</label><input type="number" id="floor" min="0"></div>
+        <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label><input type="number" id="maxConnects" min="1" max="50"></div>
+        <div class="field"><label for="boost">Boost</label><select id="boost"><option value="never">Never</option><option value="up_to_10">If a top slot costs 10 or less</option><option value="up_to_20">If a top slot costs 20 or less</option></select></div>
+        <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
+      </div>
+      <p class="note info">Always on: one proposal per job, no contact details in letters, and an automatic pause at any rate-limit or account warning from Upwork.</p>
+    </section>
+
+    <section class="section" aria-labelledby="s6">
+      <header><h2 id="s6">Reports and connections</h2></header>
+      <div class="grid"><div class="field"><label for="reportEmail">Daily report email (6 pm)</label><input type="email" id="reportEmail" placeholder="name@company.com"></div></div>
+      <div class="conn"><div><b>Upwork</b><div class="small muted" id="upworkStatus">Not connected. Rafa signs in once on the setup call.</div></div><span class="chip warn" id="upworkChip">Not connected</span></div>
+      <div class="conn" id="examplesRow" hidden><div><b>Example data</b><div class="small muted">Sample proposals shown before the first real ones.</div></div><button type="button" class="btn danger" id="clearExamples2">Remove examples</button></div>
+    </section>
+
+    <div class="savebar"><span class="msg" id="saveMsg" role="status"></span><button type="button" class="btn" id="resetBtn">Discard changes</button><button type="submit" class="btn primary" id="saveBtn">Save changes</button></div>
+  </form>
+</main>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const h = (tag, attrs = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+    for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    return el;
+  };
+
+  let state = null, settings = null, logOffset = 0, editing = new Set(), toastTimer = null;
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: { 'x-dashboard': '1', ...(opts.body ? { 'content-type': 'application/json' } : {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* empty */ }
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+    return data;
+  }
+  function toast(msg, bad = false) {
+    const t = $('toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : ''); t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 7000 : 4000);
+  }
+  const fmtNum = (n) => (n === null || n === undefined ? '–' : Number(n).toLocaleString('en-US'));
+  function ago(iso) {
+    if (!iso) return '–';
+    const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} d ago`;
+  }
+  function when(iso) {
+    if (!iso) return '–';
+    const d = new Date(iso);
+    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  const STATUS = {
+    pending: ['Waiting for review', 'warn'], approved: ['Approved, sending soon', 'info'], submitting: ['Sending', 'info'],
+    submitted: ['Submitted', 'good'], failed: ['Failed', 'bad'], skipped: ['Skipped', ''], unknown: ['Check on Upwork', 'warn'],
+  };
+
+  // ---------- State / header ----------
+  function renderState() {
+    const s = state;
+    $('account').textContent = s.upwork.connected ? `Bidding as ${s.upwork.account || 'connected account'}` : 'Upwork not connected yet';
+    $('connects').textContent = fmtNum(s.connectsBalance);
+    $('modeReview').setAttribute('aria-pressed', String(s.mode === 'review'));
+    $('modeAuto').setAttribute('aria-pressed', String(s.mode === 'auto'));
+    $('modeText').textContent = s.mode === 'auto' ? 'Auto-submit' : 'Review first';
+    const pb = $('pauseBtn');
+    pb.textContent = s.paused ? 'Resume bidding' : 'Pause all';
+    pb.classList.toggle('resume', s.paused);
+    $('pausedBanner').hidden = !s.paused;
+    $('pausedText').textContent = s.paused ? `Bidding is paused. ${s.pausedReason || ''} Nothing is scanned or sent until you resume.` : '';
+    $('exampleBanner').hidden = !s.hasExamples;
+    $('examplesRow').hidden = !s.hasExamples;
+
+    let label = 'Running', color = 'var(--accent-strong)';
+    if (s.paused) { label = 'Paused'; color = 'var(--bad-fg)'; }
+    else if (!s.upwork.connected) { label = 'Waiting for Upwork connection'; color = 'var(--warn-fg)'; }
+    else if (!s.activeNow) { label = 'Outside active hours'; color = 'var(--muted)'; }
+    $('statusText').textContent = label;
+    $('statusDot').style.background = color;
+    $('lastScan').textContent = ago(s.lastScanAt);
+    $('scanEvery').textContent = s.scanEveryMinutes;
+    $('activeHours').textContent = `${s.activeHours.start}–${s.activeHours.end} (${tzName(s.activeHours.timezone)})`;
+
+    const t = s.today, c = s.caps;
+    $('sScanned').textContent = fmtNum(t.scanned);
+    $('sMatched').textContent = `${fmtNum(t.matched)} matched your filters`;
+    $('sSent').textContent = fmtNum(t.sent);
+    $('sCap').textContent = `/ ${c.daily} cap`;
+    $('sBar').style.width = Math.min(100, (t.sent / Math.max(1, c.daily)) * 100) + '%';
+    $('sWaiting').textContent = fmtNum(t.waiting);
+    $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
+    $('sConnects').textContent = fmtNum(t.connectsSpent);
+    $('sFloor').textContent = `Stops below ${c.connectsFloor}`;
+    $('sFailed').textContent = fmtNum(t.failed);
+    $('sFailed').className = 'value' + (t.failed ? ' v-bad' : '');
+    $('rulesLine').textContent = `Guardrails: ${c.daily} a day · ${c.hourly} an hour · ${c.gapMinutes} min apart · stop below ${c.connectsFloor} Connects · one proposal per job · auto-pause on any Upwork warning.`;
+    $('capLine').textContent = `${c.daily} a day, ${c.hourly} an hour, ${c.gapMinutes} minutes apart`;
+
+    $('upworkChip').textContent = s.upwork.connected ? 'Connected' : 'Not connected';
+    $('upworkChip').className = 'chip ' + (s.upwork.connected ? 'good' : 'warn');
+    $('upworkStatus').textContent = s.upwork.connected ? `Official Upwork connection · ${s.upwork.account || ''}` : 'Not connected. Rafa signs in once on the setup call.';
+    $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Connect on the setup call';
+    $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
+    $('loomStatus').textContent = s.loom.connected ? 'Copies are created and renamed automatically' : 'Not connected';
+  }
+  const tzName = (tz) => ({ 'America/New_York': 'US Eastern', 'America/Chicago': 'US Central', 'America/Denver': 'US Mountain', 'America/Los_Angeles': 'US Pacific', 'America/Guayaquil': 'Ecuador', 'Europe/London': 'UK' }[tz] || tz);
+
+  async function loadState() {
+    try { state = await api('/api/state'); renderState(); }
+    catch (e) { toast(e.message, true); }
+  }
+
+  // ---------- Queue ----------
+  async function loadQueue() {
+    if (editing.size) return; // don't wipe a letter being edited
+    let rows;
+    try { rows = await api('/api/queue'); } catch (e) { toast(e.message, true); return; }
+    const list = $('queueList'); list.replaceChildren();
+    $('qCount').textContent = rows.length ? `${rows.length} waiting · highest match first` : '';
+    if (!rows.length) {
+      list.append(h('div', { class: 'empty' },
+        h('b', { text: 'Nothing waiting for review' }),
+        h('span', { text: state && state.upwork.connected ? 'New matching jobs appear here as they are found.' : 'Proposals appear here once Upwork is connected and the first scan runs.' })));
+      return;
+    }
+    for (const p of rows) list.append(card(p));
+  }
+
+  function card(p) {
+    const meta = [p.client_country, p.job_type === 'hourly' ? 'Hourly' : p.job_type === 'fixed' ? 'Fixed price' : null, p.budget, `found ${ago(p.created_at)}`].filter(Boolean).join(' · ');
+    const letterBox = h('div', { class: 'letter', text: p.cover_letter });
+    const editWrap = h('div', { class: 'field', hidden: true });
+    const ta = h('textarea', { rows: '10', id: `letter-${p.id}`, 'aria-label': `Cover letter for ${p.title}` });
+    ta.value = p.cover_letter;
+    const counter = h('div', { class: 'count' });
+    const updateCount = () => { counter.textContent = `${ta.value.length.toLocaleString('en-US')} / 5,000`; counter.classList.toggle('over', ta.value.length > 5000); };
+    ta.addEventListener('input', updateCount); updateCount();
+    editWrap.append(ta, counter);
+
+    const editBtn = h('button', { type: 'button', class: 'btn outline', text: 'Edit letter' });
+    const approveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Approve' });
+    const skipBtn = h('button', { type: 'button', class: 'btn', text: 'Skip' });
+    const el = h('article', { class: 'card' },
+      h('div', { class: 'card-top' },
+        h('div', {},
+          h('h3', {}, p.url ? h('a', { href: p.url, target: '_blank', rel: 'noopener noreferrer', text: p.title }) : p.title),
+          h('div', { class: 'meta', text: meta })),
+        h('div', { class: 'chips' },
+          p.is_example ? h('span', { class: 'chip info', text: 'Example' }) : null,
+          p.score !== null ? h('span', { class: 'chip good', text: `Match ${p.score}` }) : null,
+          p.connects !== null ? h('span', { class: 'chip', text: `${p.connects} Connects` }) : null,
+          p.bid !== null ? h('span', { class: 'chip', text: `Bid $${p.bid}${p.job_type === 'hourly' ? '/hr' : ''}` }) : null)),
+      p.keywords.length ? h('div', { class: 'chips' }, p.keywords.map((k) => h('span', { class: 'kw', text: k }))) : null,
+      letterBox, editWrap,
+      h('div', { class: 'card-foot' },
+        h('div', { class: 'loom' },
+          h('span', { 'aria-hidden': 'true', text: '▶' }),
+          p.loom_url ? h('span', {}, 'Loom: ', h('a', { href: p.loom_url, target: '_blank', rel: 'noopener noreferrer', text: `“${p.title}”` })) : h('span', { text: 'Loom copy is created when it is sent' })),
+        h('div', { class: 'actions' }, skipBtn, editBtn, approveBtn)));
+
+    editBtn.addEventListener('click', async () => {
+      if (editWrap.hidden) {
+        editing.add(p.id); editWrap.hidden = false; letterBox.hidden = true; editBtn.textContent = 'Save letter'; approveBtn.disabled = true; ta.focus();
+        return;
+      }
+      editBtn.disabled = true;
+      try {
+        await api(`/api/proposals/${p.id}`, { method: 'PATCH', body: { cover_letter: ta.value } });
+        p.cover_letter = ta.value.trim(); letterBox.textContent = p.cover_letter;
+        editing.delete(p.id); editWrap.hidden = true; letterBox.hidden = false; editBtn.textContent = 'Edit letter'; approveBtn.disabled = false;
+        toast('Letter saved.');
+      } catch (e) { toast(e.message, true); }
+      editBtn.disabled = false;
+    });
+    approveBtn.addEventListener('click', async () => {
+      approveBtn.disabled = skipBtn.disabled = editBtn.disabled = true;
+      try {
+        await api(`/api/proposals/${p.id}/approve`, { method: 'POST' });
+        el.remove(); toast(`Approved. It goes out in the next free slot, ${state.caps.gapMinutes}+ minutes apart and within active hours.`);
+        refresh();
+      } catch (e) { toast(e.message, true); approveBtn.disabled = skipBtn.disabled = editBtn.disabled = false; }
+    });
+    skipBtn.addEventListener('click', async () => {
+      approveBtn.disabled = skipBtn.disabled = editBtn.disabled = true;
+      try {
+        await api(`/api/proposals/${p.id}/skip`, { method: 'POST' });
+        editing.delete(p.id); el.remove(); toast('Skipped. No Connects spent.'); refresh();
+      } catch (e) { toast(e.message, true); approveBtn.disabled = skipBtn.disabled = editBtn.disabled = false; }
+    });
+    return el;
+  }
+
+  // ---------- Log ----------
+  async function loadLog(append = false) {
+    if (!append) logOffset = 0;
+    const status = $('logFilter').value;
+    let data;
+    try { data = await api(`/api/log?limit=50&offset=${logOffset}${status ? `&status=${encodeURIComponent(status)}` : ''}`); }
+    catch (e) { toast(e.message, true); return; }
+    const body = $('logBody');
+    if (!append) body.replaceChildren();
+    for (const r of data.rows) {
+      const [label, tone] = STATUS[r.status] || [r.status, ''];
+      const statusCell = h('td', {}, h('span', { class: `chip ${tone}`, text: label }), r.error ? h('span', { class: 'err', text: r.error }) : null);
+      if (r.status === 'approved') {
+        statusCell.append(' ', h('button', { type: 'button', class: 'btn', style: 'min-height:32px; padding:4px 10px; font-size:13px; margin-top:6px', text: 'Undo',
+          onclick: async () => { try { await api(`/api/proposals/${r.id}/unapprove`, { method: 'POST' }); toast('Moved back to the review queue.'); refresh(); } catch (e) { toast(e.message, true); } } }));
+      }
+      body.append(h('tr', {},
+        h('td', { class: 'when', text: when(r.submitted_at || r.created_at) }),
+        h('td', {}, r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: r.title }) : r.title, r.is_example ? h('span', { class: 'chip info', style: 'margin-left:8px', text: 'Example' }) : null),
+        statusCell,
+        h('td', { class: 'mono', text: r.score ?? '–' }),
+        h('td', { class: 'mono', text: r.status === 'submitted' ? (r.connects ?? '–') : '–' }),
+        h('td', {}, r.loom_url ? h('a', { href: r.loom_url, target: '_blank', rel: 'noopener noreferrer', text: 'Open' }) : '–')));
+    }
+    logOffset += data.rows.length;
+    $('logEmpty').hidden = body.children.length > 0;
+    $('logMore').hidden = !data.hasMore;
+  }
+
+  // ---------- Settings ----------
+  let kw = [], ex = [];
+  function renderTags(boxId, items, cls, onRemove) {
+    const box = $(boxId); box.replaceChildren();
+    if (!items.length) box.append(h('span', { class: 'hint', text: 'None yet' }));
+    items.forEach((t, i) => box.append(h('span', { class: `tag ${cls}` }, t,
+      h('button', { type: 'button', 'aria-label': `Remove ${t}`, text: '×', onclick: () => onRemove(i) }))));
+  }
+  const drawKw = () => renderTags('kwTags', kw, '', (i) => { kw.splice(i, 1); drawKw(); dirty(); });
+  const drawEx = () => renderTags('exTags', ex, 'ex', (i) => { ex.splice(i, 1); drawEx(); dirty(); });
+  function addTag(inputId, arr, draw) {
+    const v = $(inputId).value.trim();
+    if (!v) return;
+    if (!arr.some((x) => x.toLowerCase() === v.toLowerCase())) arr.push(v);
+    $(inputId).value = ''; draw(); dirty();
+  }
+  $('kwAdd').addEventListener('click', () => addTag('kwInput', kw, drawKw));
+  $('exAdd').addEventListener('click', () => addTag('exInput', ex, drawEx));
+  $('kwInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('kwInput', kw, drawKw); } });
+  $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
+
+  function fillForm(s) {
+    kw = [...s.keywords]; ex = [...s.exclude]; drawKw(); drawEx();
+    $('titleOnly').checked = s.titleOnly; $('verifiedOnly').checked = s.verifiedOnly;
+    $('minFixedBudget').value = s.minFixedBudget; $('minHourlyRate').value = s.minHourlyRate;
+    $('maxExistingProposals').value = String(s.maxExistingProposals); $('minScore').value = s.minScore;
+    $('letterTemplate').value = s.letter.template; $('letterRules').value = s.letter.rules;
+    $('discOn').checked = s.disclosure.enabled; $('discLine').value = s.disclosure.line;
+    $('bidHourly').value = s.bid.hourly; $('bidFixed').value = s.bid.fixed;
+    $('loomUrl').value = s.loom.sourceUrl; $('loomDelete').value = s.loom.deleteAfterDays;
+    $('scanEvery').value = String(s.scanEveryMinutes);
+    $('capDaily').value = s.caps.daily; $('capHourly').value = s.caps.hourly; $('capGap').value = s.caps.gapMinutes;
+    $('activeStart').value = s.caps.activeStart; $('activeEnd').value = s.caps.activeEnd;
+    if (![...$('timezone').options].some((o) => o.value === s.caps.timezone)) $('timezone').append(h('option', { value: s.caps.timezone, text: s.caps.timezone }));
+    $('timezone').value = s.caps.timezone;
+    $('floor').value = s.caps.connectsFloor; $('maxConnects').value = s.caps.maxConnectsPerJob;
+    $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
+    $('reportEmail').value = s.report.email;
+    $('saveMsg').textContent = ''; $('saveMsg').className = 'msg';
+  }
+  function readForm() {
+    return {
+      keywords: kw, titleOnly: $('titleOnly').checked, exclude: ex,
+      minFixedBudget: Number($('minFixedBudget').value), minHourlyRate: Number($('minHourlyRate').value),
+      verifiedOnly: $('verifiedOnly').checked, maxExistingProposals: Number($('maxExistingProposals').value), minScore: Number($('minScore').value),
+      letter: { template: $('letterTemplate').value, rules: $('letterRules').value },
+      disclosure: { enabled: $('discOn').checked, line: $('discLine').value },
+      bid: { hourly: $('bidHourly').value, fixed: $('bidFixed').value },
+      loom: { sourceUrl: $('loomUrl').value.trim(), deleteAfterDays: Number($('loomDelete').value) },
+      caps: {
+        daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),
+        activeStart: $('activeStart').value, activeEnd: $('activeEnd').value, timezone: $('timezone').value,
+        connectsFloor: Number($('floor').value), maxConnectsPerJob: Number($('maxConnects').value),
+        boost: $('boost').value, stopAfterErrors: Number($('stopErrors').value),
+      },
+      scanEveryMinutes: Number($('scanEvery').value),
+      report: { email: $('reportEmail').value.trim() },
+    };
+  }
+  function dirty() { $('saveMsg').textContent = 'Unsaved changes'; $('saveMsg').className = 'msg'; }
+  $('viewSettings').addEventListener('input', dirty);
+  $('viewSettings').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('saveBtn').disabled = true;
+    try {
+      settings = await api('/api/settings', { method: 'PUT', body: readForm() });
+      fillForm(settings); $('saveMsg').textContent = 'Saved.'; $('saveMsg').className = 'msg good';
+      loadState();
+    } catch (err) { $('saveMsg').textContent = err.message; $('saveMsg').className = 'msg bad'; }
+    $('saveBtn').disabled = false;
+  });
+  $('resetBtn').addEventListener('click', () => settings && fillForm(settings));
+
+  // ---------- Controls ----------
+  $('modeReview').addEventListener('click', async () => {
+    $('autoConfirm').hidden = true;
+    if (state.mode === 'review') return;
+    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'review' } })) }; renderState(); toast('Review first is on. Every proposal waits for your approval.'); }
+    catch (e) { toast(e.message, true); }
+  });
+  $('modeAuto').addEventListener('click', () => {
+    if (state.mode === 'auto') return;
+    $('autoConfirm').hidden = false; $('autoConfirm').scrollIntoView({ block: 'nearest' }); $('autoOk').focus();
+  });
+  $('autoCancel').addEventListener('click', () => { $('autoConfirm').hidden = true; });
+  $('autoOk').addEventListener('click', async () => {
+    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'auto', confirm: true } })) }; $('autoConfirm').hidden = true; renderState(); toast('Auto-submit is on.'); }
+    catch (e) { toast(e.message, true); }
+  });
+  async function togglePause() {
+    try { state = { ...state, ...(await api('/api/pause', { method: 'POST', body: { paused: !state.paused } })) }; renderState(); toast(state.paused ? 'Paused. Nothing is scanned or sent.' : 'Bidding resumed.'); }
+    catch (e) { toast(e.message, true); }
+  }
+  $('pauseBtn').addEventListener('click', togglePause);
+  $('resumeInline').addEventListener('click', togglePause);
+  async function clearExamples() {
+    try { await api('/api/examples', { method: 'DELETE' }); toast('Examples removed.'); refresh(); } catch (e) { toast(e.message, true); }
+  }
+  $('clearExamples').addEventListener('click', clearExamples);
+  $('clearExamples2').addEventListener('click', clearExamples);
+  $('logFilter').addEventListener('change', () => loadLog());
+  $('logMore').addEventListener('click', () => loadLog(true));
+
+  // ---------- Routing + refresh ----------
+  async function route() {
+    const onSettings = location.hash === '#settings';
+    $('viewDash').hidden = onSettings; $('viewDash').style.display = onSettings ? 'none' : 'flex';
+    $('viewSettings').hidden = !onSettings;
+    $('tabDash').toggleAttribute('aria-current', !onSettings); if (!onSettings) $('tabDash').setAttribute('aria-current', 'page');
+    $('tabSettings').toggleAttribute('aria-current', onSettings); if (onSettings) $('tabSettings').setAttribute('aria-current', 'page');
+    if (onSettings && !settings) {
+      try { settings = await api('/api/settings'); fillForm(settings); } catch (e) { toast(e.message, true); }
+    }
+  }
+  window.addEventListener('hashchange', route);
+
+  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog()]); }
+  route(); refresh();
+  setInterval(() => { if (!document.hidden && location.hash !== '#settings') refresh(); }, 60000);
+})();
+</script>
+</body>
+</html>

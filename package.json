@@ -1,0 +1,19 @@
+{
+  "name": "upwork-autobidder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute autobidder --remote --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute autobidder --local --file=./schema.sql",
+    "db:demo:local": "wrangler d1 execute autobidder --local --file=./seed-demo.sql",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20250924.0",
+    "typescript": "5.6.3",
+    "wrangler": "3.114.0"
+  }
+}
