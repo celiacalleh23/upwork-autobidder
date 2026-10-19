@@ -179,6 +179,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   <nav class="tabs" aria-label="Sections">
     <a href="#dashboard" id="tabDash" aria-current="page">Dashboard</a>
     <a href="#settings" id="tabSettings">Settings</a>
+    <a href="/logout" style="margin-left:auto">Sign out</a>
   </nav>
 </div>
 
@@ -372,6 +373,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     });
     let data = null;
     try { data = await res.json(); } catch { /* empty */ }
+    if (res.status === 401) { location.href = '/login'; throw new Error('Signed out'); }
     if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
     return data;
   }

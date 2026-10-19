@@ -1,6 +1,7 @@
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
 import { handleApi } from './api';
+import { checkCredentials, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie } from './auth';
 import type { Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -25,36 +26,8 @@ function withHeaders(res: Response): Response {
   return out;
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
-  const enc = new TextEncoder();
-  const x = enc.encode(a), y = enc.encode(b);
-  let diff = x.length ^ y.length;
-  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
-  return diff === 0;
-}
-
-function authorized(req: Request, env: Env): Response | null {
-  if (!env.DASH_USER || !env.DASH_PASSWORD) {
-    return new Response('Dashboard login is not configured. Set DASH_USER and DASH_PASSWORD.', { status: 503 });
-  }
-  const header = req.headers.get('authorization') ?? '';
-  if (header.startsWith('Basic ')) {
-    let decoded = '';
-    try {
-      // Browsers send Basic credentials as UTF-8 (we ask for charset="UTF-8"), so decode the bytes, not Latin-1
-      const bytes = Uint8Array.from(atob(header.slice(6).trim()), (c) => c.charCodeAt(0));
-      decoded = new TextDecoder().decode(bytes);
-    } catch { /* bad header */ }
-    const i = decoded.indexOf(':');
-    // User name is matched without regard to case or surrounding spaces; the password must match exactly
-    const userOk = timingSafeEqual(decoded.slice(0, i).trim().toLowerCase(), env.DASH_USER.trim().toLowerCase());
-    if (i > 0 && userOk && timingSafeEqual(decoded.slice(i + 1), env.DASH_PASSWORD.trim())) return null;
-  }
-  return new Response('Sign in to the Auto-Bidder dashboard.', {
-    status: 401,
-    headers: { 'www-authenticate': 'Basic realm="Upwork Auto-Bidder", charset="UTF-8"' },
-  });
-}
+const html = (body: string, status = 200, extra: Record<string, string> = {}) =>
+  new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...extra } });
 
 // Creates the tables on first use (every statement is CREATE ... IF NOT EXISTS), so a fresh D1 needs no manual step.
 let schemaReady: Promise<void> | null = null;
@@ -68,17 +41,47 @@ function ensureSchema(env: Env): Promise<void> {
   return schemaReady;
 }
 
+async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Response> {
+  if (!loginConfigured(env)) {
+    return html(loginPage('Login is not set up yet. Add the DASH_USER and DASH_PASSWORD secrets in Cloudflare.'), 503);
+  }
+  if (req.method === 'GET') return html(loginPage());
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  const form = await req.formData().catch(() => null);
+  const user = String(form?.get('user') ?? '');
+  const password = String(form?.get('password') ?? '');
+  const result = checkCredentials(env, user, password);
+  if (result !== 'ok') {
+    // Lengths only, never the values: enough to spot a stray character when reading the Worker logs.
+    console.log('login failed', { reason: result, typedUserLength: user.length, typedPasswordLength: password.length, expectedPasswordLength: (env.DASH_PASSWORD ?? '').length });
+    await new Promise((r) => setTimeout(r, 600));
+    const msg = result === 'user' ? "That user name doesn't match." : "That password doesn't match.";
+    return html(loginPage(msg, user), 401);
+  }
+  return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': await sessionCookie(env, secure) } });
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    const denied = authorized(req, env);
-    if (denied) return withHeaders(denied);
-    await ensureSchema(env);
+    const secure = url.protocol === 'https:';
 
-    if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname));
-    if (url.pathname === '/' || url.pathname === '/index.html') {
-      return withHeaders(new Response(dashboardHtml, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } }));
+    if (url.pathname === '/login') return withHeaders(await handleLogin(req, env, secure));
+    if (url.pathname === '/logout') {
+      return withHeaders(new Response(null, { status: 303, headers: { location: '/login', 'set-cookie': clearCookie(secure) } }));
     }
+
+    if (!(await hasSession(req, env))) {
+      if (url.pathname.startsWith('/api/')) {
+        return withHeaders(new Response(JSON.stringify({ error: 'Signed out. Reload the page to sign in.' }), { status: 401, headers: { 'content-type': 'application/json' } }));
+      }
+      return withHeaders(new Response(null, { status: 303, headers: { location: '/login' } }));
+    }
+
+    await ensureSchema(env);
+    if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname));
+    if (url.pathname === '/' || url.pathname === '/index.html') return withHeaders(html(dashboardHtml));
     return withHeaders(new Response('Not found', { status: 404 }));
   },
 

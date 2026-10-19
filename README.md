@@ -31,7 +31,7 @@ npx wrangler secret put DASH_PASSWORD
 npm run deploy
 ```
 
-Open the Worker URL; the browser asks for the dashboard user and password.
+Open the Worker URL and sign in on the login page with `DASH_USER` / `DASH_PASSWORD` (user name is not case-sensitive). Sessions last 30 days; changing `DASH_PASSWORD` signs everyone out. Failed sign-ins are logged (lengths only, never values) in the Worker logs.
 The tables are created automatically on the first request (`schema.sql`, all `IF NOT EXISTS`).
 
 ### Deploying from GitHub (Workers Builds)
@@ -54,7 +54,8 @@ npm run typecheck
 
 | File | What it holds |
 | --- | --- |
-| `src/index.ts` | Login (HTTP Basic), security headers, routing, cron entry point |
+| `src/index.ts` | Routing, security headers, cron entry point |
+| `src/auth.ts` | Login page, signed session cookie, credential check |
 | `src/api.ts` | Dashboard API: state, queue, log, CSV, proposal actions, mode, pause, settings |
 | `src/settings.ts` | Settings and state shapes, defaults, validation |
 | `src/dashboard.html` | The dashboard (single page, no build step) |
@@ -63,7 +64,7 @@ npm run typecheck
 
 ## API
 
-All routes need the dashboard login. Changes also need the header `x-dashboard: 1`.
+All routes need a signed-in session (cookie from `/login`). Changes also need the header `x-dashboard: 1`.
 
 | Method | Path | Does |
 | --- | --- | --- |
