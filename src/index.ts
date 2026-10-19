@@ -1,4 +1,5 @@
 import dashboardHtml from './dashboard.html';
+import schemaSql from '../schema.sql';
 import { handleApi } from './api';
 import type { Env } from './settings';
 
@@ -49,11 +50,24 @@ function authorized(req: Request, env: Env): Response | null {
   });
 }
 
+// Creates the tables on first use (every statement is CREATE ... IF NOT EXISTS), so a fresh D1 needs no manual step.
+let schemaReady: Promise<void> | null = null;
+function ensureSchema(env: Env): Promise<void> {
+  schemaReady ??= (async () => {
+    const statements = schemaSql
+      .split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+      .split(';').map((s) => s.trim()).filter(Boolean);
+    await env.DB.batch(statements.map((s) => env.DB.prepare(s)));
+  })().catch((e) => { schemaReady = null; throw e; });
+  return schemaReady;
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const denied = authorized(req, env);
     if (denied) return withHeaders(denied);
+    await ensureSchema(env);
 
     if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname));
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -63,5 +77,7 @@ export default {
   },
 
   // The bidding pipeline (scan → filter → score → letter → Loom copy → preview → submit) plugs in here next.
-  async scheduled(_event: ScheduledController, _env: Env, _ctx: ExecutionContext): Promise<void> {},
+  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await ensureSchema(env);
+  },
 };

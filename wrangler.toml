@@ -10,13 +10,13 @@ crons = ["*/5 * * * *", "0 23 * * *"]
 # The dashboard HTML is bundled into the Worker as text.
 [[rules]]
 type = "Text"
-globs = ["**/*.html"]
+globs = ["**/*.html", "**/*.sql"]
 fallthrough = true
 
 [[d1_databases]]
 binding = "DB"
 database_name = "autobidder"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "77c7e7e7-0532-4a58-b61e-36161370a136"
 
 [vars]
 CLAUDE_MODEL = "claude-sonnet-5-5"

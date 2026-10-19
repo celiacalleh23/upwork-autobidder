@@ -26,13 +26,19 @@ auto-pause after 3 errors in a row.
 ```bash
 npm install
 npx wrangler d1 create autobidder          # copy the database_id into wrangler.toml
-npm run db:init                            # creates the tables in the remote D1
 npx wrangler secret put DASH_USER
 npx wrangler secret put DASH_PASSWORD
 npm run deploy
 ```
 
 Open the Worker URL; the browser asks for the dashboard user and password.
+The tables are created automatically on the first request (`schema.sql`, all `IF NOT EXISTS`).
+
+### Deploying from GitHub (Workers Builds)
+
+Cloudflare dashboard → Workers & Pages → Create → Import a repository → `upwork-autobidder`.
+Deploy command: `npx wrangler deploy`. Then add the secrets under the Worker's Settings → Variables and Secrets.
+Every push to `main` deploys.
 
 ## Local development
 
