@@ -40,9 +40,15 @@ function authorized(req: Request, env: Env): Response | null {
   const header = req.headers.get('authorization') ?? '';
   if (header.startsWith('Basic ')) {
     let decoded = '';
-    try { decoded = atob(header.slice(6)); } catch { /* bad header */ }
+    try {
+      // Browsers send Basic credentials as UTF-8 (we ask for charset="UTF-8"), so decode the bytes, not Latin-1
+      const bytes = Uint8Array.from(atob(header.slice(6).trim()), (c) => c.charCodeAt(0));
+      decoded = new TextDecoder().decode(bytes);
+    } catch { /* bad header */ }
     const i = decoded.indexOf(':');
-    if (i > 0 && timingSafeEqual(decoded.slice(0, i), env.DASH_USER) && timingSafeEqual(decoded.slice(i + 1), env.DASH_PASSWORD)) return null;
+    // User name is matched without regard to case or surrounding spaces; the password must match exactly
+    const userOk = timingSafeEqual(decoded.slice(0, i).trim().toLowerCase(), env.DASH_USER.trim().toLowerCase());
+    if (i > 0 && userOk && timingSafeEqual(decoded.slice(i + 1), env.DASH_PASSWORD.trim())) return null;
   }
   return new Response('Sign in to the Auto-Bidder dashboard.', {
     status: 401,
