@@ -36,7 +36,7 @@ Every 5 minutes (configurable 5–30), during active hours, unless paused:
 | Caps (defaults) | 15/day, 3/hour, 10 min between submissions, 07:00–21:00 America/New_York, Connects floor 20, max 16 Connects per job, boost off, auto-pause after 3 errors in a row. Siv sends 15–30/day today, so the daily cap can rise toward 30 in Auto. |
 | Approvals | Approving in Review does **not** send instantly; it marks `approved` and the sender sends at the next free slot. |
 | Video | **Option C, Loom copies.** Siv has a paid Loom plan. Unofficial route (no public Loom API): if it fails, send the proposal without the link and flag it. Fallback if Loom breaks for good is Option B (Google Drive copies), not in scope now. |
-| Letters | Tailored per job, ≤ 5,000 chars, **no email, phone, social handles or outside links** except the Loom link. |
+| Letters | Siv's fixed template; Claude writes only the **opening paragraph** (2–3 sentences) for each job, the rest stays word for word (see §11a). ≤ 5,000 chars, **no email, phone or social handles**. Links allowed: the Loom link and the links already in Siv's template (Miro, Gamma). |
 | AI disclosure | Upwork Terms §9.7. Off by default; Siv decides in Settings. If on, append the configured line. |
 | Compliance | Follow Upwork's published API & MCP Terms: real tailored proposals at a modest pace, never bulk sends or bulk job retrieval. Small result pages only (`limit` ≤ 10). |
 | Auto-mode dependency | Auto relies on Upwork allowing a connected tool to confirm without a human click. If a confirm is refused for needing user confirmation, switch the whole tool to **Review**, flag it on the dashboard and email Siv. |
@@ -263,6 +263,67 @@ Local dev: `.dev.vars` (git-ignored). Never commit secrets or tokens, and never 
 - **Never submit a real proposal during development unless Celia approves that specific job and letter.** Previews (`manage_proposals create`) have no side effects and are fine. Every `confirm_preview` spends Rafa's Connects and contacts a real client.
 - Before enabling the sender in production, run one full day in Review with Siv approving.
 - Check Worker logs (Observability → Logs enabled) after each deploy.
+
+---
+
+## 11a. Siv's answers (received Oct 21, 2026) — these override the defaults above
+
+| Topic | Answer | What it means for the build |
+| --- | --- | --- |
+| Keywords | Any job with "Klaviyo" in the **title or description**; refine later | Keyword `Klaviyo`, `titleOnly = false`. Check with `get_tool_help` whether `find_jobs` can match descriptions; if not, search wider and match the full description after `find_jobs get`. |
+| Exclusions | None for now | `exclude = []` |
+| Min budget / rate | None | `minFixedBudget = 0`, `minHourlyRate = 0` |
+| Client filters | Only clients in **USA, Canada, UK**; no other filters | New setting `allowedCountries: string[]` (filter on `client.country`). `verifiedOnly = false`, `maxExistingProposals = 0`. |
+| Active hours | 24/7 | `activeStart = activeEnd = '00:00'` means all day; the sender must treat equal times as all day (unit test). |
+| Daily cap | No real cap wanted; start at **30**, raise over time | `caps.daily = 30`. Raising above 40 needs the validation limit changed. |
+| Boost | Never | `caps.boost = 'never'` |
+| AI disclosure | Off | `disclosure.enabled = false` |
+| Bids | Use the client's budget (hourly: the client's max rate; fall back to Rafa's profile rate when none is listed). Siv to confirm. | `bid.hourly = 'client_max'`, `bid.fixed = 'client_budget'` |
+| Connects floor | **Alert only:** email `siv@ltv-labs.com` when the balance falls below **250**; sending continues | New setting `connectsAlertBelow = 250`, emailed once per drop below (reset when the balance is back above). Keep the hard stop only for "balance < job cost". `caps.connectsFloor = 0`. |
+| Daily report | **3 pm California** to `siv@ltv-labs.com`: job titles and Connects spent on each | Schedule in `America/Los_Angeles` (not fixed 23:00 UTC, which is 4 pm in summer). |
+| Loom source video | `https://www.loom.com/share/de64065f88f648be910277062a18e601` | `loom.sourceUrl` |
+| Letter | Fixed template below. Personalise only an opening paragraph (2–3 sentences) per job; the body, Loom line, links and sign-off stay the same. | Claude returns only the opening; the code assembles opening + fixed body. `contactDetailsIn` still runs on the opening. |
+
+Still open: max Connects per job (default 16), Rafa's profile summary (draft it from the template for Siv to approve), whether Loom view counts can be hidden, Workers Paid approval. The Claude API key and Loom access are with Celia and get set as a secret / pasted in the dashboard, never shared in chat or committed.
+
+Siv's template (the `{opening}` is written per job; `{loom_link}` is the job's Loom copy):
+
+```
+Hi there,
+
+{opening}
+
+I recorded a quick Loom for you explaining exactly how I'd grow your email revenue: {loom_link}
+
+I help eCommerce brands predictably add an extra $30k - $100k+ per month through email marketing.
+
+With my 9+ years of Klaviyo knowledge & expertise, I consistently help brands drive 30-50% of their TOTAL store revenue from email alone.
+
+From copy to design to strategy, I manage all aspects of email marketing - ensuring we juice out as much revenue as possible from flows and campaigns, while still delivering a great experience for subscribers.
+
+Do you have some time this or next week to talk about what email could do for your store?
+
+Send me a message here and we can coordinate a time to chat!
+
+In the meantime, feel free check out some of my work:
+
+My Visual Flow Framework
+https://miro.com/app/board/uXjVJnINQFw=/
+
+Design Samples
+https://gamma.app/docs/Rafa-Email-Design-Samples-t4tjgljjfjmu5ad
+
+Client Testimonial Videos
+https://gamma.app/docs/Rafa-Client-Video-Testimonials-xp68qnga87ay14x
+
+Talk soon,
+Rafa
+Klaviyo Master Certified Partner
+
+P.S. Most brands I talk to think email is "fine" - until they see how much revenue it should be generating. That gap is what I fix.
+```
+
+The URLs above were read from screenshots; check them against Siv's document before going live (e.g. `I` vs `l` in the Miro id).
 
 ---
 
