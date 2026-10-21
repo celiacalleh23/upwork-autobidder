@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn } from '../src/pipeline/letter';
+import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const s = (bid: Partial<Settings['bid']> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0, ...bid } });
@@ -45,7 +45,7 @@ describe('checkOpening', () => {
     expect(checkOpening(`${OPENING} Call +1 415 555 0100.`)).toBe('the opening contains a phone number');
     expect(checkOpening(`${OPENING} {loom_link}`)).toBe('the opening contains a template placeholder');
     expect(checkOpening('Too short.')).toBe('the opening is too short');
-    expect(checkOpening('a'.repeat(701))).toMatch(/longer than 700/);
+    expect(checkOpening('a'.repeat(601))).toMatch(/longer than 600/);
   });
 });
 
@@ -84,5 +84,19 @@ describe('disclosure', () => {
   it('appends the AI disclosure line only when given', () => {
     expect(assembleLetter('Hi,\n\n{opening}', OPENING, null, 'Drafted with AI assistance and reviewed by me.')).toBe(`Hi,\n\n${OPENING}\n\nDrafted with AI assistance and reviewed by me.`);
     expect(assembleLetter('Hi,\n\n{opening}', OPENING, null, null)).toBe(`Hi,\n\n${OPENING}`);
+  });
+});
+
+describe('sentence limit', () => {
+  // The first real opening (Oct 21): 4 sentences, repeating the template's claims.
+  const real = "Your Shopify store's email setup likely has gaps in its flows that are costing you revenue, and finding them is exactly what a good Klaviyo audit should do. I'd review your current flows and strategy, flag what's missing or underperforming, and give you clear, practical recommendations, then help implement them. As a Klaviyo Master Certified Partner with 9+ years in the platform, I focus on getting email to drive 30-50% of total store revenue.";
+  it('counts sentences without splitting numbers or abbreviations', () => {
+    expect(countSentences(real)).toBe(3);
+    expect(countSentences(`${real} Let's talk.`)).toBe(4);
+    expect(countSentences('Revenue grew 4.5x in Q2, e.g. from flows. That is the goal.')).toBe(2);
+  });
+  it('rejects openings over 3 sentences', () => {
+    expect(checkOpening(`${OPENING} Second one here. Third one here. Fourth one here.`)).toBe('the opening has 4 sentences (max 3)');
+    expect(checkOpening(`${OPENING} Second one here.`)).toBeNull();
   });
 });

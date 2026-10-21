@@ -80,8 +80,10 @@ export async function writeOpening(env: Env, profile: string, template: string, 
 fixed and shown so you know what follows; do not repeat it.
 
 Rules:
-- 2 or 3 sentences, plain text, in English, max 600 characters.
+- 2 or 3 sentences, plain text, in English, max 450 characters.
 - Speak directly to this client's specific need from the job post; show you read it.
+- Do not repeat what the fixed part of the letter already says: no years of experience, certifications, revenue
+  figures or percentages. The fixed part right after your paragraph covers those.
 - No greeting (the letter already starts with "Hi there,") and no sign-off.
 - No links, email addresses, phone numbers or social handles. No promises the profile does not support; never invent
   clients, numbers or results.

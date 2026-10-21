@@ -4,7 +4,13 @@ import { parseBudget } from './filters';
 // Pure letter and bid logic: no network. Everything Claude writes passes through these checks before it is stored.
 
 export const MAX_LETTER = 5000;
-export const MAX_OPENING = 700;
+export const MAX_OPENING = 600;
+export const MAX_OPENING_SENTENCES = 3;
+
+// Sentence ends: . ! ? followed by a space or the end (not inside numbers like 4.5 or "e.g. ").
+export function countSentences(text: string): number {
+  return text.trim().split(/(?<=[.!?])\s+(?=[A-Z0-9"“'(])/).filter((s) => s.trim()).length;
+}
 
 // Contact details are not allowed in Upwork cover letters
 export function contactDetailsIn(text: string): string | null {
@@ -28,6 +34,8 @@ export function checkOpening(opening: string): string | null {
   if (t.length < 40) return 'the opening is too short';
   if (t.length > MAX_OPENING) return `the opening is longer than ${MAX_OPENING} characters`;
   if (/\{[a-z_]+\}/i.test(t)) return 'the opening contains a template placeholder';
+  const n = countSentences(t);
+  if (n > MAX_OPENING_SENTENCES) return `the opening has ${n} sentences (max ${MAX_OPENING_SENTENCES})`;
   const p = problemsInWritten(t);
   return p ? `the opening contains ${p}` : null;
 }
