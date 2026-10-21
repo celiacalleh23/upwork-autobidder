@@ -120,7 +120,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - Dashboard: a **Connect Upwork** button in Settings → Reports and connections, plus a "Reconnect" state.
 - **Accept:** Rafa signs in on the setup call, the header shows "Bidding as Rafa …", the Connects balance shows.
 
-### M3 — Scanner and filters
+### M3 — Scanner and filters — built Oct 21, 2026 (title + broad-query search per keyword, literal match; `matched` status = passed filters, waiting for M4)
 - `src/pipeline/scan.ts`: one `find_jobs search` per keyword (`title`, `sort:"recency"`, `limit:10`, plus the server-side filters that exist). Respect `scanEveryMinutes` using `state.lastScanAt`.
 - Insert each new job id into `jobs` (unique). Never process an id twice.
 - Apply the filters:

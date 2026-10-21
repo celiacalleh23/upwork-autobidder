@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   client_country TEXT,
   posted_at TEXT,
   seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-  status TEXT NOT NULL,              -- filtered | low_score | proposed | error
+  status TEXT NOT NULL,              -- filtered | matched (passed filters, waiting for scoring) | low_score | proposed | error
   reason TEXT,
   score INTEGER
 );

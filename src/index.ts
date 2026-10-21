@@ -4,6 +4,7 @@ import { handleApi } from './api';
 import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie } from './auth';
 import { MissingKey } from './crypto';
 import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
+import { runScan } from './pipeline/scan';
 import type { Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -124,8 +125,9 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
 
-  // The bidding pipeline (scan → filter → score → letter → Loom copy → preview → submit) plugs in here next.
-  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+  // Pipeline: scan → filter (M3) → score → letter → Loom copy → preview → submit (next milestones).
+  async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
+    if (event.cron === '*/5 * * * *') await runScan(env);
   },
 };

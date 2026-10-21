@@ -2,9 +2,10 @@
 
 Siv's private dashboard and bidding pipeline, running on Cloudflare Workers + D1.
 
-**Status: M2 — Upwork connection.** The dashboard, its API, login, settings and the Upwork sign-in
-(Settings → Reports and connections → Connect Upwork) are built. The rest of the pipeline (scanner, AI letters,
-Loom copies, sender, daily report) plugs into `scheduled()` in `src/index.ts` next.
+**Status: M3 — scanner and filters.** The dashboard, login, settings, the Upwork sign-in (Settings → Reports and
+connections → Connect Upwork) and the job scanner are built. Every 5 minutes the cron searches Upwork for each keyword
+(title search, plus a broad search over descriptions that is then matched literally), filters each new job once and
+lists it under **Jobs found** with the reason. Scoring, letters, Loom copies, sending and the daily report come next.
 
 The Upwork connection needs the `TOKEN_KEY` secret (32+ random characters, e.g. `openssl rand -base64 48`).
 It encrypts the stored Upwork sign-in and also signs dashboard sessions, so setting or changing it signs everyone out once.
@@ -50,6 +51,7 @@ npm run db:init:local
 npm run db:demo:local      # optional: example proposals, removable from the dashboard
 npm run dev                # http://localhost:8787
 npm run typecheck
+npm test                   # vitest: filter rules, budget parsing, SSE, connect helpers
 ```
 
 ## Files
@@ -61,6 +63,9 @@ npm run typecheck
 | `src/oauth.ts` | Upwork sign-in: discovery, client registration, PKCE, token refresh, account + Connects check |
 | `src/mcp.ts` | Minimal MCP client (Streamable HTTP, JSON or SSE responses) |
 | `src/crypto.ts` | AES-GCM encryption at rest, keyed from `TOKEN_KEY` |
+| `src/pipeline/scan.ts` | Cron scan: searches per keyword, records each new job once with its verdict, run summary |
+| `src/pipeline/filters.ts` | Pure filter rules: keyword match, exclusions, countries, budget/rate, verification, proposals |
+| `src/kv.ts` | Raw kv helpers and the run lease |
 | `src/api.ts` | Dashboard API: state, queue, log, CSV, proposal actions, mode, pause, settings |
 | `src/settings.ts` | Settings and state shapes, defaults, validation |
 | `src/dashboard.html` | The dashboard (single page, no build step) |
@@ -77,6 +82,8 @@ All routes need a signed-in session (cookie from `/login`). Changes also need th
 | GET / PUT | `/api/settings` | Read / save settings (validated and clamped) |
 | POST | `/api/mode` | `{"mode":"review"}` or `{"mode":"auto","confirm":true}` |
 | POST | `/api/pause` | `{"paused":true|false}` |
+| GET | `/api/jobs` | Jobs found, newest first (`?status=matched\|filtered\|…`, `limit`, `offset`) |
+| POST | `/api/scan` | Scan now (ignores the interval; refused while paused or not connected) |
 | POST | `/api/upwork/check` | Re-read the Upwork account, tool names and Connects balance |
 | POST | `/api/upwork/finish` | `{"url":"http://127.0.0.1:53682/upwork-callback?code=…&state=…"}`: finish the sign-in with the pasted address |
 | POST | `/api/upwork/disconnect` | Forget the Upwork sign-in |

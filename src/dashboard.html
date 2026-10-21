@@ -204,6 +204,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       <span>Scans every <strong id="scanEvery">5</strong> min</span>
       <span>Active hours: <strong id="activeHours">–</strong></span>
       <span>Mode: <strong id="modeText">Review first</strong></span>
+      <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
 
     <section class="stats" aria-label="Today">
@@ -233,6 +234,32 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         <p class="rules" id="rulesLine">Guardrails: 15 a day · 3 an hour · 10 min apart · stop below 20 Connects · auto-stop after 3 errors.</p>
       </aside>
     </div>
+
+    <section class="panel" id="jobs" aria-labelledby="jH">
+      <div class="row-head">
+        <h2 id="jH">Jobs found</h2>
+        <div class="tools">
+          <label class="small muted" for="jobFilter">Show</label>
+          <select id="jobFilter">
+            <option value="">All jobs</option>
+            <option value="matched">Matched, waiting for AI scoring</option>
+            <option value="filtered">Filtered out</option>
+            <option value="low_score">Low AI score</option>
+            <option value="proposed">Proposal written</option>
+            <option value="error">Error</option>
+          </select>
+          <button type="button" class="btn outline" id="scanNow">Scan now</button>
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Found</th><th>Job</th><th>Client</th><th>Budget</th><th>Result</th></tr></thead>
+          <tbody id="jobBody"></tbody>
+        </table>
+      </div>
+      <p class="small muted" id="jobEmpty" hidden>No jobs yet. They appear here after the first scan.</p>
+      <div><button type="button" class="btn" id="jobMore" hidden>Load more</button></div>
+    </section>
 
     <section class="panel" id="log" aria-labelledby="lH">
       <div class="row-head">
@@ -276,6 +303,12 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         <span class="lbl" id="exLbl">Skip jobs containing</span>
         <div class="tags" id="exTags" aria-labelledby="exLbl"></div>
         <div class="addrow"><input type="text" id="exInput" placeholder="Add a word to exclude" aria-labelledby="exLbl" maxlength="60"><button type="button" class="btn outline" id="exAdd">Add</button></div>
+      </div>
+      <div class="field">
+        <span class="lbl" id="ctLbl">Only clients in these countries</span>
+        <div class="tags" id="ctTags" aria-labelledby="ctLbl"></div>
+        <div class="addrow"><input type="text" id="ctInput" placeholder="e.g. United States" aria-labelledby="ctLbl" maxlength="60"><button type="button" class="btn outline" id="ctAdd">Add</button></div>
+        <span class="hint">Leave empty for any country. Use Upwork's spelling: United States, Canada, United Kingdom (USA and UK also work).</span>
       </div>
       <div class="grid">
         <div class="field"><label for="minFixedBudget">Minimum fixed budget (USD)</label><input type="number" id="minFixedBudget" min="0" step="10"></div>
@@ -328,7 +361,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
             <option value="America/Denver">US Mountain</option><option value="America/Los_Angeles">US Pacific</option>
             <option value="America/Guayaquil">Ecuador</option><option value="Europe/London">UK</option>
           </select></div>
-        <div class="field"><label for="floor">Stop when Connects drop below</label><input type="number" id="floor" min="0"></div>
+        <div class="field"><label for="floor">Stop when Connects drop below</label><input type="number" id="floor" min="0"><span class="hint">0 = only stop when a job costs more than the balance.</span></div>
+        <div class="field"><label for="connectsAlert">Email an alert when Connects drop below</label><input type="number" id="connectsAlert" min="0"><span class="hint">Sending continues. 0 = off. Goes to the report email.</span></div>
         <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label><input type="number" id="maxConnects" min="1" max="50"></div>
         <div class="field"><label for="boost">Boost</label><select id="boost"><option value="never">Never</option><option value="up_to_10">If a top slot costs 10 or less</option><option value="up_to_20">If a top slot costs 20 or less</option></select></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
@@ -438,6 +472,9 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('statusText').textContent = label;
     $('statusDot').style.background = color;
     $('lastScan').textContent = ago(s.lastScanAt);
+    const lr = s.lastRun;
+    $('lastRunNote').textContent = lr && lr.errors ? `Last scan problem: ${lr.note || 'see the Worker logs'}` : '';
+    $('lastRunNote').hidden = !(lr && lr.errors);
     $('scanEvery').textContent = s.scanEveryMinutes;
     $('activeHours').textContent = `${s.activeHours.start}–${s.activeHours.end} (${tzName(s.activeHours.timezone)})`;
 
@@ -450,11 +487,11 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('sWaiting').textContent = fmtNum(t.waiting);
     $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
     $('sConnects').textContent = fmtNum(t.connectsSpent);
-    $('sFloor').textContent = `Stops below ${c.connectsFloor}`;
+    $('sFloor').textContent = c.connectsFloor ? `Stops below ${c.connectsFloor}` : 'No Connects floor';
     $('sFailed').textContent = fmtNum(t.failed);
     $('sFailed').className = 'value' + (t.failed ? ' v-bad' : '');
     const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', `${c.gapMinutes} min apart`];
-    $('rulesLine').textContent = `Guardrails: ${pace.join(' · ')} · stop below ${c.connectsFloor} Connects · one proposal per job · auto-pause on any Upwork warning.`;
+    $('rulesLine').textContent = `Guardrails: ${pace.join(' · ')} ${c.connectsFloor ? `· stop below ${c.connectsFloor} Connects ` : ''}· one proposal per job · auto-pause on any Upwork warning.`;
     $('capLine').textContent = pace.join(', ');
 
     $('upworkChip').textContent = s.upwork.connected ? 'Connected' : 'Not connected';
@@ -588,8 +625,47 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('logMore').hidden = !data.hasMore;
   }
 
+  // ---------- Jobs found ----------
+  const JOB_STATUS = {
+    matched: ['Matched', 'good'], filtered: ['Filtered out', ''], low_score: ['Low score', ''], proposed: ['Proposal written', 'info'], error: ['Error', 'bad'],
+  };
+  let jobOffset = 0;
+  async function loadJobs(append = false) {
+    if (!append) jobOffset = 0;
+    const status = $('jobFilter').value;
+    let data;
+    try { data = await api(`/api/jobs?limit=50&offset=${jobOffset}${status ? `&status=${encodeURIComponent(status)}` : ''}`); }
+    catch (e) { toast(e.message, true); return; }
+    const body = $('jobBody');
+    if (!append) body.replaceChildren();
+    for (const j of data.rows) {
+      const [label, tone] = JOB_STATUS[j.status] || [j.status, ''];
+      // Links only to Upwork itself; titles and reasons are job text, set as text, never HTML.
+      const link = /^https:\/\/www\.upwork\.com\//.test(j.url || '') ? h('a', { href: j.url, target: '_blank', rel: 'noopener noreferrer', text: j.title }) : j.title;
+      body.append(h('tr', {},
+        h('td', { class: 'when', text: when(j.seen_at && j.seen_at.includes('T') ? j.seen_at : (j.seen_at || '').replace(' ', 'T') + 'Z') }),
+        h('td', {}, link),
+        h('td', { text: j.client_country || '–' }),
+        h('td', { class: 'mono', text: j.budget || '–' }),
+        h('td', {}, h('span', { class: `chip ${tone}`, text: label }), j.reason ? h('span', { class: 'err', style: j.status === 'error' ? '' : 'color:var(--muted)', text: j.reason }) : null)));
+    }
+    jobOffset += data.rows.length;
+    $('jobEmpty').hidden = body.children.length > 0;
+    $('jobMore').hidden = !data.hasMore;
+  }
+  $('jobFilter').addEventListener('change', () => loadJobs());
+  $('jobMore').addEventListener('click', () => loadJobs(true));
+  $('scanNow').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Scanning…';
+    try {
+      const r = await api('/api/scan', { method: 'POST' });
+      toast(r.errors ? `Scan finished with a problem: ${r.note}` : `Scan done: ${r.scanned} jobs seen, ${r.new} new, ${r.matched} matched.`, Boolean(r.errors));
+    } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Scan now'; refresh();
+  });
+
   // ---------- Settings ----------
-  let kw = [], ex = [];
+  let kw = [], ex = [], ct = [];
   function renderTags(boxId, items, cls, onRemove) {
     const box = $(boxId); box.replaceChildren();
     if (!items.length) box.append(h('span', { class: 'hint', text: 'None yet' }));
@@ -598,6 +674,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   }
   const drawKw = () => renderTags('kwTags', kw, '', (i) => { kw.splice(i, 1); drawKw(); dirty(); });
   const drawEx = () => renderTags('exTags', ex, 'ex', (i) => { ex.splice(i, 1); drawEx(); dirty(); });
+  const drawCt = () => renderTags('ctTags', ct, '', (i) => { ct.splice(i, 1); drawCt(); dirty(); });
   function addTag(inputId, arr, draw) {
     const v = $(inputId).value.trim();
     if (!v) return;
@@ -608,9 +685,11 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   $('exAdd').addEventListener('click', () => addTag('exInput', ex, drawEx));
   $('kwInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('kwInput', kw, drawKw); } });
   $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
+  $('ctAdd').addEventListener('click', () => addTag('ctInput', ct, drawCt));
+  $('ctInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('ctInput', ct, drawCt); } });
 
   function fillForm(s) {
-    kw = [...s.keywords]; ex = [...s.exclude]; drawKw(); drawEx();
+    kw = [...s.keywords]; ex = [...s.exclude]; ct = [...s.allowedCountries]; drawKw(); drawEx(); drawCt();
     $('titleOnly').checked = s.titleOnly; $('verifiedOnly').checked = s.verifiedOnly;
     $('minFixedBudget').value = s.minFixedBudget; $('minHourlyRate').value = s.minHourlyRate;
     $('maxExistingProposals').value = String(s.maxExistingProposals); $('minScore').value = s.minScore;
@@ -624,13 +703,14 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     if (![...$('timezone').options].some((o) => o.value === s.caps.timezone)) $('timezone').append(h('option', { value: s.caps.timezone, text: s.caps.timezone }));
     $('timezone').value = s.caps.timezone;
     $('floor').value = s.caps.connectsFloor; $('maxConnects').value = s.caps.maxConnectsPerJob;
+    $('connectsAlert').value = s.connectsAlertBelow;
     $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
     $('saveMsg').textContent = ''; $('saveMsg').className = 'msg';
   }
   function readForm() {
     return {
-      keywords: kw, titleOnly: $('titleOnly').checked, exclude: ex,
+      keywords: kw, titleOnly: $('titleOnly').checked, exclude: ex, allowedCountries: ct,
       minFixedBudget: Number($('minFixedBudget').value), minHourlyRate: Number($('minHourlyRate').value),
       verifiedOnly: $('verifiedOnly').checked, maxExistingProposals: Number($('maxExistingProposals').value), minScore: Number($('minScore').value),
       letter: { template: $('letterTemplate').value, rules: $('letterRules').value },
@@ -644,11 +724,13 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         boost: $('boost').value, stopAfterErrors: Number($('stopErrors').value),
       },
       scanEveryMinutes: Number($('scanEvery').value),
+      maxNewJobsPerRun: settings ? settings.maxNewJobsPerRun : 3,
+      connectsAlertBelow: Number($('connectsAlert').value),
       report: { email: $('reportEmail').value.trim() },
     };
   }
   function dirty() { $('saveMsg').textContent = 'Unsaved changes'; $('saveMsg').className = 'msg'; }
-  $('viewSettings').addEventListener('input', dirty);
+  $('viewSettings').addEventListener('input', (e) => { if (e.target.id !== 'upworkPaste') dirty(); });
   $('viewSettings').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('saveBtn').disabled = true;
@@ -724,7 +806,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   }
   window.addEventListener('hashchange', route);
 
-  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog()]); }
+  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs()]); }
   route(); refresh();
   setInterval(() => { if (!document.hidden && location.hash !== '#settings') refresh(); }, 60000);
 })();

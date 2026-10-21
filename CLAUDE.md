@@ -3,7 +3,7 @@
 Read `BUILD_PLAN.md` before any work. It holds the decisions, the verified Upwork MCP details and the milestones (M2–M8).
 
 Rules for this repo:
-- A push to `main` deploys to production (Cloudflare Workers Builds). Run `npm run typecheck` (and tests once they exist) before every push.
+- A push to `main` deploys to production (Cloudflare Workers Builds). Run `npm run typecheck` and `npm test` before every push.
 - Never submit a real Upwork proposal (`confirm_preview`) unless Celia approves that specific job and letter in the conversation. Previews are fine.
 - Never enable Auto mode in code; only Siv switches it from the dashboard.
 - Never commit or log secrets, tokens or the Loom cookie.

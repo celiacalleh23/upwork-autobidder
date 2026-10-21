@@ -17,6 +17,7 @@ export interface Settings {
   minFixedBudget: number;
   minHourlyRate: number;
   verifiedOnly: boolean;
+  allowedCountries: string[]; // client countries to bid for; empty = any
   maxExistingProposals: number; // 0 = no limit
   minScore: number;
   letter: { template: string; rules: string };
@@ -36,8 +37,12 @@ export interface Settings {
     stopAfterErrors: number;
   };
   scanEveryMinutes: number;
+  maxNewJobsPerRun: number;   // jobs scored and written per cron run (M4)
+  connectsAlertBelow: number; // email when the balance drops below this; sending continues. 0 = off
   report: { email: string };
 }
+
+export interface RunSummary { at: string; scanned: number; new: number; matched: number; errors: number; note: string | null }
 
 export interface State {
   mode: Mode;
@@ -55,6 +60,7 @@ export interface State {
     checkedAt: string | null;
   };
   loom: { connected: boolean };
+  lastRun: RunSummary | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -64,6 +70,7 @@ export const DEFAULT_SETTINGS: Settings = {
   minFixedBudget: 150,
   minHourlyRate: 30,
   verifiedOnly: true,
+  allowedCountries: [],
   maxExistingProposals: 50,
   minScore: 70,
   letter: {
@@ -92,6 +99,8 @@ export const DEFAULT_SETTINGS: Settings = {
     stopAfterErrors: 3,
   },
   scanEveryMinutes: 5,
+  maxNewJobsPerRun: 3,
+  connectsAlertBelow: 0,
   report: { email: '' },
 };
 
@@ -104,6 +113,7 @@ export const DEFAULT_STATE: State = {
   consecutiveErrors: 0,
   upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null },
   loom: { connected: false },
+  lastRun: null,
 };
 
 async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {
@@ -203,6 +213,7 @@ export function validateSettings(input: unknown): Settings {
     minFixedBudget: num(i.minFixedBudget, 0, 100000, 'Minimum fixed budget'),
     minHourlyRate: num(i.minHourlyRate, 0, 1000, 'Minimum hourly rate'),
     verifiedOnly: bool(i.verifiedOnly),
+    allowedCountries: list(i.allowedCountries, 'Client countries'),
     maxExistingProposals: num(i.maxExistingProposals, 0, 100, 'Maximum existing proposals'),
     minScore: num(i.minScore, 0, 100, 'Minimum match score'),
     letter: { template: str(i.letter.template, 8000, 'Letter template'), rules: str(i.letter.rules, 4000, 'Letter rules') },
@@ -225,6 +236,8 @@ export function validateSettings(input: unknown): Settings {
       stopAfterErrors: num(caps.stopAfterErrors, 1, 10, 'Stop after errors'),
     },
     scanEveryMinutes: num(i.scanEveryMinutes, 5, 30, 'Scan interval'),
+    maxNewJobsPerRun: num(i.maxNewJobsPerRun, 1, 5, 'Jobs per run'),
+    connectsAlertBelow: num(i.connectsAlertBelow, 0, 10000, 'Connects alert'),
     report: { email },
   };
 }

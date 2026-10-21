@@ -3,6 +3,7 @@ import {
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
+import { runScan } from './pipeline/scan';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -143,6 +144,30 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
     if (path === '/api/log.csv' && method === 'GET') return csv(env);
 
+    if (path === '/api/jobs' && method === 'GET') {
+      const url = new URL(req.url);
+      const status = url.searchParams.get('status');
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+      const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
+      const allowed = ['matched', 'filtered', 'low_score', 'proposed', 'error'];
+      const where = status && allowed.includes(status) ? 'WHERE status = ?' : '';
+      const stmt = env.DB.prepare(
+        `SELECT id, title, url, job_type, budget, client_country, posted_at, seen_at, status, reason, score FROM jobs ${where}
+         ORDER BY seen_at DESC, posted_at DESC LIMIT ? OFFSET ?`,
+      );
+      const { results } = await (where ? stmt.bind(status, limit + 1, offset) : stmt.bind(limit + 1, offset)).all();
+      return json({ rows: results.slice(0, limit), hasMore: results.length > limit });
+    }
+
+    if (path === '/api/scan' && method === 'POST') {
+      const state = await loadState(env);
+      if (!state.upwork.connected) return fail('Connect Upwork first', 409);
+      if (state.paused) return fail('Bidding is paused. Resume it to scan.', 409);
+      const summary = await runScan(env, { force: true });
+      if (!summary) return fail('A scan is already running. Try again in a minute.', 409);
+      return json(summary);
+    }
+
     const m = path.match(/^\/api\/proposals\/(\d+)(?:\/(approve|skip|unapprove))?$/);
     if (m) {
       const id = Number(m[1]);
@@ -206,7 +231,7 @@ async function getState(env: Env) {
   const since = dayStartUtc(settings.caps.timezone);
   const [jobs, props, waiting, approved, examples] = await env.DB.batch<Record<string, number | null>>([
     env.DB.prepare(
-      "SELECT COUNT(*) AS scanned, SUM(CASE WHEN status = 'proposed' THEN 1 ELSE 0 END) AS matched FROM jobs WHERE seen_at >= ?",
+      "SELECT COUNT(*) AS scanned, SUM(CASE WHEN status IN ('matched', 'low_score', 'proposed') THEN 1 ELSE 0 END) AS matched FROM jobs WHERE seen_at >= ?",
     ).bind(since),
     env.DB.prepare(
       `SELECT SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) AS sent,

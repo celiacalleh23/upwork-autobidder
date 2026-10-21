@@ -1,0 +1,104 @@
+import type { Settings } from '../settings';
+
+// Pure job filtering: no network, no storage. Job text is untrusted data; it is only matched against, never acted on.
+
+export interface UpworkJob {
+  id: string;
+  title: string;
+  url?: string;
+  job_type?: string; // hourly | fixed
+  budget?: string;   // "10.00–30.00/hr", "30.00+/hr", "up to 30.00/hr", "5.00"
+  client?: { country?: string; verification_status?: string };
+  proposals_tier?: string; // "Fewer than 5", "5 to 10", …, "50+"
+  proposal_count?: number;
+  applied?: boolean;
+  description_snippet?: string;
+  description?: string;
+  published_date?: string;
+  created_date?: string;
+}
+
+export type Verdict = { status: 'matched'; keywords: string[] } | { status: 'filtered'; reason: string; keywords: string[] };
+
+export const stripUntrusted = (s: string | undefined) => (s ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim();
+
+const num = (s: string) => Number(s.replace(/[$,\s]/g, ''));
+
+export type Budget = { kind: 'fixed'; amount: number } | { kind: 'hourly'; min: number | null; max: number | null };
+
+export function parseBudget(jobType: string | undefined, raw: string | undefined): Budget | null {
+  const s = (raw ?? '').trim();
+  if (!s) return null;
+  const hourly = jobType === 'hourly' || /\/hr\b/i.test(s);
+  const nums = [...s.matchAll(/\$?\d[\d,]*(?:\.\d+)?/g)].map((m) => num(m[0])).filter(Number.isFinite);
+  if (!nums.length) return null;
+  if (!hourly) return { kind: 'fixed', amount: nums[0] };
+  if (/up\s*to/i.test(s)) return { kind: 'hourly', min: null, max: nums[0] };
+  if (/\+/.test(s) && nums.length === 1) return { kind: 'hourly', min: nums[0], max: null };
+  return { kind: 'hourly', min: nums[0], max: nums[1] ?? nums[0] };
+}
+
+// Lowest number of proposals a tier implies; null when unknown.
+export function tierLowerBound(tier: string | undefined): number | null {
+  const s = (tier ?? '').toLowerCase().trim();
+  if (!s) return null;
+  if (/^fewer than/.test(s) || /^less than/.test(s)) return 0;
+  const m = /^(\d+)/.exec(s);
+  return m ? Number(m[1]) : null;
+}
+
+const COUNTRY_ALIASES: Record<string, string> = {
+  usa: 'united states', us: 'united states', 'u.s.': 'united states', 'u.s.a.': 'united states', 'united states of america': 'united states', america: 'united states',
+  uk: 'united kingdom', 'u.k.': 'united kingdom', 'great britain': 'united kingdom', britain: 'united kingdom', england: 'united kingdom', scotland: 'united kingdom', wales: 'united kingdom', 'northern ireland': 'united kingdom',
+};
+export function normalizeCountry(s: string | undefined): string {
+  const k = (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return COUNTRY_ALIASES[k] ?? k;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Whole-word, case-insensitive; a keyword with several words matches them in order with any spacing.
+export function containsTerm(text: string, term: string): boolean {
+  const t = term.trim();
+  if (!t) return false;
+  const pattern = t.split(/\s+/).map(escapeRe).join('\\s+');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}])`, 'iu').test(text);
+}
+
+export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>): Verdict {
+  const title = stripUntrusted(job.title);
+  const body = stripUntrusted(job.description || job.description_snippet);
+  const keywords = s.keywords.filter((k) => containsTerm(title, k) || (!s.titleOnly && containsTerm(body, k)));
+  const no = (reason: string): Verdict => ({ status: 'filtered', reason, keywords });
+
+  if (job.applied === true) return no('Already applied');
+  if (invitedJobIds.has(String(job.id))) return no('Invited: answer the invitation on Upwork');
+  if (!keywords.length) return no(s.titleOnly ? 'No keyword in the title' : 'No keyword in the title or description');
+
+  const excluded = s.exclude.find((x) => containsTerm(title, x) || containsTerm(body, x));
+  if (excluded) return no(`Excluded word: ${excluded}`);
+
+  if (s.allowedCountries.length) {
+    const country = normalizeCountry(job.client?.country);
+    if (!country) return no('Client country unknown');
+    if (!s.allowedCountries.some((c) => normalizeCountry(c) === country)) return no(`Client country: ${job.client?.country}`);
+  }
+
+  if (s.verifiedOnly && job.client?.verification_status !== 'VERIFIED') return no('Client payment not verified');
+
+  const budget = parseBudget(job.job_type, job.budget);
+  if (budget?.kind === 'fixed' && s.minFixedBudget > 0 && budget.amount < s.minFixedBudget) {
+    return no(`Budget $${budget.amount} below $${s.minFixedBudget}`);
+  }
+  // Hourly: drop only when the posted maximum is known and below the minimum (Upwork's overlap rule; no-range jobs stay).
+  if (budget?.kind === 'hourly' && s.minHourlyRate > 0 && budget.max !== null && budget.max < s.minHourlyRate) {
+    return no(`Rate up to $${budget.max}/hr below $${s.minHourlyRate}/hr`);
+  }
+
+  if (s.maxExistingProposals > 0) {
+    const count = typeof job.proposal_count === 'number' ? job.proposal_count : tierLowerBound(job.proposals_tier);
+    if (count !== null && count > s.maxExistingProposals) return no(`Already ${job.proposals_tier ?? count} proposals`);
+  }
+
+  return { status: 'matched', keywords };
+}
