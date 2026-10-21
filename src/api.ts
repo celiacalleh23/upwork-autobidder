@@ -249,7 +249,7 @@ async function getState(env: Env) {
     scanEveryMinutes: settings.scanEveryMinutes,
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
     activeHours: { start: settings.caps.activeStart, end: settings.caps.activeEnd, timezone: settings.caps.timezone },
-    caps: { daily: settings.caps.daily, hourly: settings.caps.hourly, gapMinutes: settings.caps.gapMinutes, connectsFloor: settings.caps.connectsFloor },
+    caps: { daily: settings.caps.daily, hourly: settings.caps.hourly, gapMinutes: settings.caps.gapMinutes, connectsFloor: settings.caps.connectsFloorEnabled ? settings.caps.connectsFloor : 0 },
     today: {
       scanned: j.scanned ?? 0,
       matched: j.matched ?? 0,

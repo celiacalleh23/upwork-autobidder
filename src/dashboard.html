@@ -364,7 +364,9 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
             <option value="America/Denver">US Mountain</option><option value="America/Los_Angeles">US Pacific</option>
             <option value="America/Guayaquil">Ecuador</option><option value="Europe/London">UK</option>
           </select></div>
-        <div class="field"><label for="floor">Stop when Connects drop below</label><input type="number" id="floor" min="0"><span class="hint">0 = only stop when a job costs more than the balance.</span></div>
+        <div class="field"><label for="floor">Stop when Connects drop below</label>
+          <label class="check" for="floorOn"><input type="checkbox" id="floorOn"><span>Stop sending below a Connects balance</span></label>
+          <input type="number" id="floor" min="0" aria-describedby="floorHint"><span class="hint" id="floorHint">Off = keep sending until a job costs more than the balance.</span></div>
         <div class="field"><label for="connectsAlert">Email an alert when Connects drop below</label><input type="number" id="connectsAlert" min="0"><span class="hint">Sending continues. 0 = off. Goes to the report email.</span></div>
         <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label>
           <label class="check" for="maxConnectsOn"><input type="checkbox" id="maxConnectsOn"><span>Limit Connects per job</span></label>
@@ -697,6 +699,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
   $('ctAdd').addEventListener('click', () => addTag('ctInput', ct, drawCt));
   $('maxConnectsOn').addEventListener('change', (e) => { $('maxConnects').disabled = !e.target.checked; });
+  $('floorOn').addEventListener('change', (e) => { $('floor').disabled = !e.target.checked; });
   $('ctInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('ctInput', ct, drawCt); } });
 
   function fillForm(s) {
@@ -716,6 +719,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('timezone').value = s.caps.timezone;
     $('floor').value = s.caps.connectsFloor; $('maxConnects').value = s.caps.maxConnectsPerJob;
     $('maxConnectsOn').checked = s.caps.maxConnectsEnabled; $('maxConnects').disabled = !s.caps.maxConnectsEnabled;
+    $('floorOn').checked = s.caps.connectsFloorEnabled; $('floor').disabled = !s.caps.connectsFloorEnabled;
     $('connectsAlert').value = s.connectsAlertBelow;
     $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
@@ -734,7 +738,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       caps: {
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),
         activeStart: $('activeStart').value, activeEnd: $('activeEnd').value, timezone: $('timezone').value,
-        connectsFloor: Number($('floor').value), maxConnectsEnabled: $('maxConnectsOn').checked, maxConnectsPerJob: Number($('maxConnects').value),
+        connectsFloorEnabled: $('floorOn').checked, connectsFloor: Number($('floor').value), maxConnectsEnabled: $('maxConnectsOn').checked, maxConnectsPerJob: Number($('maxConnects').value),
         boost: $('boost').value, stopAfterErrors: Number($('stopErrors').value),
       },
       scanEveryMinutes: Number($('scanEvery').value),

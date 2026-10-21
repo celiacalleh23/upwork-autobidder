@@ -33,6 +33,7 @@ export interface Settings {
     activeStart: string; // HH:MM
     activeEnd: string;   // HH:MM
     timezone: string;    // IANA
+    connectsFloorEnabled: boolean; // off = keep sending until a job costs more than the balance (Siv, Oct 21)
     connectsFloor: number;
     maxConnectsEnabled: boolean; // off = apply to jobs whatever they cost in Connects (Siv, Oct 21)
     maxConnectsPerJob: number;
@@ -94,6 +95,7 @@ export const DEFAULT_SETTINGS: Settings = {
     activeStart: '07:00',
     activeEnd: '21:00',
     timezone: 'America/New_York',
+    connectsFloorEnabled: false,
     connectsFloor: 20,
     maxConnectsEnabled: false,
     maxConnectsPerJob: 16,
@@ -234,6 +236,7 @@ export function validateSettings(input: unknown): Settings {
       activeStart: hhmm(caps.activeStart, 'Active from'),
       activeEnd: hhmm(caps.activeEnd, 'Active until'),
       timezone: tz(caps.timezone),
+      connectsFloorEnabled: bool(caps.connectsFloorEnabled),
       connectsFloor: num(caps.connectsFloor, 0, 1000, 'Connects floor'),
       maxConnectsEnabled: bool(caps.maxConnectsEnabled),
       maxConnectsPerJob: num(caps.maxConnectsPerJob, 1, 50, 'Max Connects per job'),
