@@ -137,6 +137,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 .field{display:flex; flex-direction:column; gap:6px; min-width:0}
 .field label, .field .lbl{font-size:14px; font-weight:500}
 .hint{font-size:12.5px; color:var(--muted)}
+.field input:disabled{opacity:.45; cursor:not-allowed}
 .check{display:flex; gap:10px; align-items:flex-start; font-size:14px}
 .check input{width:18px; height:18px; margin-top:2px; flex:none; accent-color:var(--accent)}
 .tags{display:flex; flex-wrap:wrap; gap:8px}
@@ -349,7 +350,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     </section>
 
     <section class="section" aria-labelledby="s5">
-      <header><h2 id="s5">Caps and guardrails</h2><p>Your account sends 15–30 proposals a day today. Start at 15 in Review; raise toward 30 after about two quiet weeks in Auto-submit.</p></header>
+      <header><h2 id="s5">Caps and guardrails</h2><p>0 means no limit. Proposals always go out one at a time, a few minutes apart, and any Upwork warning pauses everything.</p></header>
       <div class="grid">
         <div class="field"><label for="scanEvery">Scan Upwork every</label><select id="scanEvery"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
         <div class="field"><label for="capDaily">Proposals per day (0 = no limit)</label><input type="number" id="capDaily" min="0" max="500"></div>
@@ -365,7 +366,9 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
           </select></div>
         <div class="field"><label for="floor">Stop when Connects drop below</label><input type="number" id="floor" min="0"><span class="hint">0 = only stop when a job costs more than the balance.</span></div>
         <div class="field"><label for="connectsAlert">Email an alert when Connects drop below</label><input type="number" id="connectsAlert" min="0"><span class="hint">Sending continues. 0 = off. Goes to the report email.</span></div>
-        <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label><input type="number" id="maxConnects" min="1" max="50"></div>
+        <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label>
+          <label class="check" for="maxConnectsOn"><input type="checkbox" id="maxConnectsOn"><span>Limit Connects per job</span></label>
+          <input type="number" id="maxConnects" min="1" max="50" aria-describedby="maxConnectsHint"><span class="hint" id="maxConnectsHint">Off = apply to any job, whatever it costs.</span></div>
         <div class="field"><label for="boost">Boost</label><select id="boost"><option value="never">Never</option><option value="up_to_10">If a top slot costs 10 or less</option><option value="up_to_20">If a top slot costs 20 or less</option></select></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
       </div>
@@ -693,6 +696,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   $('kwInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('kwInput', kw, drawKw); } });
   $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
   $('ctAdd').addEventListener('click', () => addTag('ctInput', ct, drawCt));
+  $('maxConnectsOn').addEventListener('change', (e) => { $('maxConnects').disabled = !e.target.checked; });
   $('ctInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('ctInput', ct, drawCt); } });
 
   function fillForm(s) {
@@ -711,6 +715,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     if (![...$('timezone').options].some((o) => o.value === s.caps.timezone)) $('timezone').append(h('option', { value: s.caps.timezone, text: s.caps.timezone }));
     $('timezone').value = s.caps.timezone;
     $('floor').value = s.caps.connectsFloor; $('maxConnects').value = s.caps.maxConnectsPerJob;
+    $('maxConnectsOn').checked = s.caps.maxConnectsEnabled; $('maxConnects').disabled = !s.caps.maxConnectsEnabled;
     $('connectsAlert').value = s.connectsAlertBelow;
     $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
@@ -729,7 +734,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       caps: {
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),
         activeStart: $('activeStart').value, activeEnd: $('activeEnd').value, timezone: $('timezone').value,
-        connectsFloor: Number($('floor').value), maxConnectsPerJob: Number($('maxConnects').value),
+        connectsFloor: Number($('floor').value), maxConnectsEnabled: $('maxConnectsOn').checked, maxConnectsPerJob: Number($('maxConnects').value),
         boost: $('boost').value, stopAfterErrors: Number($('stopErrors').value),
       },
       scanEveryMinutes: Number($('scanEvery').value),

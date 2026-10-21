@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containsTerm, evaluateJob, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
+import { connectsOverLimit, containsTerm, evaluateJob, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 // Siv's answers (BUILD_PLAN §11a): Klaviyo in title or description, US/CA/UK clients, no other filters.
@@ -109,5 +109,15 @@ describe('recheckStored', () => {
   it('applies title exclusions and budget limits', () => {
     expect(recheckStored({ ...stored, client_country: 'Canada', title: 'Klaviyo + WordPress' }, { ...siv, exclude: ['WordPress'] })).toBe('Excluded word: WordPress');
     expect(recheckStored({ ...stored, client_country: 'Canada' }, { ...siv, minFixedBudget: 50 })).toBe('Budget $10 below $50');
+  });
+});
+
+describe('connectsOverLimit', () => {
+  it('only limits when the switch is on', () => {
+    expect(connectsOverLimit(24, siv)).toBeNull();
+    const on = { ...siv, caps: { ...siv.caps, maxConnectsEnabled: true, maxConnectsPerJob: 16 } };
+    expect(connectsOverLimit(24, on)).toBe('Costs 24 Connects (max 16)');
+    expect(connectsOverLimit(16, on)).toBeNull();
+    expect(connectsOverLimit(null, on)).toBeNull();
   });
 });

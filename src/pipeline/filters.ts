@@ -85,6 +85,12 @@ export function recheckStored(job: StoredJob, s: Settings): string | null {
   return null;
 }
 
+// Per-job Connects limit, only when switched on in Settings. Returns the reason to skip, or null.
+export function connectsOverLimit(cost: number | null, s: Settings): string | null {
+  if (!s.caps.maxConnectsEnabled || cost === null) return null;
+  return cost > s.caps.maxConnectsPerJob ? `Costs ${cost} Connects (max ${s.caps.maxConnectsPerJob})` : null;
+}
+
 export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>): Verdict {
   const title = stripUntrusted(job.title);
   const body = stripUntrusted(job.description || job.description_snippet);

@@ -3,7 +3,7 @@ import { acquireLease, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
-import { stripUntrusted } from './filters';
+import { connectsOverLimit, stripUntrusted } from './filters';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, type Answer } from './letter';
 
 // Writer (M4): takes jobs that passed the filters ('matched'), re-checks them on Upwork, scores them with Claude,
@@ -80,9 +80,8 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const d = await jobDetails(client, state, job.id);
   if (d.applied) { await setJob(env, job.id, 'filtered', 'Already applied'); return 'filtered'; }
   if (d.canApply === false) { await setJob(env, job.id, 'filtered', 'Upwork says this job can no longer be applied to'); return 'filtered'; }
-  if (d.connectsCost !== null && d.connectsCost > s.caps.maxConnectsPerJob) {
-    await setJob(env, job.id, 'filtered', `Costs ${d.connectsCost} Connects (max ${s.caps.maxConnectsPerJob})`); return 'filtered';
-  }
+  const overLimit = connectsOverLimit(d.connectsCost, s);
+  if (overLimit) { await setJob(env, job.id, 'filtered', overLimit); return 'filtered'; }
 
   const forClaude: JobForClaude = {
     title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,

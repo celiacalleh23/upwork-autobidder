@@ -277,6 +277,7 @@ Local dev: `.dev.vars` (git-ignored). Never commit secrets or tokens, and never 
 | Active hours | 24/7 | `activeStart = activeEnd = '00:00'` means all day; the sender must treat equal times as all day (unit test). |
 | Daily / hourly cap | **None.** Send as many proposals as there are good matches; the account warms up as it goes. | `caps.daily = 0`, `caps.hourly = 0` (0 = no limit). Pace stays one proposal per cron run, `gapMinutes = 5`. |
 | Boost | Never | `caps.boost = 'never'` |
+| Max Connects per job | **No limit** (Siv doesn't care what a job costs) | On/off switch `caps.maxConnectsEnabled`, default **off**; the number only applies when on. |
 | AI disclosure | Off | `disclosure.enabled = false` |
 | Bids | Use the client's budget (hourly: the client's max rate; fall back to Rafa's profile rate when none is listed). Siv to confirm. | `bid.hourly = 'client_max'`, `bid.fixed = 'client_budget'` |
 | Connects floor | **Alert only:** email `siv@ltv-labs.com` when the balance falls below **250**; sending continues | New setting `connectsAlertBelow = 250`, emailed once per drop below (reset when the balance is back above). Keep the hard stop only for "balance < job cost". `caps.connectsFloor = 0`. |
