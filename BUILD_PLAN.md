@@ -33,7 +33,7 @@ Every 5 minutes (configurable 5–30), during active hours, unless paused:
 | --- | --- |
 | Rollout | Launch in **Review mode**. Auto only after ~2 weeks with no Upwork warnings, switched on by Siv in the dashboard. Never enable Auto in code or migrations. |
 | Scan interval | Every 5 minutes by default (setting allows 5/10/15). No faster. |
-| Caps (defaults) | 15/day, 3/hour, 10 min between submissions, 07:00–21:00 America/New_York, Connects floor 20, max 16 Connects per job, boost off, auto-pause after 3 errors in a row. Siv sends 15–30/day today, so the daily cap can rise toward 30 in Auto. |
+| Caps (defaults) | **No daily or hourly cap** (Celia, Oct 21: send every good match; `0` = no limit). One proposal at a time, ≥ 5 min apart (one per cron run). Was: 15/day, 3/hour, 10 min between submissions, 07:00–21:00 America/New_York, Connects floor 20, max 16 Connects per job, boost off, auto-pause after 3 errors in a row. Siv sends 15–30/day today, so the daily cap can rise toward 30 in Auto. |
 | Approvals | Approving in Review does **not** send instantly; it marks `approved` and the sender sends at the next free slot. |
 | Video | **Option C, Loom copies.** Siv has a paid Loom plan. Unofficial route (no public Loom API): if it fails, send the proposal without the link and flag it. Fallback if Loom breaks for good is Option B (Google Drive copies), not in scope now. |
 | Letters | Siv's fixed template; Claude writes only the **opening paragraph** (2–3 sentences) for each job, the rest stays word for word (see §11a). ≤ 5,000 chars, **no email, phone or social handles**. Links allowed: the Loom link and the links already in Siv's template (Miro, Gamma). |
@@ -164,7 +164,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - `src/pipeline/send.ts`, run in each cron after the scan. Lease lock in `kv` so two runs never send at once.
 - Picks **one** `approved` proposal per run (highest score first), only if all of these pass; otherwise it waits and logs why on the dashboard:
   - not paused, and inside active hours (Settings timezone)
-  - sent today < daily cap; sent in the last 60 min < hourly cap; last submission ≥ gap minutes ago
+  - sent today < daily cap and sent in the last 60 min < hourly cap (each skipped when 0 = no limit); last submission ≥ gap minutes ago
   - fresh Connects balance (`get_freelancer_dashboard`) − job cost ≥ floor; job cost ≤ max Connects per job
   - `find_jobs get`: still open, `can_apply`, not `applied`; no invitation for it
   - fixed-price only: Dispute Assistance acknowledged in Settings
@@ -180,7 +180,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - **Rate limit / account warning / 429:** pause with the reason.
 - **Errors:** `consecutiveErrors++`; at `stopAfterErrors`, pause with the reason.
 - **Auto mode:** new proposals go straight to `approved`; the same sender and caps apply.
-- **Accept:** in Review, approving 3 proposals sends them ≥ 10 min apart inside active hours, each visible as Submitted in the log and on Upwork.
+- **Accept:** in Review, approving 3 proposals sends them one at a time, ≥ 5 min apart, inside active hours, each visible as Submitted in the log and on Upwork.
 
 ### M7 — Daily report and cleanup
 - 23:00 UTC cron: build an HTML + text email for "today" in the Settings timezone:
@@ -275,7 +275,7 @@ Local dev: `.dev.vars` (git-ignored). Never commit secrets or tokens, and never 
 | Min budget / rate | None | `minFixedBudget = 0`, `minHourlyRate = 0` |
 | Client filters | Only clients in **USA, Canada, UK**; no other filters | New setting `allowedCountries: string[]` (filter on `client.country`). `verifiedOnly = false`, `maxExistingProposals = 0`. |
 | Active hours | 24/7 | `activeStart = activeEnd = '00:00'` means all day; the sender must treat equal times as all day (unit test). |
-| Daily cap | No real cap wanted; start at **30**, raise over time | `caps.daily = 30`. Raising above 40 needs the validation limit changed. |
+| Daily / hourly cap | **None.** Send as many proposals as there are good matches; the account warms up as it goes. | `caps.daily = 0`, `caps.hourly = 0` (0 = no limit). Pace stays one proposal per cron run, `gapMinutes = 5`. |
 | Boost | Never | `caps.boost = 'never'` |
 | AI disclosure | Off | `disclosure.enabled = false` |
 | Bids | Use the client's budget (hourly: the client's max rate; fall back to Rafa's profile rate when none is listed). Siv to confirm. | `bid.hourly = 'client_max'`, `bid.fixed = 'client_budget'` |

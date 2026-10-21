@@ -206,7 +206,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 
     <section class="stats" aria-label="Today">
       <div class="stat"><span class="label">Jobs scanned today</span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
-      <div class="stat"><span class="label">Proposals sent today</span><span class="value"><span id="sSent">0</span> <small id="sCap">/ 15 cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
+      <div class="stat"><span class="label">Proposals sent today</span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
       <div class="stat"><span class="label">Waiting for review</span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
       <div class="stat"><span class="label">Connects spent today</span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
       <div class="stat"><span class="label">Failed today</span><span class="value" id="sFailed">0</span><a href="#log" class="sub">See the log</a></div>
@@ -315,8 +315,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       <header><h2 id="s5">Caps and guardrails</h2><p>Your account sends 15–30 proposals a day today. Start at 15 in Review; raise toward 30 after about two quiet weeks in Auto-submit.</p></header>
       <div class="grid">
         <div class="field"><label for="scanEvery">Scan Upwork every</label><select id="scanEvery"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
-        <div class="field"><label for="capDaily">Proposals per day</label><input type="number" id="capDaily" min="1" max="40"></div>
-        <div class="field"><label for="capHourly">Proposals per hour</label><input type="number" id="capHourly" min="1" max="6"></div>
+        <div class="field"><label for="capDaily">Proposals per day (0 = no limit)</label><input type="number" id="capDaily" min="0" max="500"></div>
+        <div class="field"><label for="capHourly">Proposals per hour (0 = no limit)</label><input type="number" id="capHourly" min="0" max="60"></div>
         <div class="field"><label for="capGap">Minutes between proposals</label><input type="number" id="capGap" min="5" max="120"></div>
         <div class="field"><label for="activeStart">Active from</label><input type="time" id="activeStart"></div>
         <div class="field"><label for="activeEnd">Active until</label><input type="time" id="activeEnd"></div>
@@ -430,16 +430,17 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('sScanned').textContent = fmtNum(t.scanned);
     $('sMatched').textContent = `${fmtNum(t.matched)} matched your filters`;
     $('sSent').textContent = fmtNum(t.sent);
-    $('sCap').textContent = `/ ${c.daily} cap`;
-    $('sBar').style.width = Math.min(100, (t.sent / Math.max(1, c.daily)) * 100) + '%';
+    $('sCap').textContent = c.daily ? `/ ${c.daily} cap` : 'no daily cap';
+    $('sBar').style.width = c.daily ? Math.min(100, (t.sent / c.daily) * 100) + '%' : '0%';
     $('sWaiting').textContent = fmtNum(t.waiting);
     $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
     $('sConnects').textContent = fmtNum(t.connectsSpent);
     $('sFloor').textContent = `Stops below ${c.connectsFloor}`;
     $('sFailed').textContent = fmtNum(t.failed);
     $('sFailed').className = 'value' + (t.failed ? ' v-bad' : '');
-    $('rulesLine').textContent = `Guardrails: ${c.daily} a day · ${c.hourly} an hour · ${c.gapMinutes} min apart · stop below ${c.connectsFloor} Connects · one proposal per job · auto-pause on any Upwork warning.`;
-    $('capLine').textContent = `${c.daily} a day, ${c.hourly} an hour, ${c.gapMinutes} minutes apart`;
+    const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', `${c.gapMinutes} min apart`];
+    $('rulesLine').textContent = `Guardrails: ${pace.join(' · ')} · stop below ${c.connectsFloor} Connects · one proposal per job · auto-pause on any Upwork warning.`;
+    $('capLine').textContent = pace.join(', ');
 
     $('upworkChip').textContent = s.upwork.connected ? 'Connected' : 'Not connected';
     $('upworkChip').className = 'chip ' + (s.upwork.connected ? 'good' : 'warn');

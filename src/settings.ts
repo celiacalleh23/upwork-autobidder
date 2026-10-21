@@ -25,8 +25,8 @@ export interface Settings {
   bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10' };
   loom: { sourceUrl: string; deleteAfterDays: number };
   caps: {
-    daily: number;
-    hourly: number;
+    daily: number;  // 0 = no limit
+    hourly: number; // 0 = no limit
     gapMinutes: number;
     activeStart: string; // HH:MM
     activeEnd: string;   // HH:MM
@@ -74,9 +74,9 @@ export const DEFAULT_SETTINGS: Settings = {
   bid: { hourly: 'profile', fixed: 'client_budget' },
   loom: { sourceUrl: '', deleteAfterDays: 30 },
   caps: {
-    daily: 15,
-    hourly: 3,
-    gapMinutes: 10,
+    daily: 0,
+    hourly: 0,
+    gapMinutes: 5,
     activeStart: '07:00',
     activeEnd: '21:00',
     timezone: 'America/New_York',
@@ -207,8 +207,8 @@ export function validateSettings(input: unknown): Settings {
     },
     loom: { sourceUrl: loomUrl, deleteAfterDays: num(i.loom.deleteAfterDays, 7, 365, 'Delete Loom copies after') },
     caps: {
-      daily: num(caps.daily, 1, 40, 'Daily cap'),
-      hourly: num(caps.hourly, 1, 6, 'Hourly cap'),
+      daily: num(caps.daily, 0, 500, 'Daily cap'),
+      hourly: num(caps.hourly, 0, 60, 'Hourly cap'),
       gapMinutes: num(caps.gapMinutes, 5, 120, 'Minimum gap'),
       activeStart: hhmm(caps.activeStart, 'Active from'),
       activeEnd: hhmm(caps.activeEnd, 'Active until'),
