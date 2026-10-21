@@ -108,7 +108,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
   - You may use `@modelcontextprotocol/sdk` (pinned version, `nodejs_compat` flag) instead, if it runs cleanly in Workers.
 - `src/oauth.ts`, Upwork OAuth:
   - Discover the protected-resource metadata (`WWW-Authenticate` on 401 / `/.well-known/oauth-protected-resource`), then the authorization server metadata.
-  - Dynamic client registration with redirect `https://<worker>/oauth/upwork/callback`; store the `client_id`.
+  - Dynamic client registration; store the `client_id`. **Upwork refuses `https://<worker>/…` as a redirect** (only localhost and a few AI platforms are allowed), so the deployed tool registers `http://127.0.0.1:53682/upwork-callback` and the person pastes the resulting address into Settings (`POST /api/upwork/finish`). Local dev still uses `/oauth/upwork/callback`.
   - PKCE S256 with a `state` stored in D1 (10-min expiry).
   - Routes: `GET /oauth/upwork/start` (needs a dashboard session) and `GET /oauth/upwork/callback`.
   - Token exchange and refresh before expiry. On `invalid_grant`, mark Upwork disconnected and show "Reconnect Upwork".

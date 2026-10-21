@@ -341,9 +341,18 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       <div class="grid"><div class="field"><label for="reportEmail">Daily report email (6 pm)</label><input type="email" id="reportEmail" placeholder="name@company.com"></div></div>
       <div class="conn"><div><b>Upwork</b><div class="small muted" id="upworkStatus">Not connected. Rafa signs in once on the setup call.</div><div class="small msg bad" id="upworkError" role="alert" hidden></div></div>
         <div class="conn-actions"><span class="chip warn" id="upworkChip">Not connected</span>
-          <a class="btn primary" id="upworkConnect" href="/oauth/upwork/start">Connect Upwork</a>
+          <a class="btn primary" id="upworkConnect" href="/oauth/upwork/start" target="_blank" rel="noopener">Connect Upwork</a>
           <button type="button" class="btn" id="upworkCheck" hidden>Check now</button>
           <button type="button" class="btn danger" id="upworkDisconnect" hidden>Disconnect</button></div></div>
+      <div class="note info" id="upworkFinish" hidden>
+        <b>Finish connecting Upwork</b>
+        <ol class="small" style="margin:8px 0; padding-left:20px">
+          <li>In the Upwork tab that just opened, sign in with Rafa's <b>freelancer</b> account and click <b>Allow</b>.</li>
+          <li>You land on a page that says it can't be reached. That's expected.</li>
+          <li>Copy the <b>whole address</b> from that tab's address bar (it starts with <code>http://127.0.0.1</code> and contains <code>code=</code>), paste it here, then press Finish. Within 10 minutes.</li>
+        </ol>
+        <div class="addrow" style="max-width:none"><input id="upworkPaste" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:53682/upwork-callback?code=…" aria-label="Address from the Upwork tab"><button type="button" class="btn primary" id="upworkFinishBtn">Finish</button></div>
+      </div>
       <div class="conn" id="examplesRow" hidden><div><b>Example data</b><div class="small muted">Sample proposals shown before the first real ones.</div></div><button type="button" class="btn danger" id="clearExamples2">Remove examples</button></div>
     </section>
 
@@ -679,6 +688,16 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   }
   $('clearExamples').addEventListener('click', clearExamples);
   $('clearExamples2').addEventListener('click', clearExamples);
+  $('upworkConnect').addEventListener('click', () => { $('upworkFinish').hidden = false; $('upworkPaste').value = ''; });
+  $('upworkFinishBtn').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Connecting…';
+    try {
+      const r = await api('/api/upwork/finish', { method: 'POST', body: { url: $('upworkPaste').value } });
+      $('upworkFinish').hidden = true; $('upworkPaste').value = '';
+      toast(r.warning ? `Signed in. ${r.warning}` : `Upwork connected. Bidding as ${r.account || 'the freelancer account'}.`, Boolean(r.warning));
+    } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Finish'; loadState();
+  });
   $('upworkCheck').addEventListener('click', async (ev) => {
     const b = ev.currentTarget; b.disabled = true; b.textContent = 'Checking…';
     try { await api('/api/upwork/check', { method: 'POST' }); toast('Upwork connection checked.'); } catch (e) { toast(e.message, true); }

@@ -5,6 +5,27 @@ import { loadState, patchState, type Env, type State } from './settings';
 // Upwork sign-in: OAuth 2.1 with dynamic client registration and PKCE, as advertised by the MCP server.
 
 const STATE_TTL_MS = 10 * 60_000;
+
+// Upwork only registers redirect URIs on localhost or a few AI platforms, so the deployed Worker can't be a redirect target.
+// Instead Upwork sends the browser to this unused local address; the page fails to load, and the person pastes the address
+// (which carries the one-time code and state) into the dashboard. PKCE keeps that code useless without our verifier.
+export const PASTE_REDIRECT_URI = 'http://127.0.0.1:53682/upwork-callback';
+
+export function redirectUriFor(origin: string): string {
+  return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? `${origin}/oauth/upwork/callback` : PASTE_REDIRECT_URI;
+}
+
+// Accepts the full address from the browser bar (or just its query string) and returns its parameters.
+export function paramsFromPasted(text: string): URLSearchParams {
+  const t = text.trim();
+  if (!t || t.length > 4000) throw new OAuthError('Paste the full address from the browser bar after clicking Allow on Upwork.');
+  const query = t.includes('?') ? t.slice(t.indexOf('?') + 1) : t;
+  const params = new URLSearchParams(query.split('#')[0]);
+  if (!params.get('error') && (!params.get('code') || !params.get('state'))) {
+    throw new OAuthError('That address has no sign-in code. Copy the whole address (it contains "code=") after clicking Allow on Upwork.');
+  }
+  return params;
+}
 const REFRESH_EARLY_MS = 2 * 60_000;
 
 interface AuthServer {
@@ -96,7 +117,7 @@ async function getClient(env: Env, as: AuthServer, redirectUri: string): Promise
 
 export async function startUpworkAuth(env: Env, origin: string): Promise<string> {
   const as = await discover(env);
-  const redirectUri = `${origin}/oauth/upwork/callback`;
+  const redirectUri = redirectUriFor(origin);
   const client = await getClient(env, as, redirectUri);
   const verifier = randomToken(48);
   const state = randomToken(24);

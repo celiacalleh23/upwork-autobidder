@@ -1,7 +1,8 @@
 import {
   Env, InvalidInput, loadSettings, loadState, patchState, saveSettings, validateSettings,
 } from './settings';
-import { checkUpwork, disconnectUpwork } from './oauth';
+import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
+import { MissingKey } from './crypto';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -91,6 +92,21 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       } catch (e) {
         console.error('upwork check failed', e instanceof Error ? e.message : e);
         return fail(e instanceof Error ? e.message : 'Upwork check failed', 502);
+      }
+    }
+    if (path === '/api/upwork/finish' && method === 'POST') {
+      const body = await readJson(req);
+      try {
+        await finishUpworkAuth(env, paramsFromPasted(String(body.url ?? '')));
+      } catch (e) {
+        if (e instanceof OAuthError || e instanceof MissingKey) return fail(e.message);
+        throw e;
+      }
+      try {
+        const s = await checkUpwork(env);
+        return json({ ok: true, account: s.upwork.account });
+      } catch (e) {
+        return json({ ok: true, account: null, warning: e instanceof Error ? e.message : 'Account details could not be read yet' });
       }
     }
     if (path === '/api/upwork/disconnect' && method === 'POST') {

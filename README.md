@@ -78,9 +78,15 @@ All routes need a signed-in session (cookie from `/login`). Changes also need th
 | POST | `/api/mode` | `{"mode":"review"}` or `{"mode":"auto","confirm":true}` |
 | POST | `/api/pause` | `{"paused":true|false}` |
 | POST | `/api/upwork/check` | Re-read the Upwork account, tool names and Connects balance |
+| POST | `/api/upwork/finish` | `{"url":"http://127.0.0.1:53682/upwork-callback?code=…&state=…"}`: finish the sign-in with the pasted address |
 | POST | `/api/upwork/disconnect` | Forget the Upwork sign-in |
 | GET | `/oauth/upwork/start` | Starts the Upwork sign-in (needs a session) |
-| GET | `/oauth/upwork/callback` | Upwork returns here; checked by the single-use OAuth state, not the cookie |
+| GET | `/oauth/upwork/callback` | Local dev only: Upwork returns here; checked by the single-use OAuth state, not the cookie |
+
+Upwork only registers redirect addresses on localhost or a few AI platforms (verified Oct 21, 2026: `*.workers.dev` and
+`example.com` are refused). So the deployed tool registers `http://127.0.0.1:53682/upwork-callback`; after **Allow** the
+browser shows "can't be reached", and the person pastes that address into Settings. PKCE makes the code useless without
+the verifier stored on the server.
 | GET | `/api/queue` | Proposals waiting for review |
 | PATCH | `/api/proposals/:id` | `{"cover_letter":"…"}` while waiting |
 | POST | `/api/proposals/:id/approve` · `/unapprove` · `/skip` | Queue actions |
