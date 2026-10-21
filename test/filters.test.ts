@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containsTerm, evaluateJob, normalizeCountry, parseBudget, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
+import { containsTerm, evaluateJob, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 // Siv's answers (BUILD_PLAN §11a): Klaviyo in title or description, US/CA/UK clients, no other filters.
@@ -96,5 +96,18 @@ describe('helpers', () => {
     expect(normalizeCountry('USA')).toBe('united states');
     expect(normalizeCountry(' United  Kingdom ')).toBe('united kingdom');
     expect(stripUntrusted('<untrusted_participant_content>\nHi\n</untrusted_participant_content>')).toBe('Hi');
+  });
+});
+
+describe('recheckStored', () => {
+  const stored = { title: 'Klaviyo Email Marketer Needed', job_type: 'fixed', budget: '10.00', client_country: 'Nigeria' };
+  it('filters waiting jobs from countries added later', () => {
+    expect(recheckStored(stored, siv)).toBe('Client country: Nigeria');
+    expect(recheckStored({ ...stored, client_country: 'Canada' }, siv)).toBeNull();
+    expect(recheckStored(stored, { ...siv, allowedCountries: [] })).toBeNull();
+  });
+  it('applies title exclusions and budget limits', () => {
+    expect(recheckStored({ ...stored, client_country: 'Canada', title: 'Klaviyo + WordPress' }, { ...siv, exclude: ['WordPress'] })).toBe('Excluded word: WordPress');
+    expect(recheckStored({ ...stored, client_country: 'Canada' }, { ...siv, minFixedBudget: 50 })).toBe('Budget $10 below $50');
   });
 });

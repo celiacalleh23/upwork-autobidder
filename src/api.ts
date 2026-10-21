@@ -3,7 +3,7 @@ import {
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
-import { runScan } from './pipeline/scan';
+import { recheckMatched, runScan } from './pipeline/scan';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -71,6 +71,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     if (path === '/api/settings' && method === 'PUT') {
       const s = validateSettings(await readJson(req));
       await saveSettings(env, s);
+      await recheckMatched(env, s);
       return json(s);
     }
 

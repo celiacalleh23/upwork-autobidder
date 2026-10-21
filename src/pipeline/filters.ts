@@ -65,6 +65,26 @@ export function containsTerm(text: string, term: string): boolean {
   return new RegExp(`(^|[^\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}])`, 'iu').test(text);
 }
 
+// Re-check of a stored, still-waiting job after the settings changed. Only uses what the jobs table keeps
+// (title, country, budget); M4 re-runs evaluateJob on fresh Upwork data before scoring anyway.
+export interface StoredJob { title: string; job_type: string | null; budget: string | null; client_country: string | null }
+export function recheckStored(job: StoredJob, s: Settings): string | null {
+  const title = stripUntrusted(job.title);
+  const excluded = s.exclude.find((x) => containsTerm(title, x));
+  if (excluded) return `Excluded word: ${excluded}`;
+  if (s.allowedCountries.length) {
+    const country = normalizeCountry(job.client_country ?? undefined);
+    if (!country) return 'Client country unknown';
+    if (!s.allowedCountries.some((c) => normalizeCountry(c) === country)) return `Client country: ${job.client_country}`;
+  }
+  const budget = parseBudget(job.job_type ?? undefined, job.budget ?? undefined);
+  if (budget?.kind === 'fixed' && s.minFixedBudget > 0 && budget.amount < s.minFixedBudget) return `Budget $${budget.amount} below $${s.minFixedBudget}`;
+  if (budget?.kind === 'hourly' && s.minHourlyRate > 0 && budget.max !== null && budget.max < s.minHourlyRate) {
+    return `Rate up to $${budget.max}/hr below $${s.minHourlyRate}/hr`;
+  }
+  return null;
+}
+
 export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>): Verdict {
   const title = stripUntrusted(job.title);
   const body = stripUntrusted(job.description || job.description_snippet);

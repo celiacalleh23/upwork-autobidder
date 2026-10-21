@@ -2,7 +2,7 @@ import { acquireLease, getKv, putKv, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type RunSummary, type Settings } from '../settings';
-import { evaluateJob, stripUntrusted, type UpworkJob } from './filters';
+import { evaluateJob, recheckStored, stripUntrusted, type StoredJob, type UpworkJob } from './filters';
 
 // Scanner: small, recent result pages per keyword, every new job recorded once with its filter verdict.
 // Jobs that pass are stored as 'matched'; scoring and letters (M4) pick them up from there.
@@ -37,6 +37,20 @@ async function keywordsForRun(env: Env, s: Settings): Promise<string[]> {
   return out;
 }
 
+// Jobs still waiting as 'matched' are re-checked against the current settings, so a filter changed after
+// they were found (e.g. countries added) applies to them too. Returns how many were filtered out.
+export async function recheckMatched(env: Env, s: Settings): Promise<number> {
+  const { results } = await env.DB.prepare(
+    "SELECT id, title, job_type, budget, client_country FROM jobs WHERE status = 'matched' LIMIT 500",
+  ).all<StoredJob & { id: string }>();
+  const updates = results.flatMap((j) => {
+    const reason = recheckStored(j, s);
+    return reason ? [env.DB.prepare("UPDATE jobs SET status = 'filtered', reason = ? WHERE id = ? AND status = 'matched'").bind(`${reason} (settings changed)`, j.id)] : [];
+  });
+  if (updates.length) await env.DB.batch(updates);
+  return updates.length;
+}
+
 export function scanDue(lastScanAt: string | null, everyMinutes: number, now = Date.now()): boolean {
   if (!lastScanAt) return true;
   // 30 s slack so a cron that fires a little early still counts as due.
@@ -55,6 +69,7 @@ export async function runScan(env: Env, opts: { force?: boolean } = {}): Promise
     const tools = state.upwork.toolNames;
     const orgUid = state.upwork.orgUid;
     if (!tools.find_jobs) throw new McpError('Upwork tool names are missing. Press Check now under Settings → Upwork.');
+    await recheckMatched(env, settings);
     const client = await upworkClient(env);
     const invited = await invitedJobIds(client, tools.list_freelancer_proposals, orgUid).catch((e) => {
       summary.errors++; summary.note = `Invitations not checked: ${e instanceof Error ? e.message : e}`;
