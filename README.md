@@ -2,9 +2,12 @@
 
 Siv's private dashboard and bidding pipeline, running on Cloudflare Workers + D1.
 
-**Status: milestone 1 — dashboard.** The dashboard, its API, login and settings are built.
-The bidding pipeline (Upwork connection, scanner, AI letters, Loom copies, sender, daily report)
-plugs into `scheduled()` in `src/index.ts` next.
+**Status: M2 — Upwork connection.** The dashboard, its API, login, settings and the Upwork sign-in
+(Settings → Reports and connections → Connect Upwork) are built. The rest of the pipeline (scanner, AI letters,
+Loom copies, sender, daily report) plugs into `scheduled()` in `src/index.ts` next.
+
+The Upwork connection needs the `TOKEN_KEY` secret (32+ random characters, e.g. `openssl rand -base64 48`).
+It encrypts the stored Upwork sign-in and also signs dashboard sessions, so setting or changing it signs everyone out once.
 
 ## What the dashboard does
 
@@ -55,6 +58,9 @@ npm run typecheck
 | --- | --- |
 | `src/index.ts` | Routing, security headers, cron entry point |
 | `src/auth.ts` | Login page, signed session cookie, credential check |
+| `src/oauth.ts` | Upwork sign-in: discovery, client registration, PKCE, token refresh, account + Connects check |
+| `src/mcp.ts` | Minimal MCP client (Streamable HTTP, JSON or SSE responses) |
+| `src/crypto.ts` | AES-GCM encryption at rest, keyed from `TOKEN_KEY` |
 | `src/api.ts` | Dashboard API: state, queue, log, CSV, proposal actions, mode, pause, settings |
 | `src/settings.ts` | Settings and state shapes, defaults, validation |
 | `src/dashboard.html` | The dashboard (single page, no build step) |
@@ -71,6 +77,10 @@ All routes need a signed-in session (cookie from `/login`). Changes also need th
 | GET / PUT | `/api/settings` | Read / save settings (validated and clamped) |
 | POST | `/api/mode` | `{"mode":"review"}` or `{"mode":"auto","confirm":true}` |
 | POST | `/api/pause` | `{"paused":true|false}` |
+| POST | `/api/upwork/check` | Re-read the Upwork account, tool names and Connects balance |
+| POST | `/api/upwork/disconnect` | Forget the Upwork sign-in |
+| GET | `/oauth/upwork/start` | Starts the Upwork sign-in (needs a session) |
+| GET | `/oauth/upwork/callback` | Upwork returns here; checked by the single-use OAuth state, not the cookie |
 | GET | `/api/queue` | Proposals waiting for review |
 | PATCH | `/api/proposals/:id` | `{"cover_letter":"…"}` while waiting |
 | POST | `/api/proposals/:id/approve` · `/unapprove` · `/skip` | Queue actions |

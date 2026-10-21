@@ -46,7 +46,14 @@ export interface State {
   connectsBalance: number | null;
   lastScanAt: string | null;
   consecutiveErrors: number;
-  upwork: { connected: boolean; account: string | null };
+  upwork: {
+    connected: boolean;
+    account: string | null;
+    orgUid: string | null;
+    toolNames: Record<string, string>; // base name → name as the Upwork MCP server lists it
+    lastError: string | null;
+    checkedAt: string | null;
+  };
   loom: { connected: boolean };
 }
 
@@ -95,7 +102,7 @@ export const DEFAULT_STATE: State = {
   connectsBalance: null,
   lastScanAt: null,
   consecutiveErrors: 0,
-  upwork: { connected: false, account: null },
+  upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null },
   loom: { connected: false },
 };
 

@@ -101,7 +101,7 @@ Notes:
 
 Work in small commits. Run `npm run typecheck` (and tests) before every push, because a push to `main` deploys.
 
-### M2 — Upwork connection (OAuth + MCP client)
+### M2 — Upwork connection (OAuth + MCP client) — built Oct 21, 2026; tested against a local mock, real sign-in on the setup call
 - `src/mcp.ts`: minimal MCP client over Streamable HTTP with `fetch`:
   - `initialize` → `notifications/initialized` → `tools/list` / `tools/call`
   - Keep the `Mcp-Session-Id` header, accept both `application/json` and `text/event-stream` responses (parse SSE `data:` lines), and set a timeout per call.

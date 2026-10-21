@@ -147,6 +147,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 .addrow input{flex:1; min-width:0}
 .note{border-radius:8px; padding:12px 14px; font-size:14px; background:var(--warn-bg); color:var(--warn-fg)}
 .note.info{background:var(--info-bg); color:var(--info-fg)}
+.conn-actions{display:flex; flex-wrap:wrap; align-items:center; gap:8px}
+.conn-actions a.btn{text-decoration:none; display:inline-flex; align-items:center}
 .conn{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--line-soft); padding-top:14px}
 .savebar{position:sticky; bottom:0; background:var(--bg); border-top:1px solid var(--line); padding-block:12px calc(12px + env(safe-area-inset-bottom,0px)); display:flex; gap:12px; align-items:center; justify-content:flex-end; flex-wrap:wrap; z-index:5}
 .savebar .msg{flex:1 1 260px; font-size:14px}
@@ -337,7 +339,11 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     <section class="section" aria-labelledby="s6">
       <header><h2 id="s6">Reports and connections</h2></header>
       <div class="grid"><div class="field"><label for="reportEmail">Daily report email (6 pm)</label><input type="email" id="reportEmail" placeholder="name@company.com"></div></div>
-      <div class="conn"><div><b>Upwork</b><div class="small muted" id="upworkStatus">Not connected. Rafa signs in once on the setup call.</div></div><span class="chip warn" id="upworkChip">Not connected</span></div>
+      <div class="conn"><div><b>Upwork</b><div class="small muted" id="upworkStatus">Not connected. Rafa signs in once on the setup call.</div><div class="small msg bad" id="upworkError" role="alert" hidden></div></div>
+        <div class="conn-actions"><span class="chip warn" id="upworkChip">Not connected</span>
+          <a class="btn primary" id="upworkConnect" href="/oauth/upwork/start">Connect Upwork</a>
+          <button type="button" class="btn" id="upworkCheck" hidden>Check now</button>
+          <button type="button" class="btn danger" id="upworkDisconnect" hidden>Disconnect</button></div></div>
       <div class="conn" id="examplesRow" hidden><div><b>Example data</b><div class="small muted">Sample proposals shown before the first real ones.</div></div><button type="button" class="btn danger" id="clearExamples2">Remove examples</button></div>
     </section>
 
@@ -444,7 +450,15 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 
     $('upworkChip').textContent = s.upwork.connected ? 'Connected' : 'Not connected';
     $('upworkChip').className = 'chip ' + (s.upwork.connected ? 'good' : 'warn');
-    $('upworkStatus').textContent = s.upwork.connected ? `Official Upwork connection · ${s.upwork.account || ''}` : 'Not connected. Rafa signs in once on the setup call.';
+    $('upworkStatus').textContent = s.upwork.connected
+      ? `Official Upwork connection · ${s.upwork.account || 'account not read yet'}${s.upwork.checkedAt ? ` · checked ${ago(s.upwork.checkedAt)}` : ''}`
+      : 'Not connected. Rafa signs in once with his freelancer account.';
+    $('upworkError').textContent = s.upwork.lastError || '';
+    $('upworkError').hidden = !s.upwork.lastError;
+    $('upworkConnect').textContent = s.upwork.connected ? 'Reconnect' : 'Connect Upwork';
+    $('upworkConnect').className = 'btn ' + (s.upwork.connected ? 'outline' : 'primary');
+    $('upworkCheck').hidden = !s.upwork.connected;
+    $('upworkDisconnect').hidden = !s.upwork.connected;
     $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Connect on the setup call';
     $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
     $('loomStatus').textContent = s.loom.connected ? 'Copies are created and renamed automatically' : 'Not connected';
@@ -665,6 +679,16 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   }
   $('clearExamples').addEventListener('click', clearExamples);
   $('clearExamples2').addEventListener('click', clearExamples);
+  $('upworkCheck').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Checking…';
+    try { await api('/api/upwork/check', { method: 'POST' }); toast('Upwork connection checked.'); } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Check now'; loadState();
+  });
+  $('upworkDisconnect').addEventListener('click', async () => {
+    if (!confirm('Disconnect Upwork? Nothing is scanned or sent until Rafa signs in again.')) return;
+    try { await api('/api/upwork/disconnect', { method: 'POST' }); toast('Upwork disconnected.'); } catch (e) { toast(e.message, true); }
+    loadState();
+  });
   $('logFilter').addEventListener('change', () => loadLog());
   $('logMore').addEventListener('click', () => loadLog(true));
 

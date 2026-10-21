@@ -1,6 +1,7 @@
 import {
   Env, InvalidInput, loadSettings, loadState, patchState, saveSettings, validateSettings,
 } from './settings';
+import { checkUpwork, disconnectUpwork } from './oauth';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -81,6 +82,20 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         return json(await patchState(env, { mode: 'auto' }));
       }
       return fail('Mode must be review or auto');
+    }
+
+    if (path === '/api/upwork/check' && method === 'POST') {
+      try {
+        await checkUpwork(env);
+        return json({ ok: true });
+      } catch (e) {
+        console.error('upwork check failed', e instanceof Error ? e.message : e);
+        return fail(e instanceof Error ? e.message : 'Upwork check failed', 502);
+      }
+    }
+    if (path === '/api/upwork/disconnect' && method === 'POST') {
+      await disconnectUpwork(env);
+      return json({ ok: true });
     }
 
     if (path === '/api/pause' && method === 'POST') {

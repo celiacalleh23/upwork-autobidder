@@ -2,6 +2,8 @@ import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
 import { handleApi } from './api';
 import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie } from './auth';
+import { MissingKey } from './crypto';
+import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
 import type { Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -41,6 +43,34 @@ function ensureSchema(env: Env): Promise<void> {
   return schemaReady;
 }
 
+const escHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+
+// Shown after the Upwork redirect. Success moves on with a same-site navigation, so the SameSite=Strict session cookie is sent.
+function resultPage(ok: boolean, message: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+${ok ? '<meta http-equiv="refresh" content="1;url=/#settings">' : ''}<title>Upwork · Upwork Auto-Bidder</title>
+<style>:root{--bg:#F3F4F2;--surface:#fff;--fg:#16181D;--muted:#5B615A;--line:#DDE0DB;--accent:#1F5F4F;--bad:#8A2A15;color-scheme:light}
+@media (prefers-color-scheme: dark){:root{--bg:#111312;--surface:#1A1D1B;--fg:#E7EAE6;--muted:#A1A8A0;--line:#2C312D;--accent:#5CC4A2;--bad:#F3A693;color-scheme:dark}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;padding:16px}
+main{max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px;display:flex;flex-direction:column;gap:12px}
+h1{margin:0;font-size:20px;color:${ok ? 'var(--accent)' : 'var(--bad)'}} p{margin:0;color:var(--muted)} a{color:var(--accent);font-weight:600}</style></head>
+<body><main><h1>${ok ? 'Upwork connected' : 'Upwork not connected'}</h1><p>${escHtml(message)}</p><a href="/#settings">Back to the dashboard</a></main></body></html>`;
+}
+
+async function handleUpworkCallback(req: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  try {
+    await finishUpworkAuth(env, new URL(req.url).searchParams);
+  } catch (e) {
+    console.error('upwork callback failed', e instanceof Error ? e.message : e);
+    const msg = e instanceof OAuthError || e instanceof MissingKey ? e.message : 'Something went wrong while connecting. Check the Worker logs and try again.';
+    return html(resultPage(false, msg), 400);
+  }
+  // Signed in; reading the account and Connects can fail separately and shows on the dashboard with a "Check now" button.
+  const msg = await checkUpwork(env).then((s) => `Bidding as ${s.upwork.account ?? 'the freelancer account'} · returning to the dashboard…`, () => 'Signed in. Some account details could not be read yet; see Settings on the dashboard.');
+  return html(resultPage(true, msg));
+}
+
 async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Response> {
   if (!loginConfigured(env)) {
     return html(loginPage('Login is not set up yet. Add the DASH_PASSWORD secret in Cloudflare.'), 503);
@@ -65,6 +95,9 @@ export default {
     const secure = url.protocol === 'https:';
 
     if (url.pathname === '/login') return withHeaders(await handleLogin(req, env, secure));
+    // No session check here: the cookie is SameSite=Strict, so it is not sent on the redirect back from Upwork. The single-use
+    // OAuth state (created by a signed-in /oauth/upwork/start) is what ties this request to the dashboard.
+    if (url.pathname === '/oauth/upwork/callback' && req.method === 'GET') return withHeaders(await handleUpworkCallback(req, env));
     if (url.pathname === '/logout') {
       return withHeaders(new Response(null, { status: 303, headers: { location: '/login', 'set-cookie': clearCookie(secure) } }));
     }
@@ -78,6 +111,15 @@ export default {
 
     await ensureSchema(env);
     if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname));
+    if (url.pathname === '/oauth/upwork/start' && req.method === 'GET') {
+      try {
+        return withHeaders(new Response(null, { status: 303, headers: { location: await startUpworkAuth(env, url.origin), 'cache-control': 'no-store' } }));
+      } catch (e) {
+        console.error('upwork start failed', e instanceof Error ? e.message : e);
+        const msg = e instanceof OAuthError || e instanceof MissingKey ? e.message : 'Could not reach Upwork. Try again in a minute.';
+        return withHeaders(html(resultPage(false, msg), 502));
+      }
+    }
     if (url.pathname === '/' || url.pathname === '/index.html') return withHeaders(html(dashboardHtml));
     return withHeaders(new Response('Not found', { status: 404 }));
   },
