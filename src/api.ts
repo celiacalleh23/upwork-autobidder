@@ -50,7 +50,9 @@ export function dayStartUtc(timeZone: string, now = new Date()): string {
   return toSql(new Date(midnight));
 }
 
+// Equal start and end means all day (BUILD_PLAN §11a: 24/7); an end before the start crosses midnight.
 export function isActiveNow(start: string, end: string, timeZone: string, now = new Date()): boolean {
+  if (start === end) return true;
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   return start <= end ? hm >= start && hm < end : hm >= start || hm < end;
 }
