@@ -3,6 +3,7 @@ export interface Env {
   DASH_PASSWORD?: string;
   TOKEN_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_BASE_URL?: string; // local testing only (a stand-in API); unset in production
   RESEND_API_KEY?: string;
   CLAUDE_MODEL: string;
   UPWORK_MCP_URL: string;
@@ -22,7 +23,8 @@ export interface Settings {
   minScore: number;
   letter: { template: string; rules: string };
   disclosure: { enabled: boolean; line: string };
-  bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10' };
+  bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10'; profileRate: number }; // profileRate: USD/hr, 0 = unset
+  profileSummary: string; // Rafa's skills, results and tone: used for scoring and the letter opening
   loom: { sourceUrl: string; deleteAfterDays: number };
   caps: {
     daily: number;  // 0 = no limit
@@ -42,7 +44,7 @@ export interface Settings {
   report: { email: string };
 }
 
-export interface RunSummary { at: string; scanned: number; new: number; matched: number; errors: number; note: string | null }
+export interface RunSummary { at: string; scanned: number; new: number; matched: number; queued?: number; errors: number; note: string | null }
 
 export interface State {
   mode: Mode;
@@ -77,14 +79,12 @@ export const DEFAULT_SETTINGS: Settings = {
     template: '',
     rules: [
       "Open with the client's problem, not with \"I\".",
-      'Name one relevant past result. Never invent numbers or clients.',
-      'Answer every screening question directly.',
-      'No email, phone, social handles or outside links except the Loom video.',
-      'End with the Loom line: "I recorded a short video for this: {loom_link}"',
+      'Mention one relevant result from the profile when it fits. Never invent numbers or clients.',
     ].join('\n'),
   },
   disclosure: { enabled: false, line: 'Drafted with AI assistance and reviewed by me.' },
-  bid: { hourly: 'profile', fixed: 'client_budget' },
+  bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0 },
+  profileSummary: '',
   loom: { sourceUrl: '', deleteAfterDays: 30 },
   caps: {
     daily: 0,
@@ -221,7 +221,9 @@ export function validateSettings(input: unknown): Settings {
     bid: {
       hourly: oneOf(i.bid.hourly, ['profile', 'client_max'] as const, 'Hourly bid'),
       fixed: oneOf(i.bid.fixed, ['client_budget', 'budget_plus_10'] as const, 'Fixed-price bid'),
+      profileRate: num(i.bid.profileRate, 0, 1000, "Rafa's hourly rate"),
     },
+    profileSummary: str(i.profileSummary, 3000, 'Profile summary'),
     loom: { sourceUrl: loomUrl, deleteAfterDays: num(i.loom.deleteAfterDays, 7, 365, 'Delete Loom copies after') },
     caps: {
       daily: num(caps.daily, 0, 500, 'Daily cap'),

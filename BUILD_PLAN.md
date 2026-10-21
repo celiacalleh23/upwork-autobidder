@@ -134,7 +134,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - Bounded work per run: at most **3 new jobs fully processed per cron run**; the rest stay for the next run (`jobs.status = 'new'`, add it to the allowed statuses).
 - **Accept:** the dashboard counters ("Jobs scanned today", "matched") move with real data; no duplicates across runs.
 
-### M4 — Claude scoring and letters
+### M4 — Claude scoring and letters — built Oct 21, 2026 (opening-only letters per §11a; preview read for questions and Connects; tested against local stand-ins for Upwork and Claude)
 - `src/claude.ts`: Messages API (`ANTHROPIC_API_KEY`, model from `CLAUDE_MODEL`), JSON-only outputs, timeout, one retry on 529/overloaded.
 - **Score:** input = Rafa's profile summary (new setting) + full job description (`find_jobs get`). Output `{score:0-100, reason:string}`. Below `minScore` → `low_score`.
 - **Letter:** input = template, rules, profile summary, job description, client feedback names if present. Output = the letter with a `{loom_link}` placeholder. Then:

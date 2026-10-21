@@ -4,23 +4,28 @@ import {
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
 import { recheckMatched, runScan } from './pipeline/scan';
+import { contactDetailsIn } from './pipeline/letter';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
-  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at`;
+  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params`;
 
 interface ProposalRow {
   id: number; job_id: string; title: string; url: string | null; job_type: string | null; budget: string | null;
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
   connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
-  is_example: number; created_at: string; submitted_at: string | null;
+  is_example: number; created_at: string; submitted_at: string | null; create_params: string | null;
 }
 
-const shape = (r: ProposalRow) => ({
+const answersOf = (s: string | null): { question: string; answer: string }[] => {
+  try { const v = JSON.parse(s ?? '{}').answers; return Array.isArray(v) ? v.map((x) => ({ question: String(x.question), answer: String(x.answer) })) : []; } catch { return []; }
+};
+const shape = ({ create_params, ...r }: ProposalRow) => ({
   ...r,
+  answers: answersOf(create_params),
   keywords: safeList(r.keywords),
   is_example: r.is_example === 1,
   created_at: toIso(r.created_at),
@@ -50,14 +55,6 @@ export function isActiveNow(start: string, end: string, timeZone: string, now = 
   return start <= end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
-// Contact details are not allowed in Upwork cover letters
-export function contactDetailsIn(text: string): string | null {
-  if (/[^\s@]+@[^\s@]+\.[a-z]{2,}/i.test(text)) return 'an email address';
-  const phoneLike = text.match(/\+?\d[\d\s().-]{8,}\d/g) ?? [];
-  if (phoneLike.some((m) => m.replace(/\D/g, '').length >= 10)) return 'a phone number';
-  if (/(wa\.me|whatsapp|telegram|t\.me\/|skype|calendly\.com|linkedin\.com|instagram\.com|@[A-Za-z0-9_]{3,}\b)/i.test(text)) return 'a social handle or outside contact link';
-  return null;
-}
 
 export async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   const method = req.method;

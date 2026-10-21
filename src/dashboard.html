@@ -224,8 +224,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         <h3 id="pH">What happens to each job</h3>
         <ol>
           <li><b>Find.</b> Upwork is searched for your keywords every few minutes.</li>
-          <li><b>Filter.</b> Budget, rate, verified payment, proposal count, then an AI match score.</li>
-          <li><b>Write.</b> Claude drafts the letter from your template and the job post.</li>
+          <li><b>Filter.</b> Country, budget, rate, proposal count, then an AI match score.</li>
+          <li><b>Write.</b> Claude writes the opening for this job; the rest of your template stays as is.</li>
           <li><b>Loom.</b> Your video is copied and renamed to the job title.</li>
           <li><b>Review.</b> It waits here for you, or goes straight out in Auto-submit.</li>
           <li><b>Send.</b> Approved proposals go out one at a time, spaced apart, in active hours.</li>
@@ -321,9 +321,10 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     </section>
 
     <section class="section" aria-labelledby="s2">
-      <header><h2 id="s2">Cover letter</h2><p>Claude writes each letter from these instructions and the job post. Upwork's limit is 5,000 characters, with no contact details.</p></header>
-      <div class="field"><label for="letterTemplate">Template or two past winning proposals</label><textarea id="letterTemplate" rows="8" placeholder="Paste a proposal that worked, or the structure you want every letter to follow."></textarea></div>
-      <div class="field"><label for="letterRules">Rules</label><textarea id="letterRules" rows="6"></textarea></div>
+      <header><h2 id="s2">Cover letter</h2><p>Each letter is your template, word for word, with Claude's 2–3 sentences for that job at {opening}. Upwork's limit is 5,000 characters, with no contact details.</p></header>
+      <div class="field"><label for="profileSummary">Rafa's profile</label><textarea id="profileSummary" rows="7" maxlength="3000" placeholder="Skills, years of experience, results, the kind of clients and work that fit best."></textarea><span class="hint">Claude uses this to score each job and to write the opening. Only facts that are true: the letter never claims more than this says.</span></div>
+      <div class="field"><label for="letterTemplate">Letter template</label><textarea id="letterTemplate" rows="12" placeholder="Hi there,&#10;&#10;{opening}&#10;&#10;I recorded a quick Loom for you…: {loom_link}&#10;…"></textarea><span class="hint">Write <b>{opening}</b> where Claude's 2–3 tailored sentences go and <b>{loom_link}</b> where the video link goes. Everything else is sent exactly as written.</span></div>
+      <div class="field"><label for="letterRules">Extra rules for the opening (optional)</label><textarea id="letterRules" rows="4"></textarea><span class="hint">Style rules for Claude's sentences only, one per line. No links or contact details are ever allowed.</span></div>
       <label class="check" for="discOn"><input type="checkbox" id="discOn"><span>Add an AI disclosure line to every letter</span></label>
       <div class="field"><label for="discLine">Disclosure line</label><input type="text" id="discLine" maxlength="200"></div>
       <p class="note">Upwork's terms (section 9.7) ask for AI use to be disclosed when a client would reasonably assume a person wrote the text. Leaving this off is your decision and adds account risk.</p>
@@ -334,6 +335,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       <div class="grid">
         <div class="field"><label for="bidHourly">Hourly jobs</label><select id="bidHourly"><option value="profile">Profile rate</option><option value="client_max">Top of the client's range</option></select></div>
         <div class="field"><label for="bidFixed">Fixed-price jobs</label><select id="bidFixed"><option value="client_budget">Client's budget</option><option value="budget_plus_10">Budget + 10%</option></select></div>
+        <div class="field"><label for="profileRate">Rafa's hourly rate (USD)</label><input type="number" id="profileRate" min="0" step="1"><span class="hint">Used when an hourly job lists no rate (or with "Profile rate"). 0 = not set.</span></div>
       </div>
     </section>
 
@@ -473,8 +475,10 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('statusDot').style.background = color;
     $('lastScan').textContent = ago(s.lastScanAt);
     const lr = s.lastRun;
-    $('lastRunNote').textContent = lr && lr.errors ? `Last scan problem: ${lr.note || 'see the Worker logs'}` : '';
-    $('lastRunNote').hidden = !(lr && lr.errors);
+    // Problems in red; waiting notes (e.g. a missing secret) in plain text.
+    $('lastRunNote').textContent = lr && lr.errors ? `Last run problem: ${lr.note || 'see the Worker logs'}` : (lr && lr.note) || '';
+    $('lastRunNote').className = 'msg' + (lr && lr.errors ? ' bad' : '');
+    $('lastRunNote').hidden = !(lr && (lr.errors || lr.note));
     $('scanEvery').textContent = s.scanEveryMinutes;
     $('activeHours').textContent = `${s.activeHours.start}–${s.activeHours.end} (${tzName(s.activeHours.timezone)})`;
 
@@ -558,10 +562,13 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
           p.bid !== null ? h('span', { class: 'chip', text: `Bid $${p.bid}${p.job_type === 'hourly' ? '/hr' : ''}` }) : null)),
       p.keywords.length ? h('div', { class: 'chips' }, p.keywords.map((k) => h('span', { class: 'kw', text: k }))) : null,
       letterBox, editWrap,
+      p.answers && p.answers.length ? h('details', { class: 'small' }, h('summary', { text: `Screening answers (${p.answers.length})` }),
+        ...p.answers.map((a) => h('p', { style: 'margin:8px 0 0' }, h('b', { text: a.question }), h('br'), a.answer))) : null,
+      p.error ? h('p', { class: 'small muted', style: 'margin:0', text: p.error }) : null,
       h('div', { class: 'card-foot' },
         h('div', { class: 'loom' },
           h('span', { 'aria-hidden': 'true', text: '▶' }),
-          p.loom_url ? h('span', {}, 'Loom: ', h('a', { href: p.loom_url, target: '_blank', rel: 'noopener noreferrer', text: `“${p.title}”` })) : h('span', { text: 'Loom copy is created when it is sent' })),
+          p.loom_url ? h('span', {}, 'Loom: ', h('a', { href: p.loom_url, target: '_blank', rel: 'noopener noreferrer', text: 'open video' })) : h('span', { text: 'No Loom link (set the source video in Settings)' })),
         h('div', { class: 'actions' }, skipBtn, editBtn, approveBtn)));
 
     editBtn.addEventListener('click', async () => {
@@ -695,7 +702,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('maxExistingProposals').value = String(s.maxExistingProposals); $('minScore').value = s.minScore;
     $('letterTemplate').value = s.letter.template; $('letterRules').value = s.letter.rules;
     $('discOn').checked = s.disclosure.enabled; $('discLine').value = s.disclosure.line;
-    $('bidHourly').value = s.bid.hourly; $('bidFixed').value = s.bid.fixed;
+    $('bidHourly').value = s.bid.hourly; $('bidFixed').value = s.bid.fixed; $('profileRate').value = s.bid.profileRate;
+    $('profileSummary').value = s.profileSummary;
     $('loomUrl').value = s.loom.sourceUrl; $('loomDelete').value = s.loom.deleteAfterDays;
     $('scanEvery').value = String(s.scanEveryMinutes);
     $('capDaily').value = s.caps.daily; $('capHourly').value = s.caps.hourly; $('capGap').value = s.caps.gapMinutes;
@@ -715,7 +723,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       verifiedOnly: $('verifiedOnly').checked, maxExistingProposals: Number($('maxExistingProposals').value), minScore: Number($('minScore').value),
       letter: { template: $('letterTemplate').value, rules: $('letterRules').value },
       disclosure: { enabled: $('discOn').checked, line: $('discLine').value },
-      bid: { hourly: $('bidHourly').value, fixed: $('bidFixed').value },
+      bid: { hourly: $('bidHourly').value, fixed: $('bidFixed').value, profileRate: Number($('profileRate').value) },
+      profileSummary: $('profileSummary').value,
       loom: { sourceUrl: $('loomUrl').value.trim(), deleteAfterDays: Number($('loomDelete').value) },
       caps: {
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),

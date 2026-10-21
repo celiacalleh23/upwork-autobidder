@@ -2,7 +2,12 @@
 
 Siv's private dashboard and bidding pipeline, running on Cloudflare Workers + D1.
 
-**Status: M3 — scanner and filters.** The dashboard, login, settings, the Upwork sign-in (Settings → Reports and
+**Status: M4 — scoring and letters.** After each scan, up to 3 matched jobs per run are re-checked on Upwork, scored by
+Claude against Rafa's profile, given a tailored opening inside Siv's fixed template, previewed on Upwork (nothing is
+sent) for screening questions and Connects cost, and queued for review. Needs the `ANTHROPIC_API_KEY` secret, Rafa's
+profile and the template (with `{opening}` and `{loom_link}`) in Settings.
+
+**Before M4: M3 — scanner and filters.** The dashboard, login, settings, the Upwork sign-in (Settings → Reports and
 connections → Connect Upwork) and the job scanner are built. Every 5 minutes the cron searches Upwork for each keyword
 (title search, plus a broad search over descriptions that is then matched literally), filters each new job once and
 lists it under **Jobs found** with the reason. Scoring, letters, Loom copies, sending and the daily report come next.
@@ -63,6 +68,9 @@ npm test                   # vitest: filter rules, budget parsing, SSE, connect 
 | `src/oauth.ts` | Upwork sign-in: discovery, client registration, PKCE, token refresh, account + Connects check |
 | `src/mcp.ts` | Minimal MCP client (Streamable HTTP, JSON or SSE responses) |
 | `src/crypto.ts` | AES-GCM encryption at rest, keyed from `TOKEN_KEY` |
+| `src/pipeline/write.ts` | Writer: re-check on Upwork, Claude score, opening, preview, screening answers, queue |
+| `src/pipeline/letter.ts` | Pure: letter assembly from the template, opening/answer/letter checks, bid rules, contact-detail check |
+| `src/claude.ts` | Claude calls (Anthropic SDK, JSON-schema outputs); job text only inside a `<job_post>` data block |
 | `src/pipeline/scan.ts` | Cron scan: searches per keyword, records each new job once with its verdict, run summary |
 | `src/pipeline/filters.ts` | Pure filter rules: keyword match, exclusions, countries, budget/rate, verification, proposals |
 | `src/kv.ts` | Raw kv helpers and the run lease |
