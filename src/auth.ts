@@ -17,7 +17,7 @@ const b64url = (buf: ArrayBuffer | Uint8Array) =>
 // Sessions are signed with a key derived from the password, so changing DASH_PASSWORD signs everyone out.
 async function sign(env: Env, payload: string): Promise<string> {
   const key = await crypto.subtle.importKey(
-    'raw', enc.encode(`${env.TOKEN_KEY ?? ''}|${env.DASH_USER}|${env.DASH_PASSWORD}`),
+    'raw', enc.encode(`${env.TOKEN_KEY ?? ''}|${env.DASH_PASSWORD}`),
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
   return b64url(await crypto.subtle.sign('HMAC', key, enc.encode(payload)));
@@ -32,7 +32,7 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-export const loginConfigured = (env: Env) => Boolean(env.DASH_USER?.trim() && env.DASH_PASSWORD);
+export const loginConfigured = (env: Env) => Boolean(env.DASH_PASSWORD);
 
 export async function hasSession(req: Request, env: Env): Promise<boolean> {
   if (!loginConfigured(env)) return false;
@@ -43,14 +43,9 @@ export async function hasSession(req: Request, env: Env): Promise<boolean> {
   return timingSafeEqual(sig, await sign(env, exp));
 }
 
-export type LoginCheck = 'ok' | 'user' | 'password';
-
-// User name: case and surrounding spaces ignored. Password: exact, except stray spaces around the stored secret.
-export function checkCredentials(env: Env, user: string, password: string): LoginCheck {
-  const userOk = timingSafeEqual(user.trim().toLowerCase(), (env.DASH_USER ?? '').trim().toLowerCase());
-  const passOk = timingSafeEqual(password, env.DASH_PASSWORD ?? '') || timingSafeEqual(password, (env.DASH_PASSWORD ?? '').trim());
-  if (!userOk) return 'user';
-  return passOk ? 'ok' : 'password';
+// Password only: exact, except stray spaces around the stored secret.
+export function checkPassword(env: Env, password: string): boolean {
+  return timingSafeEqual(password, env.DASH_PASSWORD ?? '') || timingSafeEqual(password, (env.DASH_PASSWORD ?? '').trim());
 }
 
 export async function sessionCookie(env: Env, secure: boolean): Promise<string> {
@@ -63,7 +58,7 @@ export const clearCookie = (secure: boolean) =>
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
-export function loginPage(message = '', user = ''): string {
+export function loginPage(message = ''): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in · Upwork Auto-Bidder</title>
@@ -83,8 +78,7 @@ button{font:inherit;font-weight:600;background:var(--accent);color:var(--accent-
 <form method="post" action="/login">
   <div><h1>Upwork Auto-Bidder</h1><p>Sign in to the dashboard.</p></div>
   ${message ? `<div class="err" role="alert">${esc(message)}</div>` : ''}
-  <label for="user">User name<input id="user" name="user" autocomplete="username" autocapitalize="off" spellcheck="false" required value="${esc(user)}"></label>
-  <label for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+  <label for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required autofocus></label>
   <button type="submit">Sign in</button>
 </form>
 </body></html>`;

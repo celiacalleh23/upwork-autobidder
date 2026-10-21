@@ -23,7 +23,7 @@ CLAUDE_MODEL = "claude-sonnet-5-5"
 UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
 
 # Secrets (set with `wrangler secret put NAME`, or in .dev.vars for local dev):
-#   DASH_USER, DASH_PASSWORD   dashboard login
+#   DASH_PASSWORD              dashboard login (password only)
 #   TOKEN_KEY                  32+ random chars, encrypts stored Upwork/Loom sessions
 #   ANTHROPIC_API_KEY          cover letters + match scoring
 #   RESEND_API_KEY             daily report email

@@ -26,12 +26,11 @@ auto-pause after 3 errors in a row.
 ```bash
 npm install
 npx wrangler d1 create autobidder          # copy the database_id into wrangler.toml
-npx wrangler secret put DASH_USER
 npx wrangler secret put DASH_PASSWORD
 npm run deploy
 ```
 
-Open the Worker URL and sign in on the login page with `DASH_USER` / `DASH_PASSWORD` (user name is not case-sensitive). Sessions last 30 days; changing `DASH_PASSWORD` signs everyone out. Failed sign-ins are logged (lengths only, never values) in the Worker logs.
+Open the Worker URL and sign in on the login page with `DASH_PASSWORD` (password only, no user name). Sessions last 30 days; changing `DASH_PASSWORD` signs everyone out. Failed sign-ins are logged (lengths only, never values) in the Worker logs.
 The tables are created automatically on the first request (`schema.sql`, all `IF NOT EXISTS`).
 
 ### Deploying from GitHub (Workers Builds)
@@ -43,7 +42,7 @@ Every push to `main` deploys.
 ## Local development
 
 ```bash
-printf 'DASH_USER=siv\nDASH_PASSWORD=change-me\n' > .dev.vars
+printf 'DASH_PASSWORD=change-me\n' > .dev.vars
 npm run db:init:local
 npm run db:demo:local      # optional: example proposals, removable from the dashboard
 npm run dev                # http://localhost:8787

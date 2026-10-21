@@ -1,7 +1,7 @@
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
 import { handleApi } from './api';
-import { checkCredentials, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie } from './auth';
+import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie } from './auth';
 import type { Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -43,21 +43,18 @@ function ensureSchema(env: Env): Promise<void> {
 
 async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Response> {
   if (!loginConfigured(env)) {
-    return html(loginPage('Login is not set up yet. Add the DASH_USER and DASH_PASSWORD secrets in Cloudflare.'), 503);
+    return html(loginPage('Login is not set up yet. Add the DASH_PASSWORD secret in Cloudflare.'), 503);
   }
   if (req.method === 'GET') return html(loginPage());
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
   const form = await req.formData().catch(() => null);
-  const user = String(form?.get('user') ?? '');
   const password = String(form?.get('password') ?? '');
-  const result = checkCredentials(env, user, password);
-  if (result !== 'ok') {
+  if (!checkPassword(env, password)) {
     // Lengths only, never the values: enough to spot a stray character when reading the Worker logs.
-    console.log('login failed', { reason: result, typedUserLength: user.length, typedPasswordLength: password.length, expectedPasswordLength: (env.DASH_PASSWORD ?? '').length });
+    console.log('login failed', { typedPasswordLength: password.length, expectedPasswordLength: (env.DASH_PASSWORD ?? '').length });
     await new Promise((r) => setTimeout(r, 600));
-    const msg = result === 'user' ? "That user name doesn't match." : "That password doesn't match.";
-    return html(loginPage(msg, user), 401);
+    return html(loginPage("That password doesn't match."), 401);
   }
   return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': await sessionCookie(env, secure) } });
 }
