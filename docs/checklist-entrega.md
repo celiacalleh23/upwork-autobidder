@@ -6,7 +6,7 @@ Si un punto falla, se anota abajo, en "Notas", con la fecha.
 ## 1. Loom (M5)
 
 - [ ] **Settings → Loom video** dice **Connected**, con la fecha **"session valid until …"**.
-- [ ] **Renovación automática:** al día siguiente de conectar, la fecha "valid until" es **posterior** a la que se escribió
+- [ ] **Renovación automática:** al día siguiente de conectar (se conectó el 22/10 con vencimiento 21/11/2026), la fecha "valid until" es **posterior** a la que se escribió
       al conectar. Si no cambió, Loom no renueva la sesión sola y hay que reconectar a mano antes de cada vencimiento.
       En ese caso se le explica a Siv (ver SOP) y se depende del aviso por email.
 - [ ] **Aviso de vencimiento:** con el email configurado (punto 3), llega el aviso **7 días antes** del vencimiento. Para
