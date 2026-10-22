@@ -137,3 +137,11 @@ describe('reopenable', () => {
     expect(recheckStored(job, siv)).toBeNull();
   });
 });
+
+describe('alpha-3 country codes', () => {
+  it('matches UK and Canada clients when Upwork sends GBR / CAN / USA', () => {
+    for (const c of ['GBR', 'CAN', 'USA']) expect(evaluateJob(job({ client: { country: c } }), siv, new Set()).status).toBe('matched');
+    expect(evaluateJob(job({ client: { country: 'BEL' } }), siv, new Set())).toMatchObject({ reason: 'Client country: BEL' });
+    expect(normalizeCountry('NLD')).toBe('netherlands');
+  });
+});

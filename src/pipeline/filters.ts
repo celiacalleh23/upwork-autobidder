@@ -50,6 +50,14 @@ export function tierLowerBound(tier: string | undefined): number | null {
 const COUNTRY_ALIASES: Record<string, string> = {
   usa: 'united states', us: 'united states', 'u.s.': 'united states', 'u.s.a.': 'united states', 'united states of america': 'united states', america: 'united states',
   uk: 'united kingdom', 'u.k.': 'united kingdom', 'great britain': 'united kingdom', britain: 'united kingdom', england: 'united kingdom', scotland: 'united kingdom', wales: 'united kingdom', 'northern ireland': 'united kingdom',
+  // Upwork sometimes sends ISO 3166 alpha-3 codes instead of names (seen Oct 22: USA, BEL, NLD, IMN).
+  gbr: 'united kingdom', can: 'canada', aus: 'australia', nzl: 'new zealand', irl: 'ireland', deu: 'germany', fra: 'france',
+  nld: 'netherlands', bel: 'belgium', che: 'switzerland', aut: 'austria', esp: 'spain', prt: 'portugal', ita: 'italy',
+  swe: 'sweden', nor: 'norway', dnk: 'denmark', fin: 'finland', pol: 'poland', isr: 'israel', are: 'united arab emirates',
+  sau: 'saudi arabia', ind: 'india', pak: 'pakistan', bgd: 'bangladesh', phl: 'philippines', sgp: 'singapore', hkg: 'hong kong',
+  jpn: 'japan', kor: 'south korea', chn: 'china', mex: 'mexico', bra: 'brazil', arg: 'argentina', col: 'colombia', chl: 'chile',
+  per: 'peru', ecu: 'ecuador', zaf: 'south africa', nga: 'nigeria', egy: 'egypt', tur: 'turkey', rus: 'russia', ukr: 'ukraine',
+  imn: 'isle of man', jey: 'jersey', ggy: 'guernsey', lux: 'luxembourg', mlt: 'malta', cyp: 'cyprus', grc: 'greece', cze: 'czechia',
 };
 export function normalizeCountry(s: string | undefined): string {
   const k = (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
