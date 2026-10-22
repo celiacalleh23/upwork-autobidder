@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cookieFrom, copyName, deleteVideos, duplicate, LoomAuthError, LoomError, readDuplicate, renewedCookie, videoIdFrom, type Session } from '../src/loom';
+import { cookieFrom, copyName, deleteVideos, duplicate, expiryHint, loomAlert, LoomAuthError, LoomError, readDuplicate, renewedCookie, videoIdFrom, type Session } from '../src/loom';
 
 // Shapes captured from loom.com on Oct 22 (docs/loom-api.md).
 const SOURCE = 'eea7d413d42f4c1ebb726c188f54ea74';
@@ -105,5 +105,38 @@ describe('session renewal', () => {
     const s = sess();
     await deleteVideos(s, [COPY]);
     expect(s).toEqual({ cookie: 'connect.sid=x', expiresAt: null });
+  });
+});
+
+describe('expiry alerts', () => {
+  const now = Date.parse('2026-11-15T12:00:00Z');
+  const on = { connected: true, lastError: null, checkedAt: '2026-10-22T18:00:00Z', expiresAt: '2026-11-21T18:00:00.000Z' };
+  it('takes the Expires date typed from DevTools only when it is plausible', () => {
+    expect(expiryHint('2026-11-21', Date.parse('2026-10-22T18:00:00Z'))).toBe('2026-11-21T00:00:00.000Z');
+    expect(expiryHint('2025-01-01', now)).toBeNull();
+    expect(expiryHint('21/11/2026', now)).toBeNull();
+    expect(expiryHint('', now)).toBeNull();
+  });
+  it('warns once, a week before the session expires', () => {
+    const a = loomAlert(on, null, now);
+    expect(a?.subject).toBe('Loom connection expires in 7 days');
+    expect(a?.text).toContain('connect.sid');
+    expect(loomAlert(on, a!.key, now)).toBeNull();
+    expect(loomAlert(on, null, Date.parse('2026-11-10T12:00:00Z'))).toBeNull(); // 11 days left
+    expect(loomAlert({ ...on, expiresAt: null }, null, now)).toBeNull();
+  });
+  it('warns again after a renewal moves the date, and says when it has expired', () => {
+    const first = loomAlert(on, null, now)!;
+    const renewed = { ...on, expiresAt: '2026-12-21T18:00:00.000Z' };
+    expect(loomAlert(renewed, first.key, now)).toBeNull();
+    expect(loomAlert(renewed, first.key, Date.parse('2026-12-20T12:00:00Z'))?.subject).toBe('Loom connection expires in 2 days');
+    expect(loomAlert(on, null, Date.parse('2026-11-22T00:00:00Z'))?.subject).toBe('Loom connection has expired');
+  });
+  it('emails once when Loom stops accepting the session, not after a manual disconnect', () => {
+    const lost = { connected: false, lastError: 'Loom did not accept the session (UserNotAuthorizedError).', checkedAt: on.checkedAt, expiresAt: on.expiresAt };
+    const a = loomAlert(lost, null, now);
+    expect(a?.subject).toBe('Loom disconnected: proposals use the source video');
+    expect(loomAlert(lost, a!.key, now)).toBeNull();
+    expect(loomAlert({ connected: false, lastError: null, checkedAt: null, expiresAt: null }, null, now)).toBeNull();
   });
 });

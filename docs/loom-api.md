@@ -50,6 +50,11 @@ Response: `{"data":{"bulkDeleteVideos":{"success":true,"__typename":"BulkDeleteV
   (still encrypted) and Settings shows "valid until <date>".
 - On days without proposals, the cron makes and deletes one "Session check" copy once every 24 hours, so the
   session keeps being used.
-- Not yet verified: whether Loom renews the cookie from these requests. If Settings never shows a "valid until" date
-  after a day of use, Loom does not renew it this way, and the session has to be pasted again before it expires. The
-  M7 email alert covers that case.
+- When connecting, the Expires date of `connect.sid` (from DevTools) can be typed next to the value. It is used until
+  Loom sends its own date.
+- Alerts (`checkLoomAlert`, every cron run): an email to the report address 7 days before the session expires, and one
+  when Loom stops accepting it. Each is sent once; a renewal or a reconnect resets it. Without email the dashboard
+  shows the same warning in red.
+- Not yet verified: whether Loom renews the cookie from these requests. If the "valid until" date does not move after
+  a day of use, Loom does not renew it this way, and the session has to be pasted again before it expires (the
+  alert warns a week ahead). See `docs/checklist-entrega.md`.

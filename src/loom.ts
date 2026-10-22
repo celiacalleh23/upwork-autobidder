@@ -1,6 +1,7 @@
 import { seal, unseal } from './crypto';
+import { emailConfigured, sendEmail } from './email';
 import { delKv, getKv, putKv } from './kv';
-import { loadState, patchState, type Env, type State } from './settings';
+import { loadSettings, loadState, patchState, type Env, type State } from './settings';
 
 // Loom copies (M5). Loom has no public API: these are the requests loom.com itself sends, captured by Celia on Oct 22
 // (docs/loom-api.md). The session is the browser cookie pasted in Settings → Loom; it is stored encrypted and never logged.
@@ -176,13 +177,20 @@ async function withSession<T>(env: Env, fn: (sess: Session) => Promise<T>): Prom
   }
 }
 
+// The Expires date typed from DevTools (YYYY-MM-DD), used until Loom sends its own. Must be in the next two years.
+export function expiryHint(v: unknown, now = Date.now()): string | null {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v.trim())) return null;
+  const at = Date.parse(`${v.trim()}T00:00:00Z`);
+  return Number.isFinite(at) && at > now && at < now + 2 * 365 * 86_400_000 ? new Date(at).toISOString() : null;
+}
+
 // Proves the session can copy the source video: makes one copy and deletes it straight away.
-export async function connectLoom(env: Env, pasted: string, sourceUrl: string): Promise<State> {
+export async function connectLoom(env: Env, pasted: string, sourceUrl: string, expires: unknown = null): Promise<State> {
   const cookie = cookieFrom(pasted);
   if (!cookie) throw new LoomError('Paste the connect.sid value from loom.com (one line).');
   const source = videoIdFrom(sourceUrl);
   if (!source) throw new LoomError('Save the source video link in Settings → Loom first.');
-  const sess: Session = { cookie, expiresAt: null };
+  const sess: Session = { cookie, expiresAt: expiryHint(expires) };
   const copy = await duplicate(sess, source, 'Connection test (Upwork Auto-Bidder) - safe to delete');
   await deleteVideos(sess, [copy.id]).catch((e) => console.error('loom: test copy not deleted', e instanceof Error ? e.message : e));
   await saveSession(env, sess);
@@ -253,4 +261,53 @@ export async function keepLoomAlive(env: Env, sourceUrl: string, now = Date.now(
     await deleteVideos(sess, [copy.id]);
   });
   return true;
+}
+
+// ---------- Alerts: the session expires within a week, or Loom stopped accepting it ----------
+
+const WARN_BEFORE_MS = 7 * 86_400_000;
+
+export type LoomAlert = { key: string; subject: string; text: string };
+export function loomAlert(loom: State['loom'], sentFor: string | null, now = Date.now()): LoomAlert | null {
+  const steps = 'To reconnect (2 minutes): open loom.com signed in to the Loom account, press F12 → Application → Cookies → https://www.loom.com, '
+    + 'copy the Value of connect.sid, then on the dashboard go to Settings → Loom video → Reconnect and paste it.';
+  if (loom.connected && loom.expiresAt) {
+    const left = Date.parse(loom.expiresAt) - now;
+    const key = `expiring:${loom.expiresAt}`;
+    if (left < WARN_BEFORE_MS && sentFor !== key) {
+      const days = Math.max(0, Math.ceil(left / 86_400_000));
+      const when = new Date(loom.expiresAt).toUTCString().slice(0, 16);
+      return {
+        key,
+        subject: days ? `Loom connection expires in ${days} day${days === 1 ? '' : 's'}` : 'Loom connection has expired',
+        text: `The Loom session used for the per-job video copies ${days ? 'expires on' : 'expired on'} ${when}.\n\n${steps}\n\n`
+          + 'Until then nothing stops: proposals keep going out with the source video instead of their own copy.\n\nUpwork Auto-Bidder',
+      };
+    }
+  }
+  if (!loom.connected && loom.checkedAt && loom.lastError) {
+    const key = `disconnected:${loom.checkedAt}`;
+    if (sentFor !== key) {
+      return {
+        key,
+        subject: 'Loom disconnected: proposals use the source video',
+        text: `Loom stopped accepting the saved session (${loom.lastError}).\n\n${steps}\n\n`
+          + 'Meanwhile proposals keep going out with the source video instead of their own copy.\n\nUpwork Auto-Bidder',
+      };
+    }
+  }
+  return null;
+}
+
+// Emails the report address once per alert; without email the dashboard shows the same warning.
+export async function checkLoomAlert(env: Env, now = Date.now()): Promise<void> {
+  const st = await loadState(env);
+  const alert = loomAlert(st.loom, st.loomAlertSentFor, now);
+  if (!alert) return;
+  const s = await loadSettings(env);
+  if (emailConfigured(env) && s.report.email) {
+    try { await sendEmail(env, [s.report.email], alert.subject, alert.text); }
+    catch (e) { console.error('loom alert email failed', e instanceof Error ? e.message : e); return; } // retried next run
+  }
+  await patchState(env, { loomAlertSentFor: alert.key });
 }

@@ -74,6 +74,7 @@ export interface State {
   senderNote: string | null;             // what the sender is doing or waiting for, shown on the dashboard
   switchedToReviewReason: string | null; // set when Upwork refused an automatic confirm; cleared when Auto is turned back on
   connectsAlertSentAt: string | null;    // the low-Connects alert went out; cleared once the balance is back above the threshold
+  loomAlertSentFor: string | null;       // the last Loom alert emailed (expiring:<date> or disconnected:<connected at>)
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -135,6 +136,7 @@ export const DEFAULT_STATE: State = {
   senderNote: null,
   switchedToReviewReason: null,
   connectsAlertSentAt: null,
+  loomAlertSentFor: null,
 };
 
 async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {

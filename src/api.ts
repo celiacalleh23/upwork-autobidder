@@ -156,7 +156,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const body = await readJson(req);
       const s = await loadSettings(env);
       try {
-        return json(await connectLoom(env, String(body.session ?? ''), s.loom.sourceUrl));
+        return json(await connectLoom(env, String(body.session ?? ''), s.loom.sourceUrl, body.expires));
       } catch (e) {
         if (e instanceof LoomError || e instanceof MissingKey) return fail(e.message, 400);
         throw e;

@@ -385,10 +385,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <ol class="small" style="margin:8px 0; padding-left:20px">
           <li>Save the source video link above first. It must belong to the Loom account you connect.</li>
           <li>In Chrome, open <b>loom.com</b> signed in to that account. Press <b>F12</b> → <b>Application</b> → <b>Cookies</b> → <code>https://www.loom.com</code>.</li>
-          <li>Click the row <code>connect.sid</code>, copy its <b>Value</b>, paste it here and press Connect. Don't share it anywhere else.</li>
+          <li>Click the row <code>connect.sid</code>, copy its <b>Value</b> and paste it below. Don't share it anywhere else.</li>
+          <li>From the same row, type the date in the <b>Expires / Max-Age</b> column. The tool emails a reminder a week before.</li>
         </ol>
         <p class="small muted" style="margin:0 0 8px">Connecting makes one test copy of the video and deletes it straight away. The value is stored encrypted.</p>
-        <div class="addrow" style="max-width:none"><input id="loomPaste" type="password" autocomplete="off" spellcheck="false" placeholder="connect.sid value" aria-label="Loom connect.sid value"><button type="button" class="btn primary" id="loomFinishBtn">Connect</button></div>
+        <div class="addrow" style="max-width:none"><input id="loomPaste" type="password" autocomplete="off" spellcheck="false" placeholder="connect.sid value" aria-label="Loom connect.sid value"><input id="loomExpires" type="date" aria-label="Expires date of connect.sid" style="max-width:170px"><button type="button" class="btn primary" id="loomFinishBtn">Connect</button></div>
       </div>
     </section>
 
@@ -573,10 +574,14 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Not connected';
     $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
     $('loomStatus').textContent = s.loom.connected
-      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}${s.loom.expiresAt ? ` · session renewed automatically, valid until ${new Date(s.loom.expiresAt).toLocaleDateString()}` : ''}`
+      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}${s.loom.expiresAt ? ` · session valid until ${new Date(s.loom.expiresAt).toLocaleDateString()}` : ' · session end date unknown: reconnect and type the Expires date'}`
       : 'Not connected. Letters use the source video link until Loom is connected.';
-    $('loomError').textContent = s.loom.lastError ? `Last Loom error: ${s.loom.lastError}` : '';
-    $('loomError').hidden = !s.loom.lastError;
+    const loomDays = s.loom.connected && s.loom.expiresAt ? Math.ceil((Date.parse(s.loom.expiresAt) - Date.now()) / 86400000) : null;
+    const loomMsg = loomDays !== null && loomDays <= 7
+      ? (loomDays > 0 ? `The Loom session expires in ${loomDays} day${loomDays === 1 ? '' : 's'}. Press Reconnect and paste a fresh connect.sid.` : 'The Loom session has expired. Press Reconnect and paste a fresh connect.sid.')
+      : (s.loom.lastError ? `Last Loom error: ${s.loom.lastError}` : '');
+    $('loomError').textContent = loomMsg;
+    $('loomError').hidden = !loomMsg;
     $('loomConnect').textContent = s.loom.connected ? 'Reconnect' : 'Connect Loom';
     $('loomConnect').className = 'btn ' + (s.loom.connected ? 'outline' : 'primary');
     $('loomDisconnect').hidden = !s.loom.connected;
@@ -893,7 +898,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     };
   }
   function dirty() { $('saveMsg').textContent = 'Unsaved changes'; $('saveMsg').className = 'msg'; }
-  $('viewSettings').addEventListener('input', (e) => { if (e.target.id !== 'upworkPaste' && e.target.id !== 'loomPaste') dirty(); });
+  $('viewSettings').addEventListener('input', (e) => { if (!['upworkPaste', 'loomPaste', 'loomExpires'].includes(e.target.id)) dirty(); });
   $('viewSettings').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('saveBtn').disabled = true;
@@ -953,11 +958,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     try { await api('/api/upwork/disconnect', { method: 'POST' }); toast('Upwork disconnected.'); } catch (e) { toast(e.message, true); }
     loadState();
   });
-  $('loomConnect').addEventListener('click', () => { $('loomFinish').hidden = false; $('loomPaste').value = ''; $('loomPaste').focus(); });
+  $('loomConnect').addEventListener('click', () => { $('loomFinish').hidden = false; $('loomPaste').value = ''; $('loomExpires').value = ''; $('loomPaste').focus(); });
   $('loomFinishBtn').addEventListener('click', async (ev) => {
     const b = ev.currentTarget; b.disabled = true; b.textContent = 'Testing…';
     try {
-      await api('/api/loom/connect', { method: 'POST', body: { session: $('loomPaste').value } });
+      await api('/api/loom/connect', { method: 'POST', body: { session: $('loomPaste').value, expires: $('loomExpires').value } });
       $('loomFinish').hidden = true; toast('Loom connected. New proposals get their own video copy.');
     } catch (e) { toast(e.message, true); }
     $('loomPaste').value = ''; b.disabled = false; b.textContent = 'Connect'; loadState();
