@@ -2,7 +2,7 @@ import { acquireLease, getKv, putKv, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type RunSummary, type Settings } from '../settings';
-import { evaluateJob, recheckStored, stripUntrusted, type StoredJob, type UpworkJob } from './filters';
+import { containsTerm, evaluateJob, recheckStored, reopenable, stripUntrusted, type StoredJob, type UpworkJob } from './filters';
 
 // Scanner: small, recent result pages per keyword, every new job recorded once with its filter verdict.
 // Jobs that pass are stored as 'matched'; scoring and letters (M4) pick them up from there.
@@ -47,6 +47,16 @@ export async function recheckMatched(env: Env, s: Settings): Promise<number> {
     const reason = recheckStored(j, s);
     return reason ? [env.DB.prepare("UPDATE jobs SET status = 'filtered', reason = ? WHERE id = ? AND status = 'matched'").bind(`${reason} (settings changed)`, j.id)] : [];
   });
+  // And the other way: recent jobs dropped by a filter that no longer applies come back as 'matched'.
+  const { results: dropped } = await env.DB.prepare(
+    "SELECT id, title, job_type, budget, client_country, reason FROM jobs WHERE status = 'filtered' AND seen_at >= datetime('now', '-48 hours') LIMIT 500",
+  ).all<StoredJob & { id: string; reason: string | null }>();
+  for (const j of dropped) {
+    if (!reopenable(j.reason) || recheckStored(j, s)) continue;
+    const inTitle = s.keywords.filter((k) => containsTerm(stripUntrusted(j.title), k));
+    updates.push(env.DB.prepare("UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status = 'filtered'")
+      .bind(`Matched: ${(inTitle.length ? inTitle : s.keywords).join(', ')}`, j.id));
+  }
   if (updates.length) await env.DB.batch(updates);
   return updates.length;
 }

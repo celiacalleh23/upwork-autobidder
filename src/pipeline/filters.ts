@@ -91,6 +91,11 @@ export function connectsOverLimit(cost: number | null, s: Settings): string | nu
   return cost > s.caps.maxConnectsPerJob ? `Costs ${cost} Connects (max ${s.caps.maxConnectsPerJob})` : null;
 }
 
+// Filter reasons that recheckStored can re-evaluate from stored data, so a job dropped by a setting that changed since
+// (a misspelt country, a removed exclusion, a lowered budget) can come back.
+const REOPENABLE = ['Client country:', 'Excluded word:', 'Budget $', 'Rate up to $'];
+export const reopenable = (reason: string | null) => !!reason && REOPENABLE.some((p) => reason.startsWith(p));
+
 export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>): Verdict {
   const title = stripUntrusted(job.title);
   const body = stripUntrusted(job.description || job.description_snippet);

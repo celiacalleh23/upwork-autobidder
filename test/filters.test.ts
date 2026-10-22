@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { connectsOverLimit, containsTerm, evaluateJob, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
+import { connectsOverLimit, containsTerm, evaluateJob, reopenable, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 // Siv's answers (BUILD_PLAN §11a): Klaviyo in title or description, US/CA/UK clients, no other filters.
@@ -119,5 +119,21 @@ describe('connectsOverLimit', () => {
     expect(connectsOverLimit(24, on)).toBe('Costs 24 Connects (max 16)');
     expect(connectsOverLimit(16, on)).toBeNull();
     expect(connectsOverLimit(null, on)).toBeNull();
+  });
+});
+
+describe('reopenable', () => {
+  it('only reopens jobs dropped by filters that can be re-checked from stored data', () => {
+    expect(reopenable('Client country: United Kingdom')).toBe(true);
+    expect(reopenable('Client country: United Kingdom (settings changed)')).toBe(true);
+    expect(reopenable('Excluded word: WordPress')).toBe(true);
+    expect(reopenable('Already applied')).toBe(false);
+    expect(reopenable('No keyword in the title or description')).toBe(false);
+    expect(reopenable(null)).toBe(false);
+  });
+  it('a UK job dropped by the "Unite Kingdom" typo passes once the spelling is fixed', () => {
+    const job = { title: 'Klaviyo flows', job_type: 'hourly', budget: '30.00+/hr', client_country: 'United Kingdom' };
+    expect(recheckStored(job, { ...siv, allowedCountries: ['United States', 'Canada', 'Unite Kingdom'] })).toBe('Client country: United Kingdom');
+    expect(recheckStored(job, siv)).toBeNull();
   });
 });
