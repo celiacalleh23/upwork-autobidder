@@ -42,3 +42,14 @@ Response: `{"data":{"bulkDeleteVideos":{"success":true,"__typename":"BulkDeleteV
   replaces the source link in the letter. If the copy fails, the letter keeps the source video and the card says why.
 - **Cleanup:** every 6 hours, from the 5-minute cron, it deletes copies older than `loom.deleteAfterDays`. It only
   touches ids stored in `proposals.loom_video_id`.
+
+## Keeping the session alive
+
+- The `connect.sid` Celia pasted on Oct 22 expires in Nov 2026 (about a month).
+- Every Loom answer is checked for a `Set-Cookie: connect.sid=…`. When Loom renews it, the stored copy is replaced
+  (still encrypted) and Settings shows "valid until <date>".
+- On days without proposals, the cron makes and deletes one "Session check" copy once every 24 hours, so the
+  session keeps being used.
+- Not yet verified: whether Loom renews the cookie from these requests. If Settings never shows a "valid until" date
+  after a day of use, Loom does not renew it this way, and the session has to be pasted again before it expires. The
+  M7 email alert covers that case.

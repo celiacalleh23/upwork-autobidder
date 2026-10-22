@@ -7,7 +7,7 @@ import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oa
 import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
 import { runSender } from './pipeline/send';
-import { cleanupLoomCopies } from './loom';
+import { cleanupLoomCopies, keepLoomAlive } from './loom';
 import { loadSettings, type Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -151,5 +151,6 @@ export default {
     await runSender(env);
     const s = await loadSettings(env);
     await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch((e) => console.error('loom cleanup failed', e instanceof Error ? e.message : e));
+    await keepLoomAlive(env, s.loom.sourceUrl).catch((e) => console.error('loom keep-alive failed', e instanceof Error ? e.message : e));
   },
 };

@@ -1,7 +1,7 @@
 import { answerQuestions, ClaudeConfigError, ClaudeDeclined, scoreJob, writeOpening, type JobForClaude } from '../claude';
 import { acquireLease, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
-import { copyForJob, deleteVideos, loomCookie, markLoomError } from '../loom';
+import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from './filters';
@@ -129,7 +129,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
       const copy = await copyForJob(env, sourceUrl, stripUntrusted(job.title));
       if (copy) { loomUrl = copy.url; loomId = copy.id; letter = swapLoomLink(letter, copy.url); }
     } catch (e) {
-      await markLoomError(env, e);
+      if (!(e instanceof LoomAuthError)) await markLoomError(env, e); // auth errors are recorded by the Loom module
       note = [note, `Loom copy failed, the letter uses the source video: ${errText(e)}`].filter(Boolean).join(' · ');
     }
   }
@@ -146,10 +146,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
   ]);
   // A proposal for this job already existed: the new copy is not used by anything.
-  if (loomId && !inserted.meta.changes) {
-    const cookie = await loomCookie(env);
-    if (cookie) await deleteVideos(cookie, [loomId]).catch((e) => console.error('loom: unused copy not deleted', loomId, errText(e)));
-  }
+  if (loomId && !inserted.meta.changes) await deleteCopy(env, loomId).catch((e) => console.error('loom: unused copy not deleted', loomId, errText(e)));
   return 'queued';
 }
 

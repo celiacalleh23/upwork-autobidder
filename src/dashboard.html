@@ -573,7 +573,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Not connected';
     $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
     $('loomStatus').textContent = s.loom.connected
-      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}`
+      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}${s.loom.expiresAt ? ` · session renewed automatically, valid until ${new Date(s.loom.expiresAt).toLocaleDateString()}` : ''}`
       : 'Not connected. Letters use the source video link until Loom is connected.';
     $('loomError').textContent = s.loom.lastError ? `Last Loom error: ${s.loom.lastError}` : '';
     $('loomError').hidden = !s.loom.lastError;
