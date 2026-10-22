@@ -5,6 +5,7 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_BASE_URL?: string; // local testing only (a stand-in API); unset in production
   RESEND_API_KEY?: string;
+  REPORT_FROM?: string; // e.g. "Upwork Auto-Bidder <reports@ltv-labs.com>" on a Resend-verified domain
   CLAUDE_MODEL: string;
   UPWORK_MCP_URL: string;
 }
@@ -43,6 +44,8 @@ export interface Settings {
   };
   scanEveryMinutes: number;
   maxNewJobsPerRun: number;   // jobs scored and written per cron run (M4)
+  sendingEnabled: boolean;    // M6 master switch; off until Siv/Celia turn it on in the dashboard, never in code
+  fixedPriceTermsAcknowledged: boolean; // Upwork Dispute Assistance terms, acknowledged by Siv; else fixed-price jobs wait
   connectsAlertBelow: number; // email when the balance drops below this; sending continues. 0 = off
   report: { email: string };
 }
@@ -67,6 +70,10 @@ export interface State {
   loom: { connected: boolean };
   lastRun: RunSummary | null;
   trackRecordSyncedAt: string | null;
+  lastSendAt: string | null;
+  senderNote: string | null;             // what the sender is doing or waiting for, shown on the dashboard
+  switchedToReviewReason: string | null; // set when Upwork refused an automatic confirm; cleared when Auto is turned back on
+  connectsAlertSentAt: string | null;    // the low-Connects alert went out; cleared once the balance is back above the threshold
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -107,6 +114,8 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   scanEveryMinutes: 5,
   maxNewJobsPerRun: 3,
+  sendingEnabled: false,
+  fixedPriceTermsAcknowledged: false,
   connectsAlertBelow: 0,
   report: { email: '' },
 };
@@ -122,6 +131,10 @@ export const DEFAULT_STATE: State = {
   loom: { connected: false },
   lastRun: null,
   trackRecordSyncedAt: null,
+  lastSendAt: null,
+  senderNote: null,
+  switchedToReviewReason: null,
+  connectsAlertSentAt: null,
 };
 
 async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {
@@ -256,6 +269,8 @@ export function validateSettings(input: unknown): Settings {
     },
     scanEveryMinutes: num(i.scanEveryMinutes, 5, 30, 'Scan interval'),
     maxNewJobsPerRun: num(i.maxNewJobsPerRun, 1, 5, 'Jobs per run'),
+    sendingEnabled: bool(i.sendingEnabled),
+    fixedPriceTermsAcknowledged: bool(i.fixedPriceTermsAcknowledged),
     connectsAlertBelow: num(i.connectsAlertBelow, 0, 10000, 'Connects alert'),
     report: { email },
   };

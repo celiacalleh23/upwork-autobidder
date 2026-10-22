@@ -4,6 +4,8 @@ const PROTOCOL_VERSION = '2025-06-18';
 
 export class McpAuthError extends Error {}
 export class McpError extends Error {}
+// The tool ran and answered with an error (isError): Upwork gave a definite answer, unlike a dropped connection or 5xx.
+export class McpToolError extends McpError {}
 
 interface RpcMessage {
   jsonrpc: '2.0';
@@ -91,7 +93,7 @@ export class McpClient {
   async callTool(name: string, args: object): Promise<unknown> {
     const r = (await this.request('tools/call', { name, arguments: args })) as ToolResult;
     const text = (r.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n');
-    if (r.isError) throw new McpError(`Upwork ${name}: ${text.slice(0, 300) || 'error'}`);
+    if (r.isError) throw new McpToolError(`Upwork ${name.replace(/^.*__/, '')}: ${text.slice(0, 300) || 'error'}`);
     if (r.structuredContent !== undefined) return r.structuredContent;
     try { return JSON.parse(text); } catch { return text; }
   }

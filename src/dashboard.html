@@ -187,6 +187,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 </div>
 
 <div class="banner bad" id="pausedBanner" hidden><div class="banner-in"><span id="pausedText">Bidding is paused.</span><button type="button" class="btn" id="resumeInline">Resume bidding</button></div></div>
+<div class="banner warn" id="reviewBanner" hidden><div class="banner-in"><span id="reviewText"></span></div></div>
+<div class="banner warn" id="connectsBanner" hidden><div class="banner-in"><span id="connectsText"></span></div></div>
 <div class="banner info" id="exampleBanner" hidden><div class="banner-in"><span>You're looking at example proposals. Real ones appear here once Upwork is connected.</span><button type="button" class="btn" id="clearExamples">Remove examples</button></div></div>
 
 <main>
@@ -205,6 +207,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       <span>Scans every <strong id="scanEvery">5</strong> min</span>
       <span>Active hours: <strong id="activeHours">–</strong></span>
       <span>Mode: <strong id="modeText">Review first</strong></span>
+      <span>Sending: <strong id="sendState">–</strong></span>
       <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
 
@@ -367,6 +370,13 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div></div><span class="chip warn" id="loomChip">Connect on the setup call</span></div>
     </section>
 
+    <section class="section" aria-labelledby="sSend">
+      <header><h2 id="sSend">Sending</h2><p>When this is on, approved proposals are submitted to Upwork one at a time, highest match first, and spend Rafa's Connects. Off: nothing is sent, proposals only wait in the queue.</p></header>
+      <label class="check" for="sendOn"><input type="checkbox" id="sendOn"><span><b>Send approved proposals to Upwork</b></span></label>
+      <label class="check" for="fixedAck"><input type="checkbox" id="fixedAck"><span>Upwork's <b>Dispute Assistance</b> terms for fixed-price jobs are acknowledged. Upwork shows these terms before every fixed-price proposal; without this box, fixed-price proposals wait here and are never sent automatically.</span></label>
+      <p class="note">Before turning sending on: review proposals for a full day in Review first, and make sure Rafa's account has Connects.</p>
+    </section>
+
     <section class="section" aria-labelledby="s5">
       <header><h2 id="s5">Caps and guardrails</h2><p>0 means no limit. Proposals always go out one at a time, a few minutes apart, and any Upwork warning pauses everything.</p></header>
       <div class="grid">
@@ -487,6 +497,12 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     pb.classList.toggle('resume', s.paused);
     $('pausedBanner').hidden = !s.paused;
     $('pausedText').textContent = s.paused ? `Bidding is paused. ${s.pausedReason || ''} Nothing is scanned or sent until you resume.` : '';
+    $('reviewBanner').hidden = !s.switchedToReviewReason;
+    $('reviewText').textContent = s.switchedToReviewReason ? `Switched back to Review first. ${s.switchedToReviewReason} Approve proposals here; Auto-submit can be turned on again once this is sorted out.` : '';
+    const low = s.connectsAlertSentAt && s.connectsAlertBelow && s.connectsBalance !== null && s.connectsBalance < s.connectsAlertBelow;
+    $('connectsBanner').hidden = !low;
+    $('connectsText').textContent = low ? `Connects are low: ${s.connectsBalance} left (alert below ${s.connectsAlertBelow}). Add Connects on Upwork to keep proposals going.` : '';
+    $('sendState').textContent = !s.sendingEnabled ? 'off' : (s.senderNote || 'on');
     $('exampleBanner').hidden = !s.hasExamples;
     $('examplesRow').hidden = !s.hasExamples;
 
@@ -755,6 +771,9 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
   $('ctAdd').addEventListener('click', () => addTag('ctInput', ct, drawCt));
   $('maxConnectsOn').addEventListener('change', (e) => { $('maxConnects').disabled = !e.target.checked; });
+  $('sendOn').addEventListener('change', (e) => {
+    if (e.target.checked && !confirm('Turn sending on? Approved proposals will be submitted to Upwork and spend Rafa\'s Connects. Press Save changes to apply.')) e.target.checked = false;
+  });
   const pair = (a, b) => $(a).addEventListener('input', () => { const v = Number($(a).value); if (v >= 0 && v <= 100) $(b).value = 100 - v; });
   pair('wWins', 'wProfile'); pair('wProfile', 'wWins');
   async function loadTrack() {
@@ -798,6 +817,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('maxConnectsOn').checked = s.caps.maxConnectsEnabled; $('maxConnects').disabled = !s.caps.maxConnectsEnabled;
     $('floorOn').checked = s.caps.connectsFloorEnabled; $('floor').disabled = !s.caps.connectsFloorEnabled;
     $('connectsAlert').value = s.connectsAlertBelow;
+    $('sendOn').checked = s.sendingEnabled; $('fixedAck').checked = s.fixedPriceTermsAcknowledged;
     $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
     $('saveMsg').textContent = ''; $('saveMsg').className = 'msg';
@@ -822,6 +842,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       scanEveryMinutes: Number($('scanEvery').value),
       maxNewJobsPerRun: settings ? settings.maxNewJobsPerRun : 3,
       connectsAlertBelow: Number($('connectsAlert').value),
+      sendingEnabled: $('sendOn').checked,
+      fixedPriceTermsAcknowledged: $('fixedAck').checked,
       report: { email: $('reportEmail').value.trim() },
     };
   }

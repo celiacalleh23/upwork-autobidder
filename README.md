@@ -2,7 +2,13 @@
 
 Siv's private dashboard and bidding pipeline, running on Cloudflare Workers + D1.
 
-**Status: M4 — scoring and letters.** After each scan, up to 3 matched jobs per run are re-checked on Upwork, scored by
+**Status: M6 — sender.** Approved proposals are submitted one at a time, highest score first, at least 5 minutes
+apart, only when **Settings → Sending** is switched on (off by default; never switched on in code). Unclear results
+are marked `unknown`, checked on Upwork and never resent; a rate limit or a request for human confirmation pauses
+everything. Below the Connects alert level the dashboard shows a warning (and emails the report address once
+`RESEND_API_KEY` is set).
+
+**Before M6: M4 — scoring and letters.** After each scan, up to 3 matched jobs per run are re-checked on Upwork, scored by
 Claude against Rafa's profile, given a tailored opening inside Siv's fixed template, previewed on Upwork (nothing is
 sent) for screening questions and Connects cost, and queued for review. Needs the `ANTHROPIC_API_KEY` secret, Rafa's
 profile and the template (with `{opening}` and `{loom_link}`) in Settings.
@@ -70,6 +76,10 @@ npm test                   # vitest: filter rules, budget parsing, SSE, connect 
 | `src/crypto.ts` | AES-GCM encryption at rest, keyed from `TOKEN_KEY` |
 | `src/pipeline/stats.ts` | On-demand account funnel from Upwork (read-only, capped pages) |
 | `src/pipeline/profile.ts` | Rafa's track record from Upwork (every other day), profile text for Claude, weighted score |
+| `src/pipeline/send.ts` | Sender: gates, live job and Connects check, preview + confirm, outcome handling, unknown verification |
+| `src/pipeline/sendRules.ts` | Pure: send gate, Connects gate, error classification, confirm result, low-Connects alert |
+| `src/pipeline/preview.ts` | Shared Upwork preview (manage_proposals create) for the writer and the sender |
+| `src/email.ts` | Resend email (low-Connects alert now, daily report in M7) |
 | `src/pipeline/write.ts` | Writer: re-check on Upwork, Claude score, opening, preview, screening answers, queue |
 | `src/pipeline/letter.ts` | Pure: letter assembly from the template, opening/answer/letter checks, bid rules, contact-detail check |
 | `src/claude.ts` | Claude calls (Anthropic SDK, JSON-schema outputs); job text only inside a `<job_post>` data block |

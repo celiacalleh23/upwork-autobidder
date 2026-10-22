@@ -160,7 +160,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - Cleanup in the 23:00 cron: delete copies older than `deleteAfterDays`, but **only ids the tool created** (from `proposals.loom_video_id`).
 - **Accept:** a queued proposal has its own loom.com link titled with the job; the dashboard flags Loom errors.
 
-### M6 — Sender (the only code that spends Connects)
+### M6 — Sender (the only code that spends Connects) — built Oct 23, 2026; ships with Settings → Sending **off**; tested against a local Upwork stand-in (no real confirm)
 - `src/pipeline/send.ts`, run in each cron after the scan. Lease lock in `kv` so two runs never send at once.
 - Picks **one** `approved` proposal per run (highest score first), only if all of these pass; otherwise it waits and logs why on the dashboard:
   - not paused, and inside active hours (Settings timezone)
@@ -176,7 +176,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - **Success:** `submitted`, `submitted_at`, `upwork_proposal_id`, `connects`, refresh the balance, `consecutiveErrors = 0`.
 - **Clear refusal** (already applied, job closed, invalid params): `failed` with the Upwork message.
 - **Ambiguous** (timeout, 5xx, network): `unknown`; never resend; verify next run with `list_freelancer_proposals`.
-- **Needs user confirmation** (permission refused): set `mode = 'review'`, put the proposal back to `approved`, flag the dashboard and email Siv.
+- **Needs user confirmation** (permission refused): set `mode = 'review'`, put the proposal back to `approved`, flag the dashboard and email Siv. Also **pause** (built Oct 23): retrying would hit the same refusal every 5 minutes.
 - **Rate limit / account warning / 429:** pause with the reason.
 - **Errors:** `consecutiveErrors++`; at `stopAfterErrors`, pause with the reason.
 - **Auto mode:** new proposals go straight to `approved`; the same sender and caps apply.

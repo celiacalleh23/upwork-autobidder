@@ -26,4 +26,5 @@ UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
 #   DASH_PASSWORD              dashboard login (password only)
 #   TOKEN_KEY                  32+ random chars, encrypts stored Upwork/Loom sessions
 #   ANTHROPIC_API_KEY          cover letters + match scoring
-#   RESEND_API_KEY             daily report email
+#   RESEND_API_KEY             daily report email and the low-Connects alert
+#   REPORT_FROM                sender address on a Resend-verified domain (optional until the domain is verified)

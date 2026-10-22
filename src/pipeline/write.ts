@@ -5,6 +5,7 @@ import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { connectsOverLimit, stripUntrusted } from './filters';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, type Answer } from './letter';
+import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
 import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
 
 // What Claude knows about Rafa for this run (built once per run from his Upwork track record, the letter and Siv's notes).
@@ -21,7 +22,7 @@ export interface WriteSummary { queued: number; lowScore: number; filtered: numb
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
 
-async function invitedJobIds(client: McpClient, state: State): Promise<Set<string>> {
+export async function invitedJobIds(client: McpClient, state: State): Promise<Set<string>> {
   const ids = new Set<string>();
   const tool = state.upwork.toolNames.list_freelancer_proposals;
   if (!tool || !state.upwork.orgUid) return ids;
@@ -35,42 +36,13 @@ async function invitedJobIds(client: McpClient, state: State): Promise<Set<strin
 }
 
 interface Details { description: string; connectsCost: number | null; canApply: boolean | null; applied: boolean }
-async function jobDetails(client: McpClient, state: State, id: string): Promise<Details> {
+export async function jobDetails(client: McpClient, state: State, id: string): Promise<Details> {
   const r = await client.callTool(state.upwork.toolNames.find_jobs, { action: 'get', org_uid: state.upwork.orgUid, params: { id } }) as Record<string, unknown>;
   const posting = findKey(r, 'marketplaceJobPosting') as { content?: { description?: string } } | undefined;
   const description = stripUntrusted(posting?.content?.description ?? (findKey(r, 'description') as string | undefined) ?? '');
   const cost = Number(findKey(r, 'connects_cost'));
   const can = findKey(r, 'can_apply');
   return { description, connectsCost: Number.isFinite(cost) ? cost : null, canApply: typeof can === 'boolean' ? can : null, applied: findKey(r, 'applied') === true };
-}
-
-interface Preview { connectsCost: number | null; questions: string[]; extra: Record<string, string> }
-// A preview has no side effects (BUILD_PLAN §4). The first call may ask for more fields; retry once with the defaults.
-async function preview(client: McpClient, state: State, jobId: string, letter: string, bid: number, fixed: boolean): Promise<Preview> {
-  const tool = state.upwork.toolNames.manage_proposals;
-  if (!tool) throw new McpError('Upwork proposal tool is missing. Press Check now under Settings → Upwork.');
-  const extra: Record<string, string> = fixed ? { payment_mode: 'by_project', estimated_duration: 'less_than_1_month' } : {};
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const call = () => client.callTool(tool, { action: 'create', org_uid: state.upwork.orgUid, params: { job_reference: jobId, cover_letter: letter, charged_amount: bid, ...extra } });
-    let r: unknown;
-    try { r = await call(); } catch (e) {
-      if (attempt === 0 && /application_method|ai.?interview/i.test(errText(e))) { extra.application_method = 'cover_letter'; continue; }
-      if (attempt === 0 && /payment_mode|estimated_duration/i.test(errText(e))) { Object.assign(extra, { payment_mode: 'by_project', estimated_duration: 'less_than_1_month' }); continue; }
-      throw e;
-    }
-    if (!findKey(r, 'preview_id')) {
-      const asText = JSON.stringify(r ?? '');
-      if (attempt === 0 && /application_method|ai.?interview/i.test(asText)) { extra.application_method = 'cover_letter'; continue; }
-      throw new McpError(`Upwork preview returned no preview id: ${asText.slice(0, 200)}`);
-    }
-    const raw = findKey(r, 'screening_questions') ?? findKey(r, 'questions');
-    const questions = (Array.isArray(raw) ? raw : [])
-      .map((q) => (typeof q === 'string' ? q : String((q as Record<string, unknown>)?.question ?? (q as Record<string, unknown>)?.text ?? '')))
-      .map((q) => stripUntrusted(q)).filter(Boolean);
-    const cost = Number(findKey(r, 'connects_cost'));
-    return { connectsCost: Number.isFinite(cost) ? cost : null, questions, extra };
-  }
-  throw new McpError('Upwork preview kept asking for more details.');
 }
 
 interface Scores { score: number; win: number | null; profile: number }
@@ -121,7 +93,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const fixed = job.job_type === 'fixed';
   let p: Preview | null = null;
   let note: string | null = null;
-  try { p = await preview(client, state, job.id, letter, bid, fixed); } catch (e) { note = `Preview not checked: ${errText(e)}`; }
+  try { p = await createPreview(client, state, { jobId: job.id, letter, bid, fixed }); } catch (e) { note = `Preview not checked: ${errText(e)}`; }
 
   let answers: Answer[] = [];
   if (p?.questions.length) {
@@ -131,10 +103,10 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
   }
 
-  const createParams = { charged_amount: bid, ...(p?.extra ?? (fixed ? { payment_mode: 'by_project', estimated_duration: 'less_than_1_month' } : {})), ...(answers.length ? { answers } : {}) };
+  const createParams = { charged_amount: bid, ...(p?.extra ?? (fixed ? FIXED_DEFAULTS : {})), ...(answers.length ? { answers } : {}) };
   const keywords = (job.reason ?? '').startsWith('Matched: ') ? job.reason!.slice(9).split(', ').filter(Boolean) : [];
-  // Auto mode approves straight away; fixed-price stays in review until Siv acknowledges Upwork's terms (M6).
-  const status = state.mode === 'auto' && !fixed ? 'approved' : 'pending';
+  // Auto mode approves straight away; fixed-price stays in review until Siv acknowledges Upwork's terms (Settings).
+  const status = state.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, connects, score, win_score, profile_score, status, error)

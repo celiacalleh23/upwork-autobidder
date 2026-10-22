@@ -84,7 +84,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (body.confirm !== true) return fail('Confirm the switch to Auto mode');
         const state = await loadState(env);
         if (!state.upwork.connected) return fail('Connect Upwork before turning on Auto mode', 409);
-        return json(await patchState(env, { mode: 'auto' }));
+        return json(await patchState(env, { mode: 'auto', switchedToReviewReason: null }));
       }
       return fail('Mode must be review or auto');
     }
@@ -279,6 +279,8 @@ async function getState(env: Env) {
     lastScanAt: state.lastScanAt,
     scanEveryMinutes: settings.scanEveryMinutes,
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
+    sendingEnabled: settings.sendingEnabled,
+    connectsAlertBelow: settings.connectsAlertBelow,
     activeHours: { start: settings.caps.activeStart, end: settings.caps.activeEnd, timezone: settings.caps.timezone },
     caps: { daily: settings.caps.daily, hourly: settings.caps.hourly, gapMinutes: settings.caps.gapMinutes, connectsFloor: settings.caps.connectsFloorEnabled ? settings.caps.connectsFloor : 0 },
     today: {

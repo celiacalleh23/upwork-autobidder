@@ -6,6 +6,7 @@ import { MissingKey } from './crypto';
 import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
 import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
+import { runSender } from './pipeline/send';
 import type { Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -138,10 +139,12 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
 
-  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → Loom copy → submit (next milestones).
+  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → submit (M6). Loom copies (M5) and reports (M7) next.
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
-    // The writer follows each scan, so its numbers and notes land on that scan's run row.
-    if (event.cron === '*/5 * * * *' && (await runScan(env))) await runWriter(env);
+    if (event.cron !== '*/5 * * * *') return;
+    // The writer follows each scan, so its numbers and notes land on that scan's run row. The sender runs every time.
+    if (await runScan(env)) await runWriter(env);
+    await runSender(env);
   },
 };
