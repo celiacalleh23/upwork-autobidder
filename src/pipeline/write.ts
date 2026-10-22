@@ -73,8 +73,11 @@ async function preview(client: McpClient, state: State, jobId: string, letter: s
   throw new McpError('Upwork preview kept asking for more details.');
 }
 
-async function setJob(env: Env, id: string, status: string, reason: string, score: number | null = null) {
-  await env.DB.prepare('UPDATE jobs SET status = ?, reason = ?, score = COALESCE(?, score) WHERE id = ?').bind(status, reason.slice(0, 400), score, id).run();
+interface Scores { score: number; win: number | null; profile: number }
+async function setJob(env: Env, id: string, status: string, reason: string, sc: Scores | null = null) {
+  await env.DB.prepare(
+    'UPDATE jobs SET status = ?, reason = ?, score = COALESCE(?, score), win_score = COALESCE(?, win_score), profile_score = COALESCE(?, profile_score) WHERE id = ?',
+  ).bind(status, reason.slice(0, 400), sc?.score ?? null, sc?.win ?? null, sc?.profile ?? null, id).run();
 }
 
 type Outcome = 'queued' | 'lowScore' | 'filtered' | 'errors';
@@ -95,12 +98,13 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const score = weightedScore(profileFit, winSimilarity, s);
   const breakdown = winSimilarity === null ? `profile ${profileFit}, no past wins yet` : `past wins ${winSimilarity} · profile ${profileFit}`;
   const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
-  if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, score); return 'lowScore'; }
+  const sc: Scores = { score, win: winSimilarity, profile: profileFit };
+  if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); return 'lowScore'; }
 
   // Rafa's Upwork rate stands in when Settings has none (used for hourly jobs that list no rate).
   const bid = computeBid(job.job_type, job.budget, s.bid.profileRate > 0 || !who.upworkRate ? s : { ...s, bid: { ...s.bid, profileRate: who.upworkRate } });
   if (bid === null) {
-    await setJob(env, job.id, 'error', `No bid amount: the job lists no rate. Set Rafa's hourly rate in Settings → Bids.`, score); return 'errors';
+    await setJob(env, job.id, 'error', `No bid amount: the job lists no rate. Set Rafa's hourly rate in Settings → Bids.`, sc); return 'errors';
   }
 
   const loomUrl = s.loom.sourceUrl || null; // M5 replaces this with the job's own Loom copy
@@ -111,7 +115,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
     problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, loomUrl, disclosure), loomUrl);
   }
-  if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, score); return 'errors'; }
+  if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
   const letter = assembleLetter(s.letter.template, opening, loomUrl, disclosure);
 
   const fixed = job.job_type === 'fixed';
@@ -124,7 +128,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     answers = await answerQuestions(env, who.profile, forClaude, p.questions);
     let bad = checkAnswers(p.questions, answers);
     if (bad) { answers = await answerQuestions(env, who.profile, forClaude, p.questions, bad); bad = checkAnswers(p.questions, answers); }
-    if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, score); return 'errors'; }
+    if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
   }
 
   const createParams = { charged_amount: bid, ...(p?.extra ?? (fixed ? { payment_mode: 'by_project', estimated_duration: 'less_than_1_month' } : {})), ...(answers.length ? { answers } : {}) };
@@ -133,11 +137,11 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const status = state.mode === 'auto' && !fixed ? 'approved' : 'pending';
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, connects, score, status, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, connects, score, win_score, profile_score, status, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
-      JSON.stringify(createParams), loomUrl, p?.connectsCost ?? d.connectsCost, score, status, note),
-    env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ? WHERE id = ?").bind(scoreText, score, job.id),
+      JSON.stringify(createParams), loomUrl, p?.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note),
+    env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
   ]);
   return 'queued';
 }

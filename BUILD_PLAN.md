@@ -189,7 +189,15 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - Send with Resend (`RESEND_API_KEY`, sender on Siv's verified domain or Resend's test domain until then).
 - Allow up to 3 comma-separated report addresses (validate each).
 - Run the Loom cleanup.
-- **Accept:** the report arrives once a day with correct numbers.
+- **Results report** (Celia, Oct 22), on the dashboard and summarised in the daily email:
+  - Daily outcome sync for submitted proposals (read-only, ≤10 per call): viewed by client, conversation opened,
+    offer / hire, declined / archived. Store `viewed_at`, `replied_at`, `outcome`, `outcome_at` on `proposals`.
+  - Funnel for the last 7 / 30 days: sent → viewed → replied → offer/hire, Connects spent, Connects per reply and per hire.
+  - Results by score band (0–39, 40–59, 60–79, 80–100), and separately by `win_score` and `profile_score`
+    (stored since Oct 22) to decide the minimum score and the 90/10 weights with data.
+  - Speed: minutes from `jobs.posted_at` to `submitted_at`, reply rate by band (<15 min, 15–60 min, >1 h).
+  - Show a note that numbers are noise below ~100 sent proposals.
+- **Accept:** the report arrives once a day with correct numbers; the results panel matches Upwork for a sample of proposals.
 
 ### M8 — Hardening and handoff
 - Unit tests (vitest) for the pure functions:

@@ -33,14 +33,26 @@ function withHeaders(res: Response): Response {
 const html = (body: string, status = 200, extra: Record<string, string> = {}) =>
   new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...extra } });
 
+// Columns added after the first deploy: CREATE TABLE IF NOT EXISTS skips existing tables, so add them when missing.
+const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
+  ['jobs', 'win_score', 'INTEGER'], ['jobs', 'profile_score', 'INTEGER'],
+  ['proposals', 'win_score', 'INTEGER'], ['proposals', 'profile_score', 'INTEGER'],
+];
+
 // Creates the tables on first use (every statement is CREATE ... IF NOT EXISTS), so a fresh D1 needs no manual step.
 let schemaReady: Promise<void> | null = null;
 function ensureSchema(env: Env): Promise<void> {
   schemaReady ??= (async () => {
     const statements = schemaSql
-      .split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+      .split('\n').map((l) => l.replace(/--.*$/, '')).join('\n')
       .split(';').map((s) => s.trim()).filter(Boolean);
     await env.DB.batch(statements.map((s) => env.DB.prepare(s)));
+    for (const table of new Set(ADDED_COLUMNS.map(([t]) => t))) {
+      const { results } = await env.DB.prepare(`SELECT name FROM pragma_table_info('${table}')`).all<{ name: string }>();
+      const have = new Set(results.map((r) => r.name));
+      const missing = ADDED_COLUMNS.filter(([t, c]) => t === table && !have.has(c));
+      if (missing.length) await env.DB.batch(missing.map(([t, c, type]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`)));
+    }
   })().catch((e) => { schemaReady = null; throw e; });
   return schemaReady;
 }

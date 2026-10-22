@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   seen_at TEXT NOT NULL DEFAULT (datetime('now')),
   status TEXT NOT NULL,              -- filtered | matched (passed filters, waiting for scoring) | low_score | proposed | error
   reason TEXT,
-  score INTEGER
+  score INTEGER,
+  win_score INTEGER,                 -- sub-score: similarity to jobs Rafa won (0-100, null = no past wins)
+  profile_score INTEGER              -- sub-score: fit with Rafa's profile (0-100)
 );
 CREATE INDEX IF NOT EXISTS jobs_seen ON jobs(seen_at);
 
@@ -38,6 +40,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   loom_video_id TEXT,
   connects INTEGER,
   score INTEGER,
+  win_score INTEGER,                 -- sub-scores behind score, kept for the M7 results report
+  profile_score INTEGER,
   preview_id TEXT,
   preview_expires TEXT,
   status TEXT NOT NULL,              -- pending | submitting | submitted | failed | skipped | unknown
