@@ -4,6 +4,7 @@ import { McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { connectsOverLimit, stripUntrusted } from './filters';
+import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
 import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
@@ -17,7 +18,10 @@ interface Who { profile: string; wins: string }
 
 const LEASE_MS = 10 * 60_000;
 
-interface JobRow { id: string; title: string; url: string | null; job_type: string | null; budget: string | null; client_country: string | null; reason: string | null }
+interface JobRow {
+  id: string; title: string; url: string | null; job_type: string | null; budget: string | null; client_country: string | null;
+  reason: string | null; posted_at: string | null; proposals_tier: string | null;
+}
 export interface WriteSummary { queued: number; lowScore: number; filtered: number; errors: number; note: string | null }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
@@ -66,7 +70,13 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
     description: d.description || '(no description returned)', clientFeedbackNames: [],
   };
-  const { profileFit, winSimilarity, reason: why } = await scoreJob(env, who.profile, who.wins, forClaude);
+  const { profileFit, winSimilarity, reason: why, pros, cons } = await scoreJob(env, who.profile, who.wins, forClaude);
+  const keywords = (job.reason ?? '').startsWith('Matched: ') ? job.reason!.slice(9).split(', ').filter(Boolean) : [];
+  const analysis = JSON.stringify(jobAnalysis({
+    title: job.title, keywords, proposalsTier: job.proposals_tier, postedAt: job.posted_at, jobType: job.job_type,
+    budget: job.budget, connectsCost: d.connectsCost, winScore: winSimilarity, profileScore: profileFit,
+  }, { pros, cons }));
+  await env.DB.prepare('UPDATE jobs SET analysis = ? WHERE id = ?').bind(analysis, job.id).run();
   const score = weightedScore(profileFit, winSimilarity, s);
   const breakdown = winSimilarity === null ? `profile ${profileFit}, no past wins yet` : `past wins ${winSimilarity} · profile ${profileFit}`;
   const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
@@ -104,7 +114,6 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   }
 
   const createParams = { charged_amount: bid, ...(p?.extra ?? (fixed ? FIXED_DEFAULTS : {})), ...(answers.length ? { answers } : {}) };
-  const keywords = (job.reason ?? '').startsWith('Matched: ') ? job.reason!.slice(9).split(', ').filter(Boolean) : [];
   // Auto mode approves straight away; fixed-price stays in review until Siv acknowledges Upwork's terms (Settings).
   const status = state.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   await env.DB.batch([
@@ -132,7 +141,7 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
 
   try {
     const { results: jobs } = await env.DB.prepare(
-      "SELECT id, title, url, job_type, budget, client_country, reason FROM jobs WHERE status = 'matched' ORDER BY posted_at DESC, seen_at DESC LIMIT ?",
+      "SELECT id, title, url, job_type, budget, client_country, reason, posted_at, proposals_tier FROM jobs WHERE status = 'matched' ORDER BY posted_at DESC, seen_at DESC LIMIT ?",
     ).bind(s.maxNewJobsPerRun).all<JobRow>();
     // Every other day, refresh Rafa's track record first; on failure keep the last one.
     let record = await loadTrackRecord(env);

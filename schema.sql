@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   reason TEXT,
   score INTEGER,
   win_score INTEGER,                 -- sub-score: similarity to jobs Rafa won (0-100, null = no past wins)
-  profile_score INTEGER              -- sub-score: fit with Rafa's profile (0-100)
+  profile_score INTEGER,             -- sub-score: fit with Rafa's profile (0-100)
+  proposals_tier TEXT,               -- e.g. "5 to 10", from the search result
+  analysis TEXT                      -- JSON {pros, cons}: why this job is good or bad (dashboard)
 );
 CREATE INDEX IF NOT EXISTS jobs_seen ON jobs(seen_at);
 

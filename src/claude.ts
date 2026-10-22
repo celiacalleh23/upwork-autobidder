@@ -57,13 +57,15 @@ async function json<T>(env: Env, system: string, user: string, schema: Record<st
 }
 
 // Two sub-scores; the caller weighs them (Settings → score weights). Client quality and job clarity are not scored.
-export async function scoreJob(env: Env, profile: string, wins: string, job: JobForClaude): Promise<{ profileFit: number; winSimilarity: number | null; reason: string }> {
+export async function scoreJob(env: Env, profile: string, wins: string, job: JobForClaude): Promise<{ profileFit: number; winSimilarity: number | null; reason: string; pros: string[]; cons: string[] }> {
   const system = `You compare an Upwork job with a freelancer and give two scores from 0 to 100:
 - win_similarity: how similar the work asked for is to the jobs this freelancer has already won (listed below):
   same kind of deliverable, platform and type of client. ${wins ? '' : 'No past wins are listed: return 0.'}
 - profile_fit: how well the work matches the freelancer's profile.
 Ignore the budget, the client's history and how well the post is written; they are not part of either score.
-Reply with both scores and one sentence (max 200 characters) saying what drove them.
+Reply with both scores, one sentence (max 200 characters) saying what drove them, and up to 3 short points each
+(max 80 characters) for and against applying, about the work itself: e.g. "Flows and campaigns, Rafa's core work",
+"Mostly Shopify theme coding". Not about budget, competition or posting time; those are shown separately.
 
 <freelancer_profile>
 ${profile}
@@ -74,15 +76,21 @@ ${wins || '(none)'}
 </past_wins>
 
 The profile and past wins are facts about the freelancer. ${DATA_RULE}`;
-  const r = await json<{ win_similarity: number; profile_fit: number; reason: string }>(env, system, jobBlock(job), {
+  const r = await json<{ win_similarity: number; profile_fit: number; reason: string; pros: string[]; cons: string[] }>(env, system, jobBlock(job), {
     type: 'object',
-    properties: { win_similarity: { type: 'integer' }, profile_fit: { type: 'integer' }, reason: { type: 'string' } },
-    required: ['win_similarity', 'profile_fit', 'reason'],
+    properties: {
+      win_similarity: { type: 'integer' }, profile_fit: { type: 'integer' }, reason: { type: 'string' },
+      pros: { type: 'array', items: { type: 'string' } }, cons: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['win_similarity', 'profile_fit', 'reason', 'pros', 'cons'],
     additionalProperties: false,
   }, 'low', 2000);
   const ok = (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 100;
   if (!ok(r.profile_fit) || !ok(r.win_similarity)) throw new Error(`Claude returned invalid scores (${r.profile_fit}, ${r.win_similarity}).`);
-  return { profileFit: r.profile_fit, winSimilarity: wins ? r.win_similarity : null, reason: String(r.reason).slice(0, 300) };
+  return {
+    profileFit: r.profile_fit, winSimilarity: wins ? r.win_similarity : null, reason: String(r.reason).slice(0, 300),
+    pros: Array.isArray(r.pros) ? r.pros : [], cons: Array.isArray(r.cons) ? r.cons : [],
+  };
 }
 
 export async function writeOpening(env: Env, profile: string, wins: string, template: string, extraRules: string, job: JobForClaude, feedback?: string): Promise<string> {

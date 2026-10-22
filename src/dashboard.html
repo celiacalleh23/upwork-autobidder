@@ -148,6 +148,14 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 .addrow input{flex:1; min-width:0}
 .note{border-radius:8px; padding:12px 14px; font-size:14px; background:var(--warn-bg); color:var(--warn-fg)}
 .note.info{background:var(--info-bg); color:var(--info-fg)}
+.why{display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:6px 18px; background:var(--bg); border:1px solid var(--line-soft); border-radius:10px; padding:10px 14px; font-size:13.5px}
+.why h4{margin:0 0 4px; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted)}
+.why ul{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:3px}
+.why li{display:flex; gap:6px; align-items:baseline}
+.why .ok::before{content:'✓'; color:var(--accent); font-weight:700}
+.why .no::before{content:'!'; color:var(--warn-fg); font-weight:700; width:.6em; text-align:center}
+td details.why-td summary{cursor:pointer; font-size:12.5px; color:var(--accent); margin-top:4px}
+td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 .conn-actions{display:flex; flex-wrap:wrap; align-items:center; gap:8px}
 .conn-actions a.btn{text-decoration:none; display:inline-flex; align-items:center}
 .conn{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--line-soft); padding-top:14px}
@@ -601,6 +609,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
           p.connects !== null ? h('span', { class: 'chip', text: `${p.connects} Connects` }) : null,
           p.bid !== null ? h('span', { class: 'chip', text: `Bid $${p.bid}${p.job_type === 'hourly' ? '/hr' : ''}` }) : null)),
       p.keywords.length ? h('div', { class: 'chips' }, p.keywords.map((k) => h('span', { class: 'kw', text: k }))) : null,
+      whyBox(p.analysis),
       letterBox, editWrap,
       p.answers && p.answers.length ? h('details', { class: 'small' }, h('summary', { text: `Screening answers (${p.answers.length})` }),
         ...p.answers.map((a) => h('p', { style: 'margin:8px 0 0' }, h('b', { text: a.question }), h('br'), a.answer))) : null,
@@ -672,6 +681,14 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('logMore').hidden = !data.hasMore;
   }
 
+  // "Why this job": points for and against (facts from the job and scores, plus Claude's notes on the work).
+  function whyBox(a) {
+    if (!a || (!a.pros.length && !a.cons.length)) return null;
+    const col = (title, items, cls) => h('div', {}, h('h4', { text: title }),
+      items.length ? h('ul', {}, items.map((t) => h('li', { class: cls, text: t }))) : h('span', { class: 'muted', text: 'Nothing notable' }));
+    return h('div', { class: 'why', role: 'group', 'aria-label': 'Why this job' }, col('Why it fits', a.pros, 'ok'), col('Watch out', a.cons, 'no'));
+  }
+
   // ---------- Jobs found ----------
   const JOB_STATUS = {
     matched: ['Matched', 'good'], filtered: ['Filtered out', ''], low_score: ['Low score', ''], proposed: ['Proposal written', 'info'], error: ['Error', 'bad'],
@@ -694,7 +711,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         h('td', {}, link),
         h('td', { text: j.client_country || '–' }),
         h('td', { class: 'mono', text: j.budget || '–' }),
-        h('td', {}, h('span', { class: `chip ${tone}`, text: label }), j.reason ? h('span', { class: 'err', style: j.status === 'error' ? '' : 'color:var(--muted)', text: j.reason }) : null)));
+        h('td', {}, h('span', { class: `chip ${tone}`, text: label }), j.reason ? h('span', { class: 'err', style: j.status === 'error' ? '' : 'color:var(--muted)', text: j.reason }) : null,
+          j.analysis && (j.analysis.pros.length || j.analysis.cons.length) ? h('details', { class: 'why-td' }, h('summary', { text: 'Why' }), whyBox(j.analysis)) : null)));
     }
     jobOffset += data.rows.length;
     $('jobEmpty').hidden = body.children.length > 0;

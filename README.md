@@ -80,6 +80,7 @@ npm test                   # vitest: filter rules, budget parsing, SSE, connect 
 | `src/pipeline/sendRules.ts` | Pure: send gate, Connects gate, error classification, confirm result, low-Connects alert |
 | `src/pipeline/preview.ts` | Shared Upwork preview (manage_proposals create) for the writer and the sender |
 | `src/email.ts` | Resend email (low-Connects alert now, daily report in M7) |
+| `src/pipeline/analysis.ts` | "Why this job": pros and cons from job facts, the two scores and Claude's notes on the work |
 | `src/pipeline/write.ts` | Writer: re-check on Upwork, Claude score, opening, preview, screening answers, queue |
 | `src/pipeline/letter.ts` | Pure: letter assembly from the template, opening/answer/letter checks, bid rules, contact-detail check |
 | `src/claude.ts` | Claude calls (Anthropic SDK, JSON-schema outputs); job text only inside a `<job_post>` data block |

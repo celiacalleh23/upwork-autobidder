@@ -37,6 +37,7 @@ const html = (body: string, status = 200, extra: Record<string, string> = {}) =>
 // Columns added after the first deploy: CREATE TABLE IF NOT EXISTS skips existing tables, so add them when missing.
 const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['jobs', 'win_score', 'INTEGER'], ['jobs', 'profile_score', 'INTEGER'],
+  ['jobs', 'proposals_tier', 'TEXT'], ['jobs', 'analysis', 'TEXT'],
   ['proposals', 'win_score', 'INTEGER'], ['proposals', 'profile_score', 'INTEGER'],
 ];
 

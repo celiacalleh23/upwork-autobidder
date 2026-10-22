@@ -112,11 +112,11 @@ export async function runScan(env: Env, opts: { force?: boolean } = {}): Promise
       summary.new++;
       if (v.status === 'matched') summary.matched++;
       inserts.push(env.DB.prepare(
-        `INSERT OR IGNORE INTO jobs (id, title, url, job_type, budget, client_country, posted_at, status, reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO jobs (id, title, url, job_type, budget, client_country, posted_at, proposals_tier, status, reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         job.id, stripUntrusted(job.title).slice(0, 300), job.url ?? null, job.job_type ?? null, job.budget ?? null,
-        job.client?.country ?? null, job.published_date ?? job.created_date ?? null,
+        job.client?.country ?? null, job.published_date ?? job.created_date ?? null, job.proposals_tier ?? null,
         v.status, v.status === 'filtered' ? v.reason : `Matched: ${v.keywords.join(', ')}`,
       ));
     }

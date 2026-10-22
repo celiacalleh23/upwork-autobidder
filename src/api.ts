@@ -5,6 +5,7 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { recheckMatched, runScan } from './pipeline/scan';
 import { contactDetailsIn } from './pipeline/letter';
+import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats } from './pipeline/stats';
 
@@ -14,20 +15,22 @@ const fail = (message: string, status = 400) => json({ error: message }, status)
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
   connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params,
-  (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason`;
+  (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason,
+  (SELECT analysis FROM jobs WHERE jobs.id = proposals.job_id) AS analysis`;
 
 interface ProposalRow {
   id: number; job_id: string; title: string; url: string | null; job_type: string | null; budget: string | null;
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
   connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
-  is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null;
+  is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null; analysis: string | null;
 }
 
 const answersOf = (s: string | null): { question: string; answer: string }[] => {
   try { const v = JSON.parse(s ?? '{}').answers; return Array.isArray(v) ? v.map((x) => ({ question: String(x.question), answer: String(x.answer) })) : []; } catch { return []; }
 };
-const shape = ({ create_params, ...r }: ProposalRow) => ({
+const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
   ...r,
+  analysis: parseAnalysis(analysis),
   answers: answersOf(create_params),
   keywords: safeList(r.keywords),
   is_example: r.is_example === 1,
@@ -181,11 +184,11 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const allowed = ['matched', 'filtered', 'low_score', 'proposed', 'error'];
       const where = status && allowed.includes(status) ? 'WHERE status = ?' : '';
       const stmt = env.DB.prepare(
-        `SELECT id, title, url, job_type, budget, client_country, posted_at, seen_at, status, reason, score FROM jobs ${where}
+        `SELECT id, title, url, job_type, budget, client_country, posted_at, seen_at, status, reason, score, analysis FROM jobs ${where}
          ORDER BY seen_at DESC, posted_at DESC LIMIT ? OFFSET ?`,
       );
       const { results } = await (where ? stmt.bind(status, limit + 1, offset) : stmt.bind(limit + 1, offset)).all();
-      return json({ rows: results.slice(0, limit), hasMore: results.length > limit });
+      return json({ rows: results.slice(0, limit).map((r) => ({ ...r, analysis: parseAnalysis(r.analysis as string | null) })), hasMore: results.length > limit });
     }
 
     if (path === '/api/scan' && method === 'POST') {
