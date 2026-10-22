@@ -18,6 +18,10 @@ binding = "DB"
 database_name = "autobidder"
 database_id = "77c7e7e7-0532-4a58-b61e-36161370a136"
 
+# Worker logs (Cloudflare → Workers → upwork-autobidder → Observability). Kept on by every deploy (BUILD_PLAN §10).
+[observability]
+enabled = true
+
 [vars]
 CLAUDE_MODEL = "claude-sonnet-5-5"
 UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
