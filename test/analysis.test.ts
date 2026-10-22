@@ -12,7 +12,7 @@ describe('jobAnalysis', () => {
     const a = jobAnalysis({ ...base, proposalsTier: 'Fewer than 5', postedAt: '2026-10-23T17:52:00Z', budget: '50.00–90.00/hr', connectsCost: 8, winScore: 82, profileScore: 88 }, { pros: [], cons: [] }, now);
     expect(a.pros).toEqual([
       '"Klaviyo" in the title', 'Similar to jobs Rafa won (82)', "Strong fit with Rafa's profile (88)",
-      'Few proposals so far (fewer than 5)', 'Posted 8 min ago', 'Up to $90/hr',
+      'Few proposals so far (fewer than 5)', 'Posted 8 min ago', 'Up to $90/hr', 'Only 8 Connects',
     ]);
     expect(a.cons).toEqual([]);
   });
@@ -21,7 +21,7 @@ describe('jobAnalysis', () => {
     expect(a.pros).toEqual([]);
     expect(a.cons).toEqual([
       '"Klaviyo" only in the description', "Unlike Rafa's past wins (15)", "Weak fit with Rafa's profile (30)",
-      'Crowded: 20 to 50 proposals', 'Posted 2 day(s) ago', 'Small budget ($10)',
+      'Crowded: 20 to 50 proposals', 'Posted 2 day(s) ago', 'Small budget ($10)', 'Costs 16 Connects',
     ]);
   });
   it('puts Claude\'s points about the work first, cleaned and capped', () => {
