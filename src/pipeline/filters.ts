@@ -101,7 +101,16 @@ export function connectsOverLimit(cost: number | null, s: Settings): string | nu
 
 // Filter reasons that recheckStored can re-evaluate from stored data, so a job dropped by a setting that changed since
 // (a misspelt country, a removed exclusion, a lowered budget) can come back.
-const REOPENABLE = ['Client country:', 'Excluded word:', 'Budget $', 'Rate up to $'];
+// 'Upwork says this job can no longer be applied to' was also given (until Oct 22) when only Connects were short.
+const REOPENABLE = ['Client country:', 'Excluded word:', 'Budget $', 'Rate up to $', 'Upwork says this job can no longer be applied to'];
+
+// Upwork's can_apply is false both for a closed job and when the balance can't pay the job's Connects. Only the first
+// is a reason to drop the job; the second waits for Connects (the sender checks the balance before sending).
+export function cannotApply(canApply: boolean | null, cost: number | null, balance: number | null): 'connects' | 'closed' | null {
+  if (canApply !== false) return null;
+  return cost !== null && balance !== null && balance < cost ? 'connects' : 'closed';
+}
+export const CLOSED_REASON = 'Job closed on Upwork (no longer takes proposals)';
 export const reopenable = (reason: string | null) => !!reason && REOPENABLE.some((p) => reason.startsWith(p));
 
 export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>): Verdict {

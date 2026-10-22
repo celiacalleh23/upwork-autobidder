@@ -3,7 +3,7 @@ import { acquireLease, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
-import { connectsOverLimit, stripUntrusted } from './filters';
+import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
@@ -39,14 +39,18 @@ export async function invitedJobIds(client: McpClient, state: State): Promise<Se
   return ids;
 }
 
-interface Details { description: string; connectsCost: number | null; canApply: boolean | null; applied: boolean }
+interface Details { description: string; connectsCost: number | null; connectsBalance: number | null; canApply: boolean | null; applied: boolean }
 export async function jobDetails(client: McpClient, state: State, id: string): Promise<Details> {
   const r = await client.callTool(state.upwork.toolNames.find_jobs, { action: 'get', org_uid: state.upwork.orgUid, params: { id } }) as Record<string, unknown>;
   const posting = findKey(r, 'marketplaceJobPosting') as { content?: { description?: string } } | undefined;
   const description = stripUntrusted(posting?.content?.description ?? (findKey(r, 'description') as string | undefined) ?? '');
   const cost = Number(findKey(r, 'connects_cost'));
+  const balance = Number(findKey(r, 'connects_balance'));
   const can = findKey(r, 'can_apply');
-  return { description, connectsCost: Number.isFinite(cost) ? cost : null, canApply: typeof can === 'boolean' ? can : null, applied: findKey(r, 'applied') === true };
+  return {
+    description, connectsCost: Number.isFinite(cost) ? cost : null, connectsBalance: Number.isFinite(balance) ? balance : null,
+    canApply: typeof can === 'boolean' ? can : null, applied: findKey(r, 'applied') === true,
+  };
 }
 
 interface Scores { score: number; win: number | null; profile: number }
@@ -62,7 +66,9 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   if (invited.has(job.id)) { await setJob(env, job.id, 'filtered', 'Invited: answer the invitation on Upwork'); return 'filtered'; }
   const d = await jobDetails(client, state, job.id);
   if (d.applied) { await setJob(env, job.id, 'filtered', 'Already applied'); return 'filtered'; }
-  if (d.canApply === false) { await setJob(env, job.id, 'filtered', 'Upwork says this job can no longer be applied to'); return 'filtered'; }
+  const blocked = cannotApply(d.canApply, d.connectsCost, d.connectsBalance);
+  if (blocked === 'closed') { await setJob(env, job.id, 'filtered', CLOSED_REASON); return 'filtered'; }
+  // blocked === 'connects': write it anyway; it waits in the queue until Connects are added.
   const overLimit = connectsOverLimit(d.connectsCost, s);
   if (overLimit) { await setJob(env, job.id, 'filtered', overLimit); return 'filtered'; }
 
@@ -102,8 +108,8 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
 
   const fixed = job.job_type === 'fixed';
   let p: Preview | null = null;
-  let note: string | null = null;
-  try { p = await createPreview(client, state, { jobId: job.id, letter, bid, fixed }); } catch (e) { note = `Preview not checked: ${errText(e)}`; }
+  let note: string | null = blocked === 'connects' ? `Not enough Connects yet: balance ${d.connectsBalance}, this job costs ${d.connectsCost}` : null;
+  try { p = await createPreview(client, state, { jobId: job.id, letter, bid, fixed }); } catch (e) { note = [note, `Preview not checked: ${errText(e)}`].filter(Boolean).join(' · '); }
 
   let answers: Answer[] = [];
   if (p?.questions.length) {

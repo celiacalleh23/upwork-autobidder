@@ -4,7 +4,7 @@ import { acquireLease, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
-import { connectsOverLimit } from './filters';
+import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import type { Answer } from './letter';
 import { createPreview } from './preview';
 import { alertAction, classifyFailure, connectsGate, readConfirm, sendGate } from './sendRules';
@@ -153,7 +153,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
     const invited = await invitedJobIds(client, state).catch(() => new Set<string>());
     const drop = d.applied ? 'Already applied on Upwork (no Connects spent)'
       : invited.has(row.job_id) ? 'Invited: answer the invitation on Upwork'
-      : d.canApply === false ? 'The job is closed or no longer takes proposals'
+      : cannotApply(d.canApply, d.connectsCost, balance ?? d.connectsBalance) === 'closed' ? CLOSED_REASON
       : connectsOverLimit(d.connectsCost, s);
     if (drop) { await setProposal(env, row.id, { status: 'failed', error: drop }); summary.note = drop; return summary; }
     const wait = connectsGate(balance, d.connectsCost, s);
@@ -169,7 +169,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
     let previewId: string;
     try {
       const p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra, answers });
-      if (p.canApply === false) { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: 'Upwork says this job can no longer be applied to' }); return summary; }
+      if (cannotApply(p.canApply, p.connectsCost, balance) === 'closed') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: CLOSED_REASON }); return summary; }
       if (p.questions.length && p.questions.length !== answers.length) {
         await setProposal(env, row.id, { status: 'pending', submitted_at: null, error: `Upwork now shows ${p.questions.length} screening question(s); review the answers and approve again` });
         summary.note = 'A proposal went back to review: new screening questions.'; return summary;

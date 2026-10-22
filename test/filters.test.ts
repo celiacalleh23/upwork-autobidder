@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { connectsOverLimit, containsTerm, evaluateJob, reopenable, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
+import { cannotApply, CLOSED_REASON, connectsOverLimit, containsTerm, evaluateJob, reopenable, normalizeCountry, parseBudget, recheckStored, stripUntrusted, tierLowerBound, type UpworkJob } from '../src/pipeline/filters';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 // Siv's answers (BUILD_PLAN §11a): Klaviyo in title or description, US/CA/UK clients, no other filters.
@@ -143,5 +143,18 @@ describe('alpha-3 country codes', () => {
     for (const c of ['GBR', 'CAN', 'USA']) expect(evaluateJob(job({ client: { country: c } }), siv, new Set()).status).toBe('matched');
     expect(evaluateJob(job({ client: { country: 'BEL' } }), siv, new Set())).toMatchObject({ reason: 'Client country: BEL' });
     expect(normalizeCountry('NLD')).toBe('netherlands');
+  });
+});
+
+describe('cannotApply', () => {
+  it('tells a closed job from a short Connects balance', () => {
+    expect(cannotApply(true, 16, 10)).toBeNull();
+    expect(cannotApply(false, 16, 10)).toBe('connects'); // Rafa on Oct 22: 10 Connects, job costs 16
+    expect(cannotApply(false, 8, 10)).toBe('closed');
+    expect(cannotApply(false, null, 10)).toBe('closed');
+  });
+  it('reopens jobs dropped by the old can_apply reason, but not by the new closed reason', () => {
+    expect(reopenable('Upwork says this job can no longer be applied to')).toBe(true);
+    expect(reopenable(CLOSED_REASON)).toBe(false);
   });
 });
