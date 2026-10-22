@@ -89,7 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   disclosure: { enabled: false, line: 'Drafted with AI assistance and reviewed by me.' },
   bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0 },
   profileSummary: '',
-  scoreWeights: { profile: 10, wins: 90 },
+  scoreWeights: { profile: 50, wins: 50 },
   loom: { sourceUrl: '', deleteAfterDays: 30 },
   caps: {
     daily: 0,

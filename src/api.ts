@@ -6,6 +6,7 @@ import { MissingKey } from './crypto';
 import { recheckMatched, runScan } from './pipeline/scan';
 import { contactDetailsIn } from './pipeline/letter';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
+import { loadAccountStats, refreshAccountStats } from './pipeline/stats';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -124,6 +125,17 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       } catch (e) {
         console.error('profile sync failed', e instanceof Error ? e.message : e);
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork profile', 502);
+      }
+    }
+    if (path === '/api/account-stats' && method === 'GET') return json({ stats: await loadAccountStats(env) });
+    if (path === '/api/account-stats' && method === 'POST') {
+      const state = await loadState(env);
+      if (!state.upwork.connected) return fail('Connect Upwork first', 409);
+      try {
+        return json({ stats: await refreshAccountStats(env) });
+      } catch (e) {
+        console.error('account stats failed', e instanceof Error ? e.message : e);
+        return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);
       }
     }
     if (path === '/api/upwork/disconnect' && method === 'POST') {

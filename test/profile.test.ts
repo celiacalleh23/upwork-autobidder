@@ -24,15 +24,15 @@ const record: TrackRecord = {
 };
 
 describe('weightedScore', () => {
-  it('weighs past wins 90% and profile 10% by default', () => {
-    expect(weightedScore(40, 90, s())).toBe(85);
-    expect(weightedScore(100, 0, s())).toBe(10);
+  it('weighs past wins and profile 50/50 by default', () => {
+    expect(weightedScore(85, 15, s())).toBe(50); // Rafa today: a perfect Klaviyo job, unlike the translation wins
+    expect(weightedScore(100, 0, s())).toBe(50);
   });
   it('uses the profile fit alone when there are no past wins', () => {
     expect(weightedScore(70, null, s())).toBe(70);
   });
   it('follows the weights from Settings', () => {
-    expect(weightedScore(40, 90, s({ scoreWeights: { profile: 50, wins: 50 } }))).toBe(65);
+    expect(weightedScore(40, 90, s({ scoreWeights: { profile: 10, wins: 90 } }))).toBe(85);
   });
 });
 

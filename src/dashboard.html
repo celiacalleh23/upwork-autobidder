@@ -236,6 +236,14 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       </aside>
     </div>
 
+    <section class="panel" id="acctPanel" aria-labelledby="aH">
+      <div class="row-head">
+        <h2 id="aH">Rafa's Upwork account <span class="small muted" id="acctWhen"></span></h2>
+        <div class="tools"><button type="button" class="btn outline" id="acctRefresh">Refresh from Upwork</button></div>
+      </div>
+      <div id="acctBody"><p class="small muted">Not read yet. Press Refresh to read the last 30 days from Upwork (read-only).</p></div>
+    </section>
+
     <section class="panel" id="jobs" aria-labelledby="jH">
       <div class="row-head">
         <h2 id="jH">Jobs found</h2>
@@ -683,6 +691,40 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     } catch (e) { toast(e.message, true); }
     b.disabled = false; b.textContent = 'Scan now'; refresh();
   });
+
+  // ---------- Rafa's Upwork account ----------
+  const cnt = (c) => `${fmtNum(c.n)}${c.capped ? '+' : ''}`;
+  const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
+  function renderAccount(st) {
+    if (!st) return;
+    $('acctWhen').textContent = `· last ${st.windowDays} days · read ${ago(st.at)}`;
+    const P = st.proposals;
+    const sentKeys = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired'];
+    const sent = sentKeys.reduce((t, k) => t + P[k].n, 0);
+    const capped = sentKeys.some((k) => P[k].capped);
+    const viewed = sentKeys.reduce((t, k) => t + P[k].viewed, 0);
+    const offers = P.Offered.n + P.Hired.n;
+    const stat = (label, value, sub) => h('div', { class: 'stat' }, h('span', { class: 'label', text: label }), h('span', { class: 'value', text: value }), sub ? h('span', { class: 'sub', text: sub }) : null);
+    const labels = { Accepted: 'Submitted, open', Pending: 'Processing', Declined: 'Declined', Withdrawn: 'Withdrawn', Archived: 'Archived', Offered: 'Offer received', Hired: 'Hired', Activated: 'Invitation accepted' };
+    $('acctBody').replaceChildren(
+      h('div', { class: 'stats' },
+        stat('Applications (Connects history)', cnt(st.connects.applications), `${fmtNum(st.connects.spent)} Connects spent · ${fmtNum(st.connects.refunded)} refunded`),
+        stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`),
+        stat('Offers or hires', fmtNum(offers), `${pct(offers, sent)} of proposals sent`),
+        stat('Contracts', `${cnt(st.contracts.active)} active`, `${cnt(st.contracts.closed)} closed · ${st.profile.totalJobs ?? '–'} completed jobs in total`),
+        stat('Connects balance', fmtNum(st.connects.balance), `${fmtNum(st.connects.received)} received in ${st.windowDays} days`)),
+      h('div', { class: 'tablewrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', { text: 'Viewed by client' }))),
+        h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', { text: labels[k] }), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
+      h('p', { class: 'small muted', text: 'Counts with + hit the read limit (30 per status); the real number is higher. All figures come straight from Upwork for this account.' }));
+  }
+  async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }
+  $('acctRefresh').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Reading Upwork…';
+    try { renderAccount((await api('/api/account-stats', { method: 'POST' })).stats); toast('Account figures updated.'); } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Refresh from Upwork';
+  });
+  loadAccount();
 
   // ---------- Settings ----------
   let kw = [], ex = [], ct = [];
