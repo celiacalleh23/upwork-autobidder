@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   bid REAL,
   create_params TEXT NOT NULL DEFAULT '{}',
   loom_url TEXT,
-  loom_video_id TEXT,
+  loom_video_id TEXT,                -- the job's own Loom copy (M5), deleted after settings.loom.deleteAfterDays
+  loom_deleted_at TEXT,
   connects INTEGER,
   score INTEGER,
   win_score INTEGER,                 -- sub-scores behind score, kept for the M7 results report

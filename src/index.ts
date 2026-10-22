@@ -7,7 +7,8 @@ import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oa
 import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
 import { runSender } from './pipeline/send';
-import type { Env } from './settings';
+import { cleanupLoomCopies } from './loom';
+import { loadSettings, type Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy': [
@@ -39,6 +40,7 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['jobs', 'win_score', 'INTEGER'], ['jobs', 'profile_score', 'INTEGER'],
   ['jobs', 'proposals_tier', 'TEXT'], ['jobs', 'analysis', 'TEXT'],
   ['proposals', 'win_score', 'INTEGER'], ['proposals', 'profile_score', 'INTEGER'],
+  ['proposals', 'loom_deleted_at', 'TEXT'],
 ];
 
 // Creates the tables on first use (every statement is CREATE ... IF NOT EXISTS), so a fresh D1 needs no manual step.
@@ -140,12 +142,14 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
 
-  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → submit (M6). Loom copies (M5) and reports (M7) next.
+  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → Loom copy (M5) → submit (M6). Reports (M7) next.
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
     if (event.cron !== '*/5 * * * *') return;
     // The writer follows each scan, so its numbers and notes land on that scan's run row. The sender runs every time.
     if (await runScan(env)) await runWriter(env);
     await runSender(env);
+    const s = await loadSettings(env);
+    await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch((e) => console.error('loom cleanup failed', e instanceof Error ? e.message : e));
   },
 };

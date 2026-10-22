@@ -152,12 +152,9 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
   - a **Test connection** button (`ping` on the source video)
   - status Connected / Expired
 - In the pipeline, after the letter is accepted: duplicate → rename to the exact job title → replace `{loom_link}` with `https://www.loom.com/share/<newId>`. Track `loom_video_id`.
-- On any Loom failure:
-  - remove the Loom sentence from the letter
-  - log `error = "Loom copy failed: …"`
-  - set `state.loom.connected=false` if it is an auth error
-  - keep the proposal
-- Cleanup in the 23:00 cron: delete copies older than `deleteAfterDays`, but **only ids the tool created** (from `proposals.loom_video_id`).
+- On any Loom failure (decided Oct 22): the letter keeps the source video link, the card notes `Loom copy failed: …`, and an auth error sets `state.loom.connected=false`.
+- **Built Oct 22** from Celia's capture (`docs/loom-api.md`): `DuplicateVideo` takes the new name, so no rename call; deletion is `BulkDeleteVideos`. Connecting makes and deletes one test copy.
+- Cleanup every 6 hours from the 5-minute cron: delete copies older than `deleteAfterDays`, but **only ids the tool created** (from `proposals.loom_video_id`).
 - **Accept:** a queued proposal has its own loom.com link titled with the job; the dashboard flags Loom errors.
 
 ### M6 — Sender (the only code that spends Connects) — built Oct 23, 2026; ships with Settings → Sending **off**; tested against a local Upwork stand-in (no real confirm)

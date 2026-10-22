@@ -372,11 +372,24 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <section class="section" aria-labelledby="s4">
       <header><h2 id="s4">Loom video</h2><p>Each proposal gets a copy of this video renamed to the job title. The video itself never changes.</p></header>
       <div class="grid">
-        <div class="field" style="grid-column:1/-1"><label for="loomUrl">Source video link</label><input type="url" id="loomUrl" placeholder="https://www.loom.com/share/…"><span class="hint">Must be recorded from the connected Loom account; Loom only lets the owner duplicate a video.</span></div>
+        <div class="field" style="grid-column:1/-1"><label for="loomUrl">Source video link</label><input type="url" id="loomUrl" placeholder="https://www.loom.com/share/…"><span class="hint">Must belong to the connected Loom account; Loom only lets the owner duplicate a video.</span></div>
         <div class="field"><label for="loomDelete">Delete copies after (days)</label><input type="number" id="loomDelete" min="7" max="365"></div>
-        <div class="field"><span class="lbl">Letters already in the queue</span><button type="button" class="btn outline" id="relinkLoom">Update the link in queued letters</button><span class="hint">Puts the saved video link in every proposal waiting for review or approved. Sent ones are never changed. Saving a new link here does this by itself.</span></div>
+        <div class="field"><span class="lbl">Letters already in the queue</span><button type="button" class="btn outline" id="relinkLoom">Update the link in queued letters</button><span class="hint">Puts the saved video link in every proposal waiting for review or approved that has no copy of its own. Sent ones are never changed. Saving a new link here does this by itself.</span></div>
       </div>
-      <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div></div><span class="chip warn" id="loomChip">Connect on the setup call</span></div>
+      <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div><div class="small msg bad" id="loomError" role="alert" hidden></div></div>
+        <div class="conn-actions"><span class="chip warn" id="loomChip">Not connected</span>
+          <button type="button" class="btn primary" id="loomConnect">Connect Loom</button>
+          <button type="button" class="btn danger" id="loomDisconnect" hidden>Disconnect</button></div></div>
+      <div class="note info" id="loomFinish" hidden>
+        <b>Connect Loom</b>
+        <ol class="small" style="margin:8px 0; padding-left:20px">
+          <li>Save the source video link above first. It must belong to the Loom account you connect.</li>
+          <li>In Chrome, open <b>loom.com</b> signed in to that account. Press <b>F12</b> → <b>Application</b> → <b>Cookies</b> → <code>https://www.loom.com</code>.</li>
+          <li>Click the row <code>connect.sid</code>, copy its <b>Value</b>, paste it here and press Connect. Don't share it anywhere else.</li>
+        </ol>
+        <p class="small muted" style="margin:0 0 8px">Connecting makes one test copy of the video and deletes it straight away. The value is stored encrypted.</p>
+        <div class="addrow" style="max-width:none"><input id="loomPaste" type="password" autocomplete="off" spellcheck="false" placeholder="connect.sid value" aria-label="Loom connect.sid value"><button type="button" class="btn primary" id="loomFinishBtn">Connect</button></div>
+      </div>
     </section>
 
     <section class="section" aria-labelledby="sSend">
@@ -557,9 +570,16 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('upworkConnect').className = 'btn ' + (s.upwork.connected ? 'outline' : 'primary');
     $('upworkCheck').hidden = !s.upwork.connected;
     $('upworkDisconnect').hidden = !s.upwork.connected;
-    $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Connect on the setup call';
+    $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Not connected';
     $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
-    $('loomStatus').textContent = s.loom.connected ? 'Copies are created and renamed automatically' : 'Not connected';
+    $('loomStatus').textContent = s.loom.connected
+      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}`
+      : 'Not connected. Letters use the source video link until Loom is connected.';
+    $('loomError').textContent = s.loom.lastError ? `Last Loom error: ${s.loom.lastError}` : '';
+    $('loomError').hidden = !s.loom.lastError;
+    $('loomConnect').textContent = s.loom.connected ? 'Reconnect' : 'Connect Loom';
+    $('loomConnect').className = 'btn ' + (s.loom.connected ? 'outline' : 'primary');
+    $('loomDisconnect').hidden = !s.loom.connected;
   }
   const tzName = (tz) => ({ 'America/New_York': 'US Eastern', 'America/Chicago': 'US Central', 'America/Denver': 'US Mountain', 'America/Los_Angeles': 'US Pacific', 'America/Guayaquil': 'Ecuador', 'Europe/London': 'UK' }[tz] || tz);
 
@@ -873,7 +893,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     };
   }
   function dirty() { $('saveMsg').textContent = 'Unsaved changes'; $('saveMsg').className = 'msg'; }
-  $('viewSettings').addEventListener('input', (e) => { if (e.target.id !== 'upworkPaste') dirty(); });
+  $('viewSettings').addEventListener('input', (e) => { if (e.target.id !== 'upworkPaste' && e.target.id !== 'loomPaste') dirty(); });
   $('viewSettings').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('saveBtn').disabled = true;
@@ -931,6 +951,20 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   $('upworkDisconnect').addEventListener('click', async () => {
     if (!confirm('Disconnect Upwork? Nothing is scanned or sent until Rafa signs in again.')) return;
     try { await api('/api/upwork/disconnect', { method: 'POST' }); toast('Upwork disconnected.'); } catch (e) { toast(e.message, true); }
+    loadState();
+  });
+  $('loomConnect').addEventListener('click', () => { $('loomFinish').hidden = false; $('loomPaste').value = ''; $('loomPaste').focus(); });
+  $('loomFinishBtn').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Testing…';
+    try {
+      await api('/api/loom/connect', { method: 'POST', body: { session: $('loomPaste').value } });
+      $('loomFinish').hidden = true; toast('Loom connected. New proposals get their own video copy.');
+    } catch (e) { toast(e.message, true); }
+    $('loomPaste').value = ''; b.disabled = false; b.textContent = 'Connect'; loadState();
+  });
+  $('loomDisconnect').addEventListener('click', async () => {
+    if (!confirm('Disconnect Loom? New letters will use the source video link.')) return;
+    try { await api('/api/loom/disconnect', { method: 'POST' }); toast('Loom disconnected.'); } catch (e) { toast(e.message, true); }
     loadState();
   });
   $('logFilter').addEventListener('change', () => loadLog());

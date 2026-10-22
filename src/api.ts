@@ -3,6 +3,7 @@ import {
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
+import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { recheckMatched, runScan } from './pipeline/scan';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
@@ -151,6 +152,18 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);
       }
     }
+    if (path === '/api/loom/connect' && method === 'POST') {
+      const body = await readJson(req);
+      const s = await loadSettings(env);
+      try {
+        return json(await connectLoom(env, String(body.session ?? ''), s.loom.sourceUrl));
+      } catch (e) {
+        if (e instanceof LoomError || e instanceof MissingKey) return fail(e.message, 400);
+        throw e;
+      }
+    }
+    if (path === '/api/loom/disconnect' && method === 'POST') return json(await disconnectLoom(env));
+
     if (path === '/api/upwork/disconnect' && method === 'POST') {
       await disconnectUpwork(env);
       return json({ ok: true });
@@ -259,9 +272,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
   }
 }
 
-// Pending and approved proposals only: anything sending or sent keeps the letter Upwork has.
+// Pending and approved proposals only: anything sending or sent keeps the letter Upwork has. Letters with their own Loom
+// copy (M5) keep it.
 async function relinkQueued(env: Env, loomUrl: string): Promise<number> {
-  const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status IN ('pending', 'approved') AND is_example = 0")
+  const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status IN ('pending', 'approved') AND is_example = 0 AND loom_video_id IS NULL")
     .all<{ id: number; cover_letter: string }>();
   const updates = results.flatMap((r) => {
     const next = swapLoomLink(r.cover_letter, loomUrl);

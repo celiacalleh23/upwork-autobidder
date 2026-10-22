@@ -1,11 +1,12 @@
 import { answerQuestions, ClaudeConfigError, ClaudeDeclined, scoreJob, writeOpening, type JobForClaude } from '../claude';
 import { acquireLease, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
+import { copyForJob, deleteVideos, loomCookie, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, type Answer } from './letter';
+import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
 import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
 
@@ -95,16 +96,16 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     await setJob(env, job.id, 'error', `No bid amount: the job lists no rate. Set Rafa's hourly rate in Settings → Bids.`, sc); return 'errors';
   }
 
-  const loomUrl = s.loom.sourceUrl || null; // M5 replaces this with the job's own Loom copy
+  const sourceUrl = s.loom.sourceUrl || null; // the letter is checked and previewed with the source video; the copy goes in last
   const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
   let opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude);
-  let problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, loomUrl, disclosure), loomUrl);
+  let problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
   if (problem) {
     opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
-    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, loomUrl, disclosure), loomUrl);
+    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
   }
   if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
-  const letter = assembleLetter(s.letter.template, opening, loomUrl, disclosure);
+  let letter = assembleLetter(s.letter.template, opening, sourceUrl, disclosure);
 
   const fixed = job.job_type === 'fixed';
   let p: Preview | null = null;
@@ -119,17 +120,36 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
   }
 
+  // The job's own Loom copy, named after the job (M5). Made last so a job dropped above leaves no copy behind.
+  // On failure the letter keeps the source video and the card says why.
+  let loomUrl = sourceUrl;
+  let loomId: string | null = null;
+  if (sourceUrl && state.loom.connected) {
+    try {
+      const copy = await copyForJob(env, sourceUrl, stripUntrusted(job.title));
+      if (copy) { loomUrl = copy.url; loomId = copy.id; letter = swapLoomLink(letter, copy.url); }
+    } catch (e) {
+      await markLoomError(env, e);
+      note = [note, `Loom copy failed, the letter uses the source video: ${errText(e)}`].filter(Boolean).join(' · ');
+    }
+  }
+
   const createParams = { charged_amount: bid, ...(p?.extra ?? (fixed ? FIXED_DEFAULTS : {})), ...(answers.length ? { answers } : {}) };
   // Auto mode approves straight away; fixed-price stays in review until Siv acknowledges Upwork's terms (Settings).
   const status = state.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
-  await env.DB.batch([
+  const [inserted] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, connects, score, win_score, profile_score, status, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
-      JSON.stringify(createParams), loomUrl, p?.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note),
+      JSON.stringify(createParams), loomUrl, loomId, p?.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note),
     env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
   ]);
+  // A proposal for this job already existed: the new copy is not used by anything.
+  if (loomId && !inserted.meta.changes) {
+    const cookie = await loomCookie(env);
+    if (cookie) await deleteVideos(cookie, [loomId]).catch((e) => console.error('loom: unused copy not deleted', loomId, errText(e)));
+  }
   return 'queued';
 }
 
