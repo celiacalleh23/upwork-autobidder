@@ -5,19 +5,21 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { recheckMatched, runScan } from './pipeline/scan';
 import { contactDetailsIn } from './pipeline/letter';
+import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
-  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params`;
+  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params,
+  (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason`;
 
 interface ProposalRow {
   id: number; job_id: string; title: string; url: string | null; job_type: string | null; budget: string | null;
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
   connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
-  is_example: number; created_at: string; submitted_at: string | null; create_params: string | null;
+  is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null;
 }
 
 const answersOf = (s: string | null): { question: string; answer: string }[] => {
@@ -108,6 +110,20 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         return json({ ok: true, account: s.upwork.account });
       } catch (e) {
         return json({ ok: true, account: null, warning: e instanceof Error ? e.message : 'Account details could not be read yet' });
+      }
+    }
+    if (path === '/api/profile' && method === 'GET') {
+      const [record, s] = await Promise.all([loadTrackRecord(env), loadSettings(env)]);
+      return json({ record, profileText: profileForClaude(record, s) });
+    }
+    if (path === '/api/profile/sync' && method === 'POST') {
+      const state = await loadState(env);
+      if (!state.upwork.connected) return fail('Connect Upwork first', 409);
+      try {
+        return json({ record: await syncTrackRecord(env) });
+      } catch (e) {
+        console.error('profile sync failed', e instanceof Error ? e.message : e);
+        return fail(e instanceof Error ? e.message : 'Could not read the Upwork profile', 502);
       }
     }
     if (path === '/api/upwork/disconnect' && method === 'POST') {

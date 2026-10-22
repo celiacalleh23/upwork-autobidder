@@ -5,6 +5,10 @@ import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { connectsOverLimit, stripUntrusted } from './filters';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, type Answer } from './letter';
+import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
+
+// What Claude knows about Rafa for this run (built once per run from his Upwork track record, the letter and Siv's notes).
+interface Who { profile: string; wins: string; upworkRate: number | null }
 
 // Writer (M4): takes jobs that passed the filters ('matched'), re-checks them on Upwork, scores them with Claude,
 // writes the opening paragraph into Siv's template, reads screening questions from a preview (nothing is sent) and
@@ -75,7 +79,7 @@ async function setJob(env: Env, id: string, status: string, reason: string, scor
 
 type Outcome = 'queued' | 'lowScore' | 'filtered' | 'errors';
 
-async function processJob(env: Env, client: McpClient, state: State, s: Settings, job: JobRow, invited: Set<string>): Promise<Outcome> {
+async function processJob(env: Env, client: McpClient, state: State, s: Settings, who: Who, job: JobRow, invited: Set<string>): Promise<Outcome> {
   if (invited.has(job.id)) { await setJob(env, job.id, 'filtered', 'Invited: answer the invitation on Upwork'); return 'filtered'; }
   const d = await jobDetails(client, state, job.id);
   if (d.applied) { await setJob(env, job.id, 'filtered', 'Already applied'); return 'filtered'; }
@@ -87,20 +91,24 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
     description: d.description || '(no description returned)', clientFeedbackNames: [],
   };
-  const { score, reason } = await scoreJob(env, s.profileSummary, forClaude);
-  if (score < s.minScore) { await setJob(env, job.id, 'low_score', `Score ${score}: ${reason}`, score); return 'lowScore'; }
+  const { profileFit, winSimilarity, reason: why } = await scoreJob(env, who.profile, who.wins, forClaude);
+  const score = weightedScore(profileFit, winSimilarity, s);
+  const breakdown = winSimilarity === null ? `profile ${profileFit}, no past wins yet` : `past wins ${winSimilarity} · profile ${profileFit}`;
+  const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
+  if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, score); return 'lowScore'; }
 
-  const bid = computeBid(job.job_type, job.budget, s);
+  // Rafa's Upwork rate stands in when Settings has none (used for hourly jobs that list no rate).
+  const bid = computeBid(job.job_type, job.budget, s.bid.profileRate > 0 || !who.upworkRate ? s : { ...s, bid: { ...s.bid, profileRate: who.upworkRate } });
   if (bid === null) {
     await setJob(env, job.id, 'error', `No bid amount: the job lists no rate. Set Rafa's hourly rate in Settings → Bids.`, score); return 'errors';
   }
 
   const loomUrl = s.loom.sourceUrl || null; // M5 replaces this with the job's own Loom copy
   const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
-  let opening = await writeOpening(env, s.profileSummary, s.letter.template, s.letter.rules, forClaude);
+  let opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude);
   let problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, loomUrl, disclosure), loomUrl);
   if (problem) {
-    opening = await writeOpening(env, s.profileSummary, s.letter.template, s.letter.rules, forClaude, problem);
+    opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
     problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, loomUrl, disclosure), loomUrl);
   }
   if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, score); return 'errors'; }
@@ -113,9 +121,9 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
 
   let answers: Answer[] = [];
   if (p?.questions.length) {
-    answers = await answerQuestions(env, s.profileSummary, forClaude, p.questions);
+    answers = await answerQuestions(env, who.profile, forClaude, p.questions);
     let bad = checkAnswers(p.questions, answers);
-    if (bad) { answers = await answerQuestions(env, s.profileSummary, forClaude, p.questions, bad); bad = checkAnswers(p.questions, answers); }
+    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, p.questions, bad); bad = checkAnswers(p.questions, answers); }
     if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, score); return 'errors'; }
   }
 
@@ -129,7 +137,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
       JSON.stringify(createParams), loomUrl, p?.connectsCost ?? d.connectsCost, score, status, note),
-    env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ? WHERE id = ?").bind(`Score ${score}: ${reason}`.slice(0, 400), score, job.id),
+    env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ? WHERE id = ?").bind(scoreText, score, job.id),
   ]);
   return 'queued';
 }
@@ -142,7 +150,6 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
 
   const summary: WriteSummary = { queued: 0, lowScore: 0, filtered: 0, errors: 0, note: null };
   if (!env.ANTHROPIC_API_KEY) summary.note = 'Waiting for the ANTHROPIC_API_KEY secret in Cloudflare.';
-  else if (!s.profileSummary.trim()) summary.note = "Waiting for Rafa's profile summary in Settings → Cover letter.";
   else if (!s.letter.template.trim()) summary.note = 'Waiting for the letter template in Settings → Cover letter.';
   if (summary.note) { await record(env, summary); return summary; }
   if (!(await acquireLease(env, 'write', LEASE_MS))) return null;
@@ -151,11 +158,17 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
     const { results: jobs } = await env.DB.prepare(
       "SELECT id, title, url, job_type, budget, client_country, reason FROM jobs WHERE status = 'matched' ORDER BY posted_at DESC, seen_at DESC LIMIT ?",
     ).bind(s.maxNewJobsPerRun).all<JobRow>();
+    // Every other day, refresh Rafa's track record first; on failure keep the last one.
+    let record = await loadTrackRecord(env);
+    if (syncDue(state.trackRecordSyncedAt)) {
+      record = await syncTrackRecord(env).catch((e) => { console.error('track record sync failed', errText(e)); summary.note = `Upwork profile not refreshed: ${errText(e)}`; return record; });
+    }
+    const who: Who = { profile: profileForClaude(record, s), wins: winsForClaude(record), upworkRate: record?.hourlyRate ?? null };
     const client = await upworkClient(env);
     const invited = await invitedJobIds(client, state).catch(() => new Set<string>());
     for (const job of jobs) {
       try {
-        summary[await processJob(env, client, state, s, job, invited)]++;
+        summary[await processJob(env, client, state, s, who, job, invited)]++;
       } catch (e) {
         if (e instanceof ClaudeConfigError) { summary.note = e.message; break; } // the job stays 'matched' for the next run
         summary.errors++;

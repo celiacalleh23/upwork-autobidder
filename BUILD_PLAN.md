@@ -277,6 +277,8 @@ Local dev: `.dev.vars` (git-ignored). Never commit secrets or tokens, and never 
 | Active hours | 24/7 | `activeStart = activeEnd = '00:00'` means all day; the sender must treat equal times as all day (unit test). |
 | Daily / hourly cap | **None.** Send as many proposals as there are good matches; the account warms up as it goes. | `caps.daily = 0`, `caps.hourly = 0` (0 = no limit). Pace stays one proposal per cron run, `gapMinutes = 5`. |
 | Boost | Never | `caps.boost = 'never'` |
+| Match score | **90 % similarity to jobs Rafa already won, 10 % fit with his profile; client quality and post clarity 0 %** (Celia, Oct 22: Siv wants volume) | Claude returns `win_similarity` and `profile_fit`; the code weighs them (`scoreWeights`, editable, sum 100). No past wins yet → profile fit alone. |
+| Rafa's profile | **Built from his Upwork account + Siv's cover letter**, plus optional notes | `src/pipeline/profile.ts`: profile, work history with client feedback, Hired/Offered proposals (read-only, ≤10 per call), refreshed **every other day** (and "Sync now"). His Upwork rate is the fallback bid for hourly jobs with no rate. |
 | Connects floor | **Off**: keep sending; only the alert below 250 | On/off switch `caps.connectsFloorEnabled`, default **off**; M6 still stops when the balance is below the job's cost. |
 | Max Connects per job | **No limit** (Siv doesn't care what a job costs) | On/off switch `caps.maxConnectsEnabled`, default **off**; the number only applies when on. |
 | AI disclosure | Off | `disclosure.enabled = false` |

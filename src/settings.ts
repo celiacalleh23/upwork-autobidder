@@ -24,7 +24,8 @@ export interface Settings {
   letter: { template: string; rules: string };
   disclosure: { enabled: boolean; line: string };
   bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10'; profileRate: number }; // profileRate: USD/hr, 0 = unset
-  profileSummary: string; // Rafa's skills, results and tone: used for scoring and the letter opening
+  profileSummary: string; // Siv's notes about Rafa, added to his Upwork profile and cover letter for Claude
+  scoreWeights: { profile: number; wins: number }; // % of the match score; they add up to 100
   loom: { sourceUrl: string; deleteAfterDays: number };
   caps: {
     daily: number;  // 0 = no limit
@@ -65,6 +66,7 @@ export interface State {
   };
   loom: { connected: boolean };
   lastRun: RunSummary | null;
+  trackRecordSyncedAt: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -87,6 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   disclosure: { enabled: false, line: 'Drafted with AI assistance and reviewed by me.' },
   bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0 },
   profileSummary: '',
+  scoreWeights: { profile: 10, wins: 90 },
   loom: { sourceUrl: '', deleteAfterDays: 30 },
   caps: {
     daily: 0,
@@ -118,6 +121,7 @@ export const DEFAULT_STATE: State = {
   upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null },
   loom: { connected: false },
   lastRun: null,
+  trackRecordSyncedAt: null,
 };
 
 async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {
@@ -198,6 +202,12 @@ const tz = (v: unknown): string => {
   return s;
 };
 
+function weights(w: { profile: unknown; wins: unknown }) {
+  const out = { profile: num(w.profile, 0, 100, 'Profile weight'), wins: num(w.wins, 0, 100, 'Past-wins weight') };
+  if (out.profile + out.wins !== 100) throw new InvalidInput('The two score weights must add up to 100%');
+  return out;
+}
+
 export function validateSettings(input: unknown): Settings {
   if (!isObj(input)) throw new InvalidInput('Settings must be an object');
   const i = deepMerge(structuredClone(DEFAULT_SETTINGS), input);
@@ -227,7 +237,8 @@ export function validateSettings(input: unknown): Settings {
       fixed: oneOf(i.bid.fixed, ['client_budget', 'budget_plus_10'] as const, 'Fixed-price bid'),
       profileRate: num(i.bid.profileRate, 0, 1000, "Rafa's hourly rate"),
     },
-    profileSummary: str(i.profileSummary, 3000, 'Profile summary'),
+    profileSummary: str(i.profileSummary, 3000, 'Notes about Rafa'),
+    scoreWeights: weights(i.scoreWeights),
     loom: { sourceUrl: loomUrl, deleteAfterDays: num(i.loom.deleteAfterDays, 7, 365, 'Delete Loom copies after') },
     caps: {
       daily: num(caps.daily, 0, 500, 'Daily cap'),

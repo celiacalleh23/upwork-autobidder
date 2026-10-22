@@ -317,13 +317,20 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         <div class="field"><label for="maxExistingProposals">Skip if it already has more than</label>
           <select id="maxExistingProposals"><option value="10">10 proposals</option><option value="20">20 proposals</option><option value="50">50 proposals</option><option value="0">No limit</option></select></div>
         <div class="field"><label for="minScore">Minimum AI match score</label><input type="number" id="minScore" min="0" max="100"><span class="hint">0–100. Jobs below it are skipped and logged.</span></div>
+        <div class="field"><label for="wWins">Score weight: similar to jobs Rafa won (%)</label><input type="number" id="wWins" min="0" max="100"><span class="hint">From his completed jobs and hired proposals on Upwork.</span></div>
+        <div class="field"><label for="wProfile">Score weight: fit with his profile (%)</label><input type="number" id="wProfile" min="0" max="100"><span class="hint">The two weights add up to 100. Client quality and post clarity are not scored.</span></div>
       </div>
       <label class="check" for="verifiedOnly"><input type="checkbox" id="verifiedOnly"><span>Only clients with verified payment</span></label>
     </section>
 
     <section class="section" aria-labelledby="s2">
       <header><h2 id="s2">Cover letter</h2><p>Each letter is your template, word for word, with Claude's 2–3 sentences for that job at {opening}. Upwork's limit is 5,000 characters, with no contact details.</p></header>
-      <div class="field"><label for="profileSummary">Rafa's profile</label><textarea id="profileSummary" rows="7" maxlength="3000" placeholder="Skills, years of experience, results, the kind of clients and work that fit best."></textarea><span class="hint">Claude uses this to score each job and to write the opening. Only facts that are true: the letter never claims more than this says.</span></div>
+      <div class="field">
+        <span class="lbl">Rafa's track record (from Upwork)</span>
+        <div class="note info" id="trackBox"><span id="trackSummary">Not read yet.</span></div>
+        <div class="tools"><button type="button" class="btn outline" id="trackSync">Sync from Upwork now</button><span class="hint">Refreshes by itself every other day: profile, completed jobs with client feedback, and proposals that got an offer or a hire.</span></div>
+      </div>
+      <div class="field"><label for="profileSummary">Notes about Rafa (optional)</label><textarea id="profileSummary" rows="5" maxlength="3000" placeholder="Anything Upwork doesn't show: specialties, industries, the kind of work he wants more or less of."></textarea><span class="hint">Claude uses his Upwork profile, the claims in the template below and these notes to score jobs and write the opening. It never claims more than they say.</span></div>
       <div class="field"><label for="letterTemplate">Letter template</label><textarea id="letterTemplate" rows="12" placeholder="Hi there,&#10;&#10;{opening}&#10;&#10;I recorded a quick Loom for you…: {loom_link}&#10;…"></textarea><span class="hint">Write <b>{opening}</b> where Claude's 2–3 tailored sentences go and <b>{loom_link}</b> where the video link goes. Everything else is sent exactly as written.</span></div>
       <div class="field"><label for="letterRules">Extra rules for the opening (optional)</label><textarea id="letterRules" rows="4"></textarea><span class="hint">Style rules for Claude's sentences only, one per line. No links or contact details are ever allowed.</span></div>
       <label class="check" for="discOn"><input type="checkbox" id="discOn"><span>Add an AI disclosure line to every letter</span></label>
@@ -559,7 +566,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       h('div', { class: 'card-top' },
         h('div', {},
           h('h3', {}, p.url ? h('a', { href: p.url, target: '_blank', rel: 'noopener noreferrer', text: p.title }) : p.title),
-          h('div', { class: 'meta', text: meta })),
+          h('div', { class: 'meta', text: meta }),
+          p.score_reason ? h('div', { class: 'meta', style: 'margin-top:2px', text: p.score_reason }) : null),
         h('div', { class: 'chips' },
           p.is_example ? h('span', { class: 'chip info', text: 'Example' }) : null,
           p.score !== null ? h('span', { class: 'chip good', text: `Match ${p.score}` }) : null,
@@ -699,6 +707,25 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
   $('ctAdd').addEventListener('click', () => addTag('ctInput', ct, drawCt));
   $('maxConnectsOn').addEventListener('change', (e) => { $('maxConnects').disabled = !e.target.checked; });
+  const pair = (a, b) => $(a).addEventListener('input', () => { const v = Number($(a).value); if (v >= 0 && v <= 100) $(b).value = 100 - v; });
+  pair('wWins', 'wProfile'); pair('wProfile', 'wWins');
+  async function loadTrack() {
+    try {
+      const { record } = await api('/api/profile');
+      if (!record) { $('trackSummary').textContent = 'Not read yet. It is read on the next scan once Upwork is connected, or press Sync now.'; return; }
+      const wins = record.wins.length;
+      $('trackSummary').replaceChildren(
+        h('b', { text: record.title || 'No profile title' }), h('br'),
+        `${record.totalJobs ?? '–'} completed Upwork jobs · ${record.skills.length} skills · ${wins} past win${wins === 1 ? '' : 's'} used for scoring · ${record.hourlyRate ? `$${record.hourlyRate}/hr · ` : ''}synced ${ago(record.syncedAt)}`,
+        wins ? h('details', { class: 'small', style: 'margin-top:6px' }, h('summary', { text: 'Past wins' }),
+          h('ul', { style: 'margin:6px 0 0; padding-left:18px' }, record.wins.map((w) => h('li', { text: `${w.title}${w.feedback ? ` · “${w.feedback}”` : ''}` })))) : h('div', { class: 'small', text: 'No past wins found yet: until there are some, the score uses the profile fit only.' }));
+    } catch (e) { $('trackSummary').textContent = e.message; }
+  }
+  $('trackSync').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Reading Upwork…';
+    try { await api('/api/profile/sync', { method: 'POST' }); toast('Rafa\'s track record updated.'); } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Sync from Upwork now'; loadTrack();
+  });
   $('floorOn').addEventListener('change', (e) => { $('floor').disabled = !e.target.checked; });
   $('ctInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('ctInput', ct, drawCt); } });
 
@@ -711,6 +738,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     $('discOn').checked = s.disclosure.enabled; $('discLine').value = s.disclosure.line;
     $('bidHourly').value = s.bid.hourly; $('bidFixed').value = s.bid.fixed; $('profileRate').value = s.bid.profileRate;
     $('profileSummary').value = s.profileSummary;
+    $('wWins').value = s.scoreWeights.wins; $('wProfile').value = s.scoreWeights.profile;
+    loadTrack();
     $('loomUrl').value = s.loom.sourceUrl; $('loomDelete').value = s.loom.deleteAfterDays;
     $('scanEvery').value = String(s.scanEveryMinutes);
     $('capDaily').value = s.caps.daily; $('capHourly').value = s.caps.hourly; $('capGap').value = s.caps.gapMinutes;
@@ -734,6 +763,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       disclosure: { enabled: $('discOn').checked, line: $('discLine').value },
       bid: { hourly: $('bidHourly').value, fixed: $('bidFixed').value, profileRate: Number($('profileRate').value) },
       profileSummary: $('profileSummary').value,
+      scoreWeights: { wins: Number($('wWins').value), profile: Number($('wProfile').value) },
       loom: { sourceUrl: $('loomUrl').value.trim(), deleteAfterDays: Number($('loomDelete').value) },
       caps: {
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),

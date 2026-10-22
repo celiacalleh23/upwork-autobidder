@@ -68,6 +68,7 @@ npm test                   # vitest: filter rules, budget parsing, SSE, connect 
 | `src/oauth.ts` | Upwork sign-in: discovery, client registration, PKCE, token refresh, account + Connects check |
 | `src/mcp.ts` | Minimal MCP client (Streamable HTTP, JSON or SSE responses) |
 | `src/crypto.ts` | AES-GCM encryption at rest, keyed from `TOKEN_KEY` |
+| `src/pipeline/profile.ts` | Rafa's track record from Upwork (every other day), profile text for Claude, weighted score |
 | `src/pipeline/write.ts` | Writer: re-check on Upwork, Claude score, opening, preview, screening answers, queue |
 | `src/pipeline/letter.ts` | Pure: letter assembly from the template, opening/answer/letter checks, bid rules, contact-detail check |
 | `src/claude.ts` | Claude calls (Anthropic SDK, JSON-schema outputs); job text only inside a `<job_post>` data block |
@@ -94,6 +95,8 @@ All routes need a signed-in session (cookie from `/login`). Changes also need th
 | POST | `/api/scan` | Scan now (ignores the interval; refused while paused or not connected) |
 | POST | `/api/upwork/check` | Re-read the Upwork account, tool names and Connects balance |
 | POST | `/api/upwork/finish` | `{"url":"http://127.0.0.1:53682/upwork-callback?code=…&state=…"}`: finish the sign-in with the pasted address |
+| GET | `/api/profile` | Rafa's track record and the profile text Claude sees |
+| POST | `/api/profile/sync` | Re-read Rafa's Upwork profile and past wins now |
 | POST | `/api/upwork/disconnect` | Forget the Upwork sign-in |
 | GET | `/oauth/upwork/start` | Starts the Upwork sign-in (needs a session) |
 | GET | `/oauth/upwork/callback` | Local dev only: Upwork returns here; checked by the single-use OAuth state, not the cookie |

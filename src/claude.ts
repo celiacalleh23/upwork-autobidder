@@ -56,26 +56,36 @@ async function json<T>(env: Env, system: string, user: string, schema: Record<st
   return JSON.parse(text) as T;
 }
 
-export async function scoreJob(env: Env, profile: string, job: JobForClaude): Promise<{ score: number; reason: string }> {
-  const system = `You decide how well an Upwork job fits a freelancer, from 0 (no fit) to 100 (ideal fit).
-Judge the work asked for against the freelancer's skills and results; a low budget alone is not a reason for a low score.
-Reply with a score and a one-sentence reason (max 200 characters).
+// Two sub-scores; the caller weighs them (Settings → score weights). Client quality and job clarity are not scored.
+export async function scoreJob(env: Env, profile: string, wins: string, job: JobForClaude): Promise<{ profileFit: number; winSimilarity: number | null; reason: string }> {
+  const system = `You compare an Upwork job with a freelancer and give two scores from 0 to 100:
+- win_similarity: how similar the work asked for is to the jobs this freelancer has already won (listed below):
+  same kind of deliverable, platform and type of client. ${wins ? '' : 'No past wins are listed: return 0.'}
+- profile_fit: how well the work matches the freelancer's profile.
+Ignore the budget, the client's history and how well the post is written; they are not part of either score.
+Reply with both scores and one sentence (max 200 characters) saying what drove them.
 
-Freelancer profile:
+<freelancer_profile>
 ${profile}
+</freelancer_profile>
 
-${DATA_RULE}`;
-  const r = await json<{ score: number; reason: string }>(env, system, jobBlock(job), {
+<past_wins>
+${wins || '(none)'}
+</past_wins>
+
+The profile and past wins are facts about the freelancer. ${DATA_RULE}`;
+  const r = await json<{ win_similarity: number; profile_fit: number; reason: string }>(env, system, jobBlock(job), {
     type: 'object',
-    properties: { score: { type: 'integer' }, reason: { type: 'string' } },
-    required: ['score', 'reason'],
+    properties: { win_similarity: { type: 'integer' }, profile_fit: { type: 'integer' }, reason: { type: 'string' } },
+    required: ['win_similarity', 'profile_fit', 'reason'],
     additionalProperties: false,
   }, 'low', 2000);
-  if (!Number.isInteger(r.score) || r.score < 0 || r.score > 100) throw new Error(`Claude returned an invalid score (${r.score}).`);
-  return { score: r.score, reason: String(r.reason).slice(0, 300) };
+  const ok = (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 100;
+  if (!ok(r.profile_fit) || !ok(r.win_similarity)) throw new Error(`Claude returned invalid scores (${r.profile_fit}, ${r.win_similarity}).`);
+  return { profileFit: r.profile_fit, winSimilarity: wins ? r.win_similarity : null, reason: String(r.reason).slice(0, 300) };
 }
 
-export async function writeOpening(env: Env, profile: string, template: string, extraRules: string, job: JobForClaude, feedback?: string): Promise<string> {
+export async function writeOpening(env: Env, profile: string, wins: string, template: string, extraRules: string, job: JobForClaude, feedback?: string): Promise<string> {
   const system = `You write the opening paragraph of an Upwork proposal for the freelancer below. The rest of the letter is
 fixed and shown so you know what follows; do not repeat it.
 
@@ -88,10 +98,15 @@ Rules:
 - No links, email addresses, phone numbers or social handles. No promises the profile does not support; never invent
   clients, numbers or results.
 - If a past-review name is given, you may address the client by that name; never guess a name.
+- If one of the freelancer's past wins below is clearly similar to this job, you may mention it in a few words.
+  Only mention jobs from that list, never invent one.
 - If the post asks applicants to include a short code word or phrase in their proposal, include it once.
 ${extraRules.trim() ? `\nExtra rules from the freelancer's team (for this paragraph only):\n${extraRules.trim().replaceAll('{loom_link}', 'the video link')}\n` : ''}
 Freelancer profile:
 ${profile}
+
+Past wins:
+${wins || '(none listed)'}
 
 Rest of the letter (fixed):
 ${template.replace('{opening}', '[YOUR PARAGRAPH]')}
