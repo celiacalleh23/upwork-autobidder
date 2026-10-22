@@ -239,9 +239,12 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     <section class="panel" id="acctPanel" aria-labelledby="aH">
       <div class="row-head">
         <h2 id="aH">Rafa's Upwork account <span class="small muted" id="acctWhen"></span></h2>
-        <div class="tools"><button type="button" class="btn outline" id="acctRefresh">Refresh from Upwork</button></div>
+        <div class="tools">
+          <label class="small muted" for="acctDays">Period</label>
+          <select id="acctDays"><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select>
+          <button type="button" class="btn outline" id="acctRefresh">Refresh from Upwork</button></div>
       </div>
-      <div id="acctBody"><p class="small muted">Not read yet. Press Refresh to read the last 30 days from Upwork (read-only).</p></div>
+      <div id="acctBody"><p class="small muted">Not read yet. Pick a period and press Refresh to read it from Upwork (read-only).</p></div>
     </section>
 
     <section class="panel" id="jobs" aria-labelledby="jH">
@@ -698,6 +701,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   function renderAccount(st) {
     if (!st) return;
     $('acctWhen').textContent = `· last ${st.windowDays} days · read ${ago(st.at)}`;
+    $('acctDays').value = String(st.windowDays);
     const P = st.proposals;
     const sentKeys = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired'];
     const sent = sentKeys.reduce((t, k) => t + P[k].n, 0);
@@ -712,7 +716,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`),
         stat('Offers or hires', fmtNum(offers), `${pct(offers, sent)} of proposals sent`),
         stat('Contracts', `${cnt(st.contracts.active)} active`, `${cnt(st.contracts.closed)} closed · ${st.profile.totalJobs ?? '–'} completed jobs in total`),
-        stat('Connects balance', fmtNum(st.connects.balance), `${fmtNum(st.connects.received)} received in ${st.windowDays} days`)),
+        stat('Connects balance', fmtNum(st.connects.balance), `${fmtNum(st.connects.received)} received in ${st.windowDays} days${st.connects.applications.capped ? ' (history read in part)' : ''}`)),
       h('div', { class: 'tablewrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', { text: 'Viewed by client' }))),
         h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', { text: labels[k] }), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
@@ -721,7 +725,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
   async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }
   $('acctRefresh').addEventListener('click', async (ev) => {
     const b = ev.currentTarget; b.disabled = true; b.textContent = 'Reading Upwork…';
-    try { renderAccount((await api('/api/account-stats', { method: 'POST' })).stats); toast('Account figures updated.'); } catch (e) { toast(e.message, true); }
+    try { renderAccount((await api('/api/account-stats', { method: 'POST', body: { days: Number($('acctDays').value) } })).stats); toast('Account figures updated.'); } catch (e) { toast(e.message, true); }
     b.disabled = false; b.textContent = 'Refresh from Upwork';
   });
   loadAccount();

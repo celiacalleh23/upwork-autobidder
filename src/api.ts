@@ -132,7 +132,8 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const state = await loadState(env);
       if (!state.upwork.connected) return fail('Connect Upwork first', 409);
       try {
-        return json({ stats: await refreshAccountStats(env) });
+        const body = await readJson(req).catch(() => ({} as Record<string, unknown>));
+        return json({ stats: await refreshAccountStats(env, Number(body.days) || 30) });
       } catch (e) {
         console.error('account stats failed', e instanceof Error ? e.message : e);
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);

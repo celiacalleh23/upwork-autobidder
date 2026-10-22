@@ -7,7 +7,7 @@ import { loadState, type Env } from '../settings';
 // clients viewed them, contracts, completed jobs and Connects spent. Read-only, small pages, capped so one refresh stays
 // well under the Workers subrequest limit; capped counts are shown as "N+".
 
-const WINDOW_DAYS = 30;
+export const WINDOWS = [30, 90, 365] as const;
 const PAGES_PER_STATUS = 3; // 10 per page
 const STATUSES = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired', 'Activated'] as const;
 
@@ -30,6 +30,8 @@ async function countProposals(client: McpClient, tool: string, org: string, stat
     const r = await client.callTool(tool, { action: 'list', org_uid: org, params: { status, limit: 10, sort_field: 'CREATEDDATETIME', sort_order: 'DESC', ...(cursor ? { cursor } : {}) } });
     const edges = findKey(r, 'edges') ?? findKey(r, 'proposals') ?? [];
     const rows = Array.isArray(edges) ? edges.map((e) => findKey(e, 'node') ?? e) : [];
+    // An empty page ends the list, even if Upwork still reports a next page (seen on Rafa's account, Oct 21).
+    if (!rows.length) return { n, viewed, capped: false };
     let older = false;
     for (const row of rows) {
       const created = findKey(row, 'createdDateTime') ?? findKey(row, 'created');
@@ -80,7 +82,8 @@ async function connectsHistory(client: McpClient, tool: string, org: string, cut
   return out;
 }
 
-export async function refreshAccountStats(env: Env): Promise<AccountStats> {
+export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS[0]): Promise<AccountStats> {
+  const days = (WINDOWS as readonly number[]).includes(windowDays) ? windowDays : WINDOWS[0];
   const state = await loadState(env);
   const org = state.upwork.orgUid;
   const tools = state.upwork.toolNames;
@@ -89,7 +92,7 @@ export async function refreshAccountStats(env: Env): Promise<AccountStats> {
   const names = await client.listTools();
   const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
   const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
-  const cutoff = Date.now() - WINDOW_DAYS * 86400_000;
+  const cutoff = Date.now() - days * 86400_000;
 
   const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
   const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
@@ -105,7 +108,7 @@ export async function refreshAccountStats(env: Env): Promise<AccountStats> {
 
   const stats: AccountStats = {
     at: new Date().toISOString(),
-    windowDays: WINDOW_DAYS,
+    windowDays: days,
     profile: {
       title: String(findKey(findKey(profile, 'personalData'), 'title') ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim(),
       totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
