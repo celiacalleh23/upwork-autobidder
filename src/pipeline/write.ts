@@ -8,7 +8,7 @@ import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, ty
 import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
 
 // What Claude knows about Rafa for this run (built once per run from his Upwork track record, the letter and Siv's notes).
-interface Who { profile: string; wins: string; upworkRate: number | null }
+interface Who { profile: string; wins: string }
 
 // Writer (M4): takes jobs that passed the filters ('matched'), re-checks them on Upwork, scores them with Claude,
 // writes the opening paragraph into Siv's template, reads screening questions from a preview (nothing is sent) and
@@ -101,8 +101,8 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const sc: Scores = { score, win: winSimilarity, profile: profileFit };
   if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); return 'lowScore'; }
 
-  // Rafa's Upwork rate stands in when Settings has none (used for hourly jobs that list no rate).
-  const bid = computeBid(job.job_type, job.budget, s.bid.profileRate > 0 || !who.upworkRate ? s : { ...s, bid: { ...s.bid, profileRate: who.upworkRate } });
+  // Rafa's $/hr on Upwork is deliberately not used (Celia, Oct 22): only the rate set in Settings.
+  const bid = computeBid(job.job_type, job.budget, s);
   if (bid === null) {
     await setJob(env, job.id, 'error', `No bid amount: the job lists no rate. Set Rafa's hourly rate in Settings → Bids.`, sc); return 'errors';
   }
@@ -167,7 +167,7 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
     if (syncDue(state.trackRecordSyncedAt)) {
       record = await syncTrackRecord(env).catch((e) => { console.error('track record sync failed', errText(e)); summary.note = `Upwork profile not refreshed: ${errText(e)}`; return record; });
     }
-    const who: Who = { profile: profileForClaude(record, s), wins: winsForClaude(record), upworkRate: record?.hourlyRate ?? null };
+    const who: Who = { profile: profileForClaude(record, s), wins: winsForClaude(record) };
     const client = await upworkClient(env);
     const invited = await invitedJobIds(client, state).catch(() => new Set<string>());
     for (const job of jobs) {

@@ -764,7 +764,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       const wins = record.wins.length;
       $('trackSummary').replaceChildren(
         h('b', { text: record.title || 'No profile title' }), h('br'),
-        `${record.totalJobs ?? '–'} completed Upwork jobs · ${record.skills.length} skills · ${wins} past win${wins === 1 ? '' : 's'} used for scoring · ${record.hourlyRate ? `$${record.hourlyRate}/hr · ` : ''}synced ${ago(record.syncedAt)}`,
+        `${record.totalJobs ?? '–'} completed Upwork jobs · ${record.skills.length} skills · ${wins} past win${wins === 1 ? '' : 's'} used for scoring · synced ${ago(record.syncedAt)}`,
         wins ? h('details', { class: 'small', style: 'margin-top:6px' }, h('summary', { text: 'Past wins' }),
           h('ul', { style: 'margin:6px 0 0; padding-left:18px' }, record.wins.map((w) => h('li', { text: `${w.title}${w.feedback ? ` · “${w.feedback}”` : ''}` })))) : h('div', { class: 'small', text: 'No past wins found yet: until there are some, the score uses the profile fit only.' }));
     } catch (e) { $('trackSummary').textContent = e.message; }
