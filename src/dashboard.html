@@ -710,7 +710,8 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
     const offers = P.Offered.n + P.Hired.n;
     const stat = (label, value, sub) => h('div', { class: 'stat' }, h('span', { class: 'label', text: label }), h('span', { class: 'value', text: value }), sub ? h('span', { class: 'sub', text: sub }) : null);
     const labels = { Accepted: 'Submitted, open', Pending: 'Processing', Declined: 'Declined', Withdrawn: 'Withdrawn', Archived: 'Archived', Offered: 'Offer received', Hired: 'Hired', Activated: 'Invitation accepted' };
-    $('acctBody').replaceChildren(
+    // replaceChildren would print a null child as the text "null"; drop optional parts that are absent.
+    $('acctBody').replaceChildren(...[
       h('div', { class: 'stats' },
         stat('Applications (Connects history)', cnt(st.connects.applications), `${fmtNum(st.connects.spent)} Connects spent · ${fmtNum(st.connects.refunded)} refunded`),
         stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`),
@@ -721,7 +722,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
         h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', { text: 'Viewed by client' }))),
         h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', { text: labels[k] }), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
       st.unreadableDates ? h('p', { class: 'small', style: 'color:var(--warn-fg)', text: `${st.unreadableDates} proposal dates could not be read; they are counted as inside the period.` }) : null,
-      h('p', { class: 'small muted', text: 'Counts with + hit the read limit (30 per status); the real number is higher. All figures come straight from Upwork for this account.' }));
+      h('p', { class: 'small muted', text: 'Counts with + hit the read limit (30 per status); the real number is higher. All figures come straight from Upwork for this account.' })].filter(Boolean));
   }
   async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }
   $('acctRefresh').addEventListener('click', async (ev) => {
