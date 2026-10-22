@@ -720,6 +720,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
       h('div', { class: 'tablewrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', { text: 'Viewed by client' }))),
         h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', { text: labels[k] }), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
+      st.unreadableDates ? h('p', { class: 'small', style: 'color:var(--warn-fg)', text: `${st.unreadableDates} proposal dates could not be read; they are counted as inside the period.` }) : null,
       h('p', { class: 'small muted', text: 'Counts with + hit the read limit (30 per status); the real number is higher. All figures come straight from Upwork for this account.' }));
   }
   async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }

@@ -19,10 +19,30 @@ export interface AccountStats {
   proposals: Record<(typeof STATUSES)[number], Count & { viewed: number }>;
   contracts: { active: Count; closed: Count };
   connects: { balance: number | null; applications: Count; spent: number; refunded: number; received: number };
+  unreadableDates: number; // proposals whose date could not be read (counted as inside the period)
 }
 
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : null);
-const since = (iso: unknown, cutoff: number) => typeof iso === 'string' && Date.parse(iso) >= cutoff;
+// Upwork dates come as ISO text, epoch numbers (s or ms) or objects like {rawValue}; NaN when unreadable.
+export function parseWhen(v: unknown, depth = 0): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v > 1e12 ? v : v * 1000;
+  if (typeof v === 'string') {
+    if (/^\d{10,13}$/.test(v.trim())) return parseWhen(Number(v), depth);
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? t : NaN;
+  }
+  if (v && typeof v === 'object' && depth < 3) {
+    for (const k of ['rawValue', 'value', 'displayValue', 'dateTime', 'date']) {
+      const t = parseWhen((v as Record<string, unknown>)[k], depth + 1);
+      if (Number.isFinite(t)) return t;
+    }
+  }
+  return NaN;
+}
+// Unreadable dates count as inside the window, so a format change can only over-count, never hide proposals.
+const before = (v: unknown, cutoff: number) => { const t = parseWhen(v); return Number.isFinite(t) && t < cutoff; };
+
+const unreadable = { n: 0 };
 
 async function countProposals(client: McpClient, tool: string, org: string, status: string, cutoff: number): Promise<Count & { viewed: number }> {
   let n = 0, viewed = 0, cursor: string | undefined;
@@ -35,7 +55,8 @@ async function countProposals(client: McpClient, tool: string, org: string, stat
     let older = false;
     for (const row of rows) {
       const created = findKey(row, 'createdDateTime') ?? findKey(row, 'created');
-      if (created !== undefined && !since(created, cutoff)) { older = true; break; }
+      if (before(created, cutoff)) { older = true; break; }
+      if (!Number.isFinite(parseWhen(created))) unreadable.n++;
       n++;
       if (findKey(row, 'viewedByClient') === true) viewed++;
     }
@@ -67,10 +88,15 @@ async function connectsHistory(client: McpClient, tool: string, org: string, cut
     const tx = findKey(r, 'transactions');
     let older = false;
     for (const t of Array.isArray(tx) ? tx : []) {
-      if (!since(findKey(t, 'createdDateTime'), cutoff)) { older = true; break; }
+      if (before(findKey(t, 'createdDateTime'), cutoff)) { older = true; break; }
       const amount = num(findKey(findKey(t, 'amount'), 'rawValue')) ?? 0;
       const type = String(findKey(t, 'transactionType') ?? '');
-      if (/spent/i.test(type)) { out.spent += -amount > 0 ? -amount : amount; if (/application/i.test(String(findKey(t, 'reason') ?? ''))) out.applications.n++; }
+      if (/spent/i.test(type)) {
+        out.spent += Math.abs(amount);
+        // Connects spent on a job are an application (or its boost), whatever wording Upwork uses for the reason.
+        const job = findKey(t, 'jobPost');
+        if ((job && typeof job === 'object') || /appl|proposal/i.test(String(findKey(t, 'reason') ?? ''))) out.applications.n++;
+      }
       else if (/refund/i.test(type)) out.refunded += amount;
       else if (/receiv|purchas|bought/i.test(type)) out.received += amount;
     }
@@ -93,6 +119,7 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
   const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
   const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
   const cutoff = Date.now() - days * 86400_000;
+  unreadable.n = 0;
 
   const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
   const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
@@ -116,6 +143,7 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
     proposals,
     contracts,
     connects: connects ?? { balance: state.connectsBalance, applications: { n: 0, capped: false }, spent: 0, refunded: 0, received: 0 },
+    unreadableDates: unreadable.n,
   };
   await putKv(env, 'account_stats', JSON.stringify(stats));
   return stats;
