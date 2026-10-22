@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences } from '../src/pipeline/letter';
+import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences, swapLoomLink } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const s = (bid: Partial<Settings['bid']> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0, ...bid } });
@@ -98,5 +98,14 @@ describe('sentence limit', () => {
   it('rejects openings over 3 sentences', () => {
     expect(checkOpening(`${OPENING} Second one here. Third one here. Fourth one here.`)).toBe('the opening has 4 sentences (max 3)');
     expect(checkOpening(`${OPENING} Second one here.`)).toBeNull();
+  });
+});
+
+describe('swapLoomLink', () => {
+  it('replaces any Loom share link with the current video, leaving other links alone', () => {
+    const NEW = 'https://www.loom.com/share/eea7d413d42f4c1ebb726c188f54ea74';
+    const letter = 'Hi,\n\nLoom: https://www.loom.com/share/de64065f88f648be910277062a18e601?sid=abc\n\nhttps://miro.com/app/board/uXjVJnINQFw=/';
+    expect(swapLoomLink(letter, NEW)).toBe(`Hi,\n\nLoom: ${NEW}\n\nhttps://miro.com/app/board/uXjVJnINQFw=/`);
+    expect(swapLoomLink('No video here.', NEW)).toBe('No video here.');
   });
 });

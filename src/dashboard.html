@@ -374,6 +374,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="grid">
         <div class="field" style="grid-column:1/-1"><label for="loomUrl">Source video link</label><input type="url" id="loomUrl" placeholder="https://www.loom.com/share/…"><span class="hint">Must be recorded from the connected Loom account; Loom only lets the owner duplicate a video.</span></div>
         <div class="field"><label for="loomDelete">Delete copies after (days)</label><input type="number" id="loomDelete" min="7" max="365"></div>
+        <div class="field"><span class="lbl">Letters already in the queue</span><button type="button" class="btn outline" id="relinkLoom">Update the link in queued letters</button><span class="hint">Puts the saved video link in every proposal waiting for review or approved. Sent ones are never changed. Saving a new link here does this by itself.</span></div>
       </div>
       <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div></div><span class="chip warn" id="loomChip">Connect on the setup call</span></div>
     </section>
@@ -789,6 +790,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   $('exInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('exInput', ex, drawEx); } });
   $('ctAdd').addEventListener('click', () => addTag('ctInput', ct, drawCt));
   $('maxConnectsOn').addEventListener('change', (e) => { $('maxConnects').disabled = !e.target.checked; });
+  $('relinkLoom').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true;
+    try { const r = await api('/api/proposals/relink-loom', { method: 'POST' }); toast(r.updated ? `Updated the Loom link in ${r.updated} letter${r.updated === 1 ? '' : 's'}.` : 'All queued letters already use this link.'); loadQueue(); }
+    catch (e) { toast(e.message, true); }
+    b.disabled = false;
+  });
   $('sendOn').addEventListener('change', (e) => {
     if (e.target.checked && !confirm('Turn sending on? Approved proposals will be submitted to Upwork and spend Rafa\'s Connects. Press Save changes to apply.')) e.target.checked = false;
   });

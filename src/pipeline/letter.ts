@@ -53,6 +53,11 @@ export function assembleLetter(template: string, opening: string, loomUrl: strin
   return letter.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Swap every Loom share link in a letter for the current source video (until M5 makes one copy per job).
+export function swapLoomLink(letter: string, loomUrl: string): string {
+  return letter.replace(/https:\/\/(?:www\.)?loom\.com\/share\/[A-Za-z0-9]+(?:\?[^\s]*)?/g, loomUrl);
+}
+
 export function checkLetter(letter: string, loomUrl: string | null): string | null {
   if (letter.length > MAX_LETTER) return `the letter is longer than ${MAX_LETTER} characters (${letter.length})`;
   const withoutLoom = loomUrl ? letter.replaceAll(loomUrl, '') : letter;

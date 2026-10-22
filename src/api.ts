@@ -4,7 +4,7 @@ import {
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
 import { recheckMatched, runScan } from './pipeline/scan';
-import { contactDetailsIn } from './pipeline/letter';
+import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats } from './pipeline/stats';
@@ -74,10 +74,19 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
     if (path === '/api/settings' && method === 'GET') return json(await loadSettings(env));
     if (path === '/api/settings' && method === 'PUT') {
+      const before = await loadSettings(env);
       const s = validateSettings(await readJson(req));
       await saveSettings(env, s);
       await recheckMatched(env, s);
+      // A new source video also goes into letters that have not been sent yet.
+      if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
       return json(s);
+    }
+
+    if (path === '/api/proposals/relink-loom' && method === 'POST') {
+      const s = await loadSettings(env);
+      if (!s.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
+      return json({ updated: await relinkQueued(env, s.loom.sourceUrl) });
     }
 
     if (path === '/api/mode' && method === 'POST') {
@@ -248,6 +257,18 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     console.error(e);
     return fail('Something went wrong on the server. Check the Worker logs.', 500);
   }
+}
+
+// Pending and approved proposals only: anything sending or sent keeps the letter Upwork has.
+async function relinkQueued(env: Env, loomUrl: string): Promise<number> {
+  const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status IN ('pending', 'approved') AND is_example = 0")
+    .all<{ id: number; cover_letter: string }>();
+  const updates = results.flatMap((r) => {
+    const next = swapLoomLink(r.cover_letter, loomUrl);
+    return next === r.cover_letter ? [] : [env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_url = ? WHERE id = ? AND status IN ('pending', 'approved')").bind(next, loomUrl, r.id)];
+  });
+  if (updates.length) await env.DB.batch(updates);
+  return updates.length;
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown>> {
