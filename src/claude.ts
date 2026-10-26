@@ -98,21 +98,26 @@ ${DATA_RULE}`;
 }
 
 export async function writeOpening(env: Env, profile: string, wins: string, template: string, extraRules: string, job: JobForClaude, feedback?: string): Promise<string> {
-  const system = `You write the opening paragraph of an Upwork proposal for the freelancer below. The rest of the letter is
-fixed and shown so you know what follows; do not repeat it.
+  const system = `You write the one personal sentence that opens an Upwork proposal for the freelancer below. The rest of
+the letter is fixed and shown so you know what follows; do not repeat it.
 
-Rules:
-- 2 or 3 sentences, plain text, in English, max 450 characters.
-- Speak directly to this client's specific need from the job post; show you read it.
+The client should feel a person actually read their post. So:
+- Exactly ONE sentence, plain text, in English, at most 35 words.
+- Name one concrete detail only this post has: their product or store type, the platform they mentioned, the
+  specific problem or goal they described (for example their abandoned carts, a migration from Mailchimp, a launch
+  date, a weekly campaign cadence). Then say plainly what you would do about it first.
+- Write like a busy expert typing to one client: specific, calm, conversational. Short words.
+- Do not start with "I". No greeting (the letter already starts with "Hi there,") and no sign-off.
+- Avoid what makes text read as AI-written: no em dashes, no colons or lists, no rhetorical questions, no
+  exclamation marks, and none of these words or phrases: "I noticed", "I came across", "I'd love to", "excited",
+  "passionate", "leverage", "seamless", "elevate", "tailored", "robust", "unlock", "take it to the next level",
+  "game-changer", "in today's", "look no further", "perfect fit", "dive in".
 - Do not repeat what the fixed part of the letter already says: no years of experience, certifications, revenue
-  figures or percentages. The fixed part right after your paragraph covers those.
-- No greeting (the letter already starts with "Hi there,") and no sign-off.
+  figures or percentages.
 - No links, email addresses, phone numbers or social handles. No promises the profile does not support; never invent
   clients, numbers or results.
 - If a past-review name is given, you may address the client by that name; never guess a name.
-- If one of the freelancer's past wins below is clearly similar to this job, you may mention it in a few words.
-  Only mention jobs from that list, never invent one.
-- If the post asks applicants to include a short code word or phrase in their proposal, include it once.
+- If the post asks applicants to include a short code word or phrase in their proposal, include it.
 ${extraRules.trim() ? `\nExtra rules from the freelancer's team (for this paragraph only):\n${extraRules.trim().replaceAll('{loom_link}', 'the video link')}\n` : ''}
 Freelancer profile:
 ${profile}
@@ -121,15 +126,16 @@ Past wins:
 ${wins || '(none listed)'}
 
 Rest of the letter (fixed):
-${template.replace('{opening}', '[YOUR PARAGRAPH]')}
+${template.replace('{opening}', '[YOUR SENTENCE]')}
 
 ${WHO}
 ${DATA_RULE}`;
-  const user = feedback ? `${jobBlock(job)}\n\nYour previous paragraph was rejected because ${feedback}. Write a new one.` : jobBlock(job);
+  const user = feedback ? `${jobBlock(job)}\n\nYour previous sentence was rejected because ${feedback}. Write a new one.` : jobBlock(job);
   const r = await json<{ opening: string }>(env, system, user, {
     type: 'object', properties: { opening: { type: 'string' } }, required: ['opening'], additionalProperties: false,
   }, 'medium', 4000);
-  return String(r.opening).trim();
+  // Em dashes read as AI-written (Siv, Oct 27); turn any that slip through into commas.
+  return String(r.opening).trim().replace(/\s*[—–]\s*/g, ', ');
 }
 
 export async function answerQuestions(env: Env, profile: string, job: JobForClaude, questions: string[], feedback?: string): Promise<{ question: string; answer: string }[]> {

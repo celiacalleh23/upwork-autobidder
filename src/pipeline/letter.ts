@@ -4,8 +4,8 @@ import { parseBudget } from './filters';
 // Pure letter and bid logic: no network. Everything Claude writes passes through these checks before it is stored.
 
 export const MAX_LETTER = 5000;
-export const MAX_OPENING = 600;
-export const MAX_OPENING_SENTENCES = 3;
+export const MAX_OPENING = 300; // one sentence (Siv, Oct 27)
+export const MAX_OPENING_SENTENCES = 1;
 
 // Sentence ends: . ! ? followed by a space or the end (not inside numbers like 4.5 or "e.g. ").
 export function countSentences(text: string): number {
@@ -31,13 +31,13 @@ export function problemsInWritten(text: string): string | null {
 
 export function checkOpening(opening: string): string | null {
   const t = opening.trim();
-  if (t.length < 40) return 'the opening is too short';
+  if (t.length < 25) return 'the opening is too short';
   if (t.length > MAX_OPENING) return `the opening is longer than ${MAX_OPENING} characters`;
   if (/\{[a-z_]+\}/i.test(t)) return 'the opening contains a template placeholder';
-  const n = countSentences(t);
-  if (n > MAX_OPENING_SENTENCES) return `the opening has ${n} sentences (max ${MAX_OPENING_SENTENCES})`;
   const p = problemsInWritten(t);
-  return p ? `the opening contains ${p}` : null;
+  if (p) return `the opening contains ${p}`;
+  const n = countSentences(t);
+  return n > MAX_OPENING_SENTENCES ? `the opening has ${n} sentences (max ${MAX_OPENING_SENTENCES})` : null;
 }
 
 // Template placeholders: {opening} is Claude's paragraph; {loom_link} is the job's Loom copy (M5) or, until then, the
@@ -45,7 +45,10 @@ export function checkOpening(opening: string): string | null {
 // The AI disclosure line (Upwork Terms §9.7), when Siv turns it on, goes at the very end.
 export function assembleLetter(template: string, opening: string, loomUrl: string | null, disclosure: string | null = null): string {
   const base = template.trim() || '{opening}';
-  let letter = base.includes('{opening}') ? base.replace('{opening}', opening.trim()) : `${opening.trim()}\n\n${base}`;
+  // An empty opening (Settings → personal sentence off) leaves the template as is, minus the placeholder line.
+  let letter = !opening.trim()
+    ? base.split('\n').filter((line) => line.trim() !== '{opening}').join('\n').replace('{opening}', '')
+    : base.includes('{opening}') ? base.replace('{opening}', opening.trim()) : `${opening.trim()}\n\n${base}`;
   letter = loomUrl
     ? letter.replaceAll('{loom_link}', loomUrl)
     : letter.split('\n').filter((line) => !line.includes('{loom_link}')).join('\n');

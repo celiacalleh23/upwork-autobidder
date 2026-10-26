@@ -131,6 +131,7 @@ table{width:100%; min-width:760px; border-collapse:collapse; font-size:14px}
 th{text-align:left; font-size:12.5px; font-weight:500; color:var(--muted); padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap}
 td{padding:11px 12px; border-bottom:1px solid var(--line-soft); vertical-align:top}
 td.when{font-family:var(--font-mono); font-size:13px; white-space:nowrap}
+.stat .money{font-weight:600; color:var(--fg)}
 .sub-time{display:block; color:var(--muted); font-size:12px; margin-top:2px}
 td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 .st-cell{display:flex; flex-wrap:wrap; align-items:center; gap:6px}
@@ -232,7 +233,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="stat"><span class="label">Jobs scanned today<button class="info-btn" type="button" aria-label="What this means" data-tip="New Upwork jobs the tool looked at today. Matched means the job passed your filters (keyword, client country) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
       <div class="stat"><span class="label">Proposals sent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
       <div class="stat"><span class="label">Waiting for review<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
-      <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today. The line below shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
+      <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today, and what they cost at $0.15 each. The last line shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub money" id="sConnectsUsd">$0.00</span><span class="sub" id="sFloor">Stops below 20</span></div>
       <div class="stat"><span class="label">Failed today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals Upwork refused today, for example because the job closed or Rafa already applied. The reason is in the Activity log.">i</button></span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
     </section>
 
@@ -369,8 +370,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <div class="tools"><button type="button" class="btn outline" id="trackSync">Sync from Upwork now</button><span class="hint">Refreshes by itself every other day: profile, completed jobs with client feedback, and proposals that got an offer or a hire.</span></div>
       </div>
       <div class="field"><label for="profileSummary">Notes about Rafa (optional)</label><textarea id="profileSummary" rows="5" maxlength="3000" placeholder="Anything Upwork doesn't show: specialties, industries, the kind of work she wants more or less of."></textarea><span class="hint">Claude uses her Upwork profile, the claims in the template below and these notes to score jobs and write the opening. It never claims more than they say.</span></div>
-      <div class="field"><label for="letterTemplate">Letter template</label><textarea id="letterTemplate" rows="12" placeholder="Hi there,&#10;&#10;{opening}&#10;&#10;I recorded a quick Loom for you…: {loom_link}&#10;…"></textarea><span class="hint">Write <b>{opening}</b> where Claude's 2–3 tailored sentences go and <b>{loom_link}</b> where the video link goes. Everything else is sent exactly as written.</span></div>
-      <div class="field"><label for="letterRules">Extra rules for the opening (optional)</label><textarea id="letterRules" rows="4"></textarea><span class="hint">Style rules for Claude's sentences only, one per line. No links or contact details are ever allowed.</span></div>
+      <div class="field"><label for="letterTemplate">Letter template</label><textarea id="letterTemplate" rows="12" placeholder="Hi there,&#10;&#10;{opening}&#10;&#10;I recorded a quick Loom for you…: {loom_link}&#10;…"></textarea><span class="hint">Write <b>{opening}</b> where Claude's one personal sentence goes and <b>{loom_link}</b> where the video link goes. Everything else is sent exactly as written.</span></div>
+      <div class="field"><label for="letterOpening">Personal sentence</label><select id="letterOpening"><option value="sentence">One sentence written for each job</option><option value="off">Off: go straight to the Loom line</option></select><span class="hint">One short sentence that shows the job post was read. Off removes the {opening} line from new letters.</span></div>
+      <div class="field"><label for="letterRules">Extra rules for the personal sentence (optional)</label><textarea id="letterRules" rows="4"></textarea><span class="hint">Style rules for Claude's sentences only, one per line. No links or contact details are ever allowed.</span></div>
       <label class="check" for="discOn"><input type="checkbox" id="discOn"><span>Add an AI disclosure line to every letter</span></label>
       <div class="field"><label for="discLine">Disclosure line</label><input type="text" id="discLine" maxlength="200"></div>
       <p class="note">Upwork's terms (section 9.7) ask for AI use to be disclosed when a client would reasonably assume a person wrote the text. Leaving this off is your decision and adds account risk.</p>
@@ -508,6 +510,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const t = $('toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : ''); t.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 7000 : 4000);
   }
+  // Upwork sells Connects at $0.15 each (Oct 2026); keep in step with CONNECT_USD in src/pipeline/report.ts.
+  const CONNECT_USD = 0.15;
+  const usd = (connects) => `$${((connects || 0) * CONNECT_USD).toFixed(2)}`;
   const fmtNum = (n) => (n === null || n === undefined ? '–' : Number(n).toLocaleString('en-US'));
   function ago(iso) {
     if (!iso) return '–';
@@ -582,6 +587,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('sWaiting').textContent = fmtNum(t.waiting);
     $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
     $('sConnects').textContent = fmtNum(t.connectsSpent);
+    $('sConnectsUsd').textContent = `${usd(t.connectsSpent)} at $${CONNECT_USD.toFixed(2)} per Connect`;
     // The 250 is an alert (email, sending continues), not a floor (Siv, Oct 21); show whichever applies.
     $('sFloor').textContent = [c.connectsFloor ? `Stops below ${c.connectsFloor}` : null, s.connectsAlertBelow ? `Alert email below ${fmtNum(s.connectsAlertBelow)}` : null]
       .filter(Boolean).join(' · ') || 'No Connects floor or alert';
@@ -949,7 +955,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('titleOnly').checked = s.titleOnly; $('verifiedOnly').checked = s.verifiedOnly;
     $('minFixedBudget').value = s.minFixedBudget; $('minHourlyRate').value = s.minHourlyRate;
     $('maxExistingProposals').value = String(s.maxExistingProposals); $('minScore').value = s.minScore;
-    $('letterTemplate').value = s.letter.template; $('letterRules').value = s.letter.rules;
+    $('letterTemplate').value = s.letter.template; $('letterRules').value = s.letter.rules; $('letterOpening').value = s.letter.opening || 'sentence';
     $('discOn').checked = s.disclosure.enabled; $('discLine').value = s.disclosure.line;
     $('bidHourly').value = s.bid.hourly; $('bidFixed').value = s.bid.fixed; $('profileRate').value = s.bid.profileRate;
     $('profileSummary').value = s.profileSummary;
@@ -978,7 +984,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       keywords: kw, titleOnly: $('titleOnly').checked, exclude: ex, allowedCountries: ct,
       minFixedBudget: Number($('minFixedBudget').value), minHourlyRate: Number($('minHourlyRate').value),
       verifiedOnly: $('verifiedOnly').checked, maxExistingProposals: Number($('maxExistingProposals').value), minScore: Number($('minScore').value),
-      letter: { template: $('letterTemplate').value, rules: $('letterRules').value },
+      letter: { template: $('letterTemplate').value, rules: $('letterRules').value, opening: $('letterOpening').value },
       disclosure: { enabled: $('discOn').checked, line: $('discLine').value },
       bid: { hourly: $('bidHourly').value, fixed: $('bidFixed').value, profileRate: Number($('profileRate').value) },
       profileSummary: $('profileSummary').value,

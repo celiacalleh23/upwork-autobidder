@@ -44,8 +44,10 @@ describe('buildReport', () => {
   };
   it('sums Connects, shows speed and escapes job titles in HTML', () => {
     const r = buildReport(base);
-    expect(r.subject).toBe('Upwork report Mon, Oct 26: 2 sent, 20 Connects');
-    expect(r.text).toContain('Sent today: 2 · Connects spent: 20');
+    expect(r.subject).toBe('Upwork report Mon, Oct 26: 2 sent, 20 Connects ($3.00)');
+    expect(r.text).toContain('Sent today: 2 · Connects spent: 20 ($3.00 at $0.15 each)');
+    expect(r.text).toContain('8 Connects ($1.20)');
+    expect(r.html).toContain('$3.00');
     expect(r.text).toContain('10 h 38 min after posting');
     expect(r.text).toContain('Old job: Job closed on Upwork');
     expect(r.html).toContain('Klaviyo &lt;Expert&gt; Needed');

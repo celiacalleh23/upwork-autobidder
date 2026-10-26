@@ -18,6 +18,9 @@ export interface ReportData {
 }
 
 const LAST_KEY = 'report:lastDate';
+// Upwork sells Connects at $0.15 each (Oct 2026); the dashboard uses the same rate.
+export const CONNECT_USD = 0.15;
+const usd = (connects: number) => `$${(connects * CONNECT_USD).toFixed(2)}`;
 
 // "2026-10-26" and the hour (0–23) in the given time zone.
 export function localDay(timeZone: string, now = new Date()): { date: string; hour: number; label: string } {
@@ -46,18 +49,18 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
   const spent = d.sent.reduce((t, r) => t + (r.connects ?? 0), 0);
   const speeds = d.sent.map((r) => minutes(r.postedAt, r.submittedAt)).filter((m): m is number => m !== null).sort((a, b) => a - b);
   const median = speeds.length ? speeds[Math.floor(speeds.length / 2)] : null;
-  const subject = `Upwork report ${d.dateLabel}: ${d.sent.length} sent, ${spent} Connects`;
+  const subject = `Upwork report ${d.dateLabel}: ${d.sent.length} sent, ${spent} Connects (${usd(spent)})`;
   const status = [
     d.paused ? `PAUSED: ${d.paused}` : d.sendingEnabled ? 'Sending is on' : 'Sending is off',
     `Mode: ${d.mode === 'auto' ? 'Auto-submit' : 'Review first'}`,
     `Connects balance: ${d.balance ?? 'unknown'}${d.balance !== null && d.alertBelow && d.balance < d.alertBelow ? ` (below ${d.alertBelow}, buy more)` : ''}`,
     `Loom: ${d.loom.connected ? `connected${d.loom.expiresAt ? `, session valid until ${new Date(d.loom.expiresAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}` : 'NOT connected (letters use the source video)'}`,
   ];
-  const sentLines = d.sent.map((r) => `- ${time(r.submittedAt)} · ${r.title} · ${r.connects ?? '?'} Connects · bid $${r.bid ?? '?'}${r.jobType === 'hourly' ? '/hr' : ''} · ${durText(minutes(r.postedAt, r.submittedAt))} after posting${r.url ? `\n  ${r.url}` : ''}`);
+  const sentLines = d.sent.map((r) => `- ${time(r.submittedAt)} · ${r.title} · ${r.connects ?? '?'} Connects (${usd(r.connects ?? 0)}) · bid $${r.bid ?? '?'}${r.jobType === 'hourly' ? '/hr' : ''} · ${durText(minutes(r.postedAt, r.submittedAt))} after posting${r.url ? `\n  ${r.url}` : ''}`);
   const failLines = d.failed.map((r) => `- ${r.title}: ${r.error ?? r.status}`);
   const text = [
     `Upwork Auto-Bidder, ${d.dateLabel} (so far, ${time(d.now)})`, '',
-    `Sent today: ${d.sent.length} · Connects spent: ${spent}${median !== null ? ` · median speed: ${durText(median)} after posting` : ''}`,
+    `Sent today: ${d.sent.length} · Connects spent: ${spent} (${usd(spent)} at $${CONNECT_USD.toFixed(2)} each)${median !== null ? ` · median speed: ${durText(median)} after posting` : ''}`,
     `Jobs scanned: ${d.scanned} (${d.matched} matched) · waiting for review: ${d.waiting} · approved, sending soon: ${d.approved}`, '',
     ...status, '',
     d.sent.length ? 'Proposals sent:' : 'No proposals sent today.', ...sentLines,
@@ -66,18 +69,18 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
   ].join('\n');
 
   const cell = 'padding:8px 10px;border-bottom:1px solid #e5e7e3;vertical-align:top;font-size:14px';
-  const rows = d.sent.map((r) => `<tr><td style="${cell};white-space:nowrap">${esc(time(r.submittedAt))}</td><td style="${cell}">${r.url ? `<a href="${esc(r.url)}" style="color:#1F5F4F">${esc(r.title)}</a>` : esc(r.title)}${r.loomUrl ? `<br><a href="${esc(r.loomUrl)}" style="color:#5B615A;font-size:12px">Loom</a>` : ''}</td><td style="${cell};text-align:right">${r.connects ?? '–'}</td><td style="${cell};text-align:right;white-space:nowrap">$${r.bid ?? '–'}${r.jobType === 'hourly' ? '/hr' : ''}</td><td style="${cell};white-space:nowrap">${esc(durText(minutes(r.postedAt, r.submittedAt)))}</td></tr>`).join('');
-  const tile = (label: string, value: string) => `<td style="padding:12px 14px;border:1px solid #e5e7e3;border-radius:10px;background:#fff"><div style="font-size:12px;color:#5B615A">${esc(label)}</div><div style="font-size:22px;font-weight:700;margin-top:2px">${esc(value)}</div></td>`;
+  const rows = d.sent.map((r) => `<tr><td style="${cell};white-space:nowrap">${esc(time(r.submittedAt))}</td><td style="${cell}">${r.url ? `<a href="${esc(r.url)}" style="color:#1F5F4F">${esc(r.title)}</a>` : esc(r.title)}${r.loomUrl ? `<br><a href="${esc(r.loomUrl)}" style="color:#5B615A;font-size:12px">Loom</a>` : ''}</td><td style="${cell};text-align:right;white-space:nowrap">${r.connects ?? '–'}${r.connects ? `<br><span style="color:#5B615A;font-size:12px">${usd(r.connects)}</span>` : ''}</td><td style="${cell};text-align:right;white-space:nowrap">$${r.bid ?? '–'}${r.jobType === 'hourly' ? '/hr' : ''}</td><td style="${cell};white-space:nowrap">${esc(durText(minutes(r.postedAt, r.submittedAt)))}</td></tr>`).join('');
+  const tile = (label: string, value: string, sub = '') => `<td style="padding:12px 14px;border:1px solid #e5e7e3;border-radius:10px;background:#fff"><div style="font-size:12px;color:#5B615A">${esc(label)}</div><div style="font-size:22px;font-weight:700;margin-top:2px">${esc(value)}</div>${sub ? `<div style="font-size:13px;font-weight:600;margin-top:2px">${esc(sub)}</div>` : ''}</td>`;
   const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#16181D;background:#F3F4F2;padding:20px">
 <div style="max-width:680px;margin:0 auto">
 <h1 style="font-size:20px;margin:0 0 4px">Upwork report · ${esc(d.dateLabel)}</h1>
 <p style="margin:0 0 16px;color:#5B615A;font-size:14px">So far today, at ${esc(time(d.now))}${d.paused ? ` · <b style="color:#8A2A15">PAUSED: ${esc(d.paused)}</b>` : ''}</p>
-<table role="presentation" style="border-collapse:separate;border-spacing:8px;margin:0 -8px 8px"><tr>${tile('Sent today', String(d.sent.length))}${tile('Connects spent', String(spent))}${tile('Median speed', median === null ? '–' : durText(median))}${tile('Connects left', d.balance === null ? '–' : String(d.balance))}</tr></table>
+<table role="presentation" style="border-collapse:separate;border-spacing:8px;margin:0 -8px 8px"><tr>${tile('Sent today', String(d.sent.length))}${tile('Connects spent', String(spent), usd(spent))}${tile('Median speed', median === null ? '–' : durText(median))}${tile('Connects left', d.balance === null ? '–' : String(d.balance))}</tr></table>
 <p style="font-size:14px;margin:0 0 6px">Jobs scanned: <b>${d.scanned}</b> (${d.matched} matched) · Waiting for review: <b>${d.waiting}</b> · Approved, sending soon: <b>${d.approved}</b></p>
 <p style="font-size:14px;margin:0 0 16px;color:#5B615A">${status.map(esc).join(' · ')}</p>
 ${d.sent.length ? `<table style="border-collapse:collapse;width:100%;background:#fff;border:1px solid #e5e7e3;border-radius:10px"><thead><tr>${['Sent', 'Job', 'Connects', 'Bid', 'After posting'].map((h) => `<th style="${cell};text-align:left;font-size:12px;color:#5B615A">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>` : '<p style="font-size:14px">No proposals sent today.</p>'}
 ${d.failed.length ? `<h2 style="font-size:15px;margin:18px 0 6px">Needs a look</h2><ul style="margin:0;padding-left:18px;font-size:14px">${d.failed.map((r) => `<li>${esc(r.title)}: ${esc(r.error ?? r.status)}</li>`).join('')}</ul>` : ''}
-<p style="font-size:12px;color:#5B615A;margin-top:20px">Upwork Auto-Bidder · times in ${esc(d.timeZone)}</p>
+<p style="font-size:12px;color:#5B615A;margin-top:20px">Upwork Auto-Bidder · times in ${esc(d.timeZone)} · Connects at $${CONNECT_USD.toFixed(2)} each</p>
 </div></div>`;
   return { subject, text, html };
 }

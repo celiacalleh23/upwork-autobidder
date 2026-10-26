@@ -22,7 +22,7 @@ export interface Settings {
   allowedCountries: string[]; // client countries to bid for; empty = any
   maxExistingProposals: number; // 0 = no limit
   minScore: number;
-  letter: { template: string; rules: string };
+  letter: { template: string; rules: string; opening: 'sentence' | 'off' }; // opening: Claude's one personal sentence, or none
   disclosure: { enabled: boolean; line: string };
   bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10'; profileRate: number }; // profileRate: USD/hr, 0 = unset
   profileSummary: string; // Siv's notes about Rafa, added to her Upwork profile and cover letter for Claude
@@ -94,6 +94,7 @@ export const DEFAULT_SETTINGS: Settings = {
       "Open with the client's problem, not with \"I\".",
       'Mention one relevant result from the profile when it fits. Never invent numbers or clients.',
     ].join('\n'),
+    opening: 'sentence',
   },
   disclosure: { enabled: false, line: 'Drafted with AI assistance and reviewed by me.' },
   bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0 },
@@ -253,7 +254,7 @@ export function validateSettings(input: unknown): Settings {
     allowedCountries: list(i.allowedCountries, 'Client countries'),
     maxExistingProposals: num(i.maxExistingProposals, 0, 100, 'Maximum existing proposals'),
     minScore: num(i.minScore, 0, 100, 'Minimum match score'),
-    letter: { template: str(i.letter.template, 8000, 'Letter template'), rules: str(i.letter.rules, 4000, 'Letter rules') },
+    letter: { template: str(i.letter.template, 8000, 'Letter template'), rules: str(i.letter.rules, 4000, 'Letter rules'), opening: oneOf(i.letter.opening, ['sentence', 'off'] as const, 'Personal sentence') },
     disclosure: { enabled: bool(i.disclosure.enabled), line: str(i.disclosure.line, 200, 'Disclosure line') || DEFAULT_SETTINGS.disclosure.line },
     bid: {
       hourly: oneOf(i.bid.hourly, ['profile', 'client_max'] as const, 'Hourly bid'),

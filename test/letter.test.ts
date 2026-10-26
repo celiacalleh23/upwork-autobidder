@@ -45,7 +45,7 @@ describe('checkOpening', () => {
     expect(checkOpening(`${OPENING} Call +1 415 555 0100.`)).toBe('the opening contains a phone number');
     expect(checkOpening(`${OPENING} {loom_link}`)).toBe('the opening contains a template placeholder');
     expect(checkOpening('Too short.')).toBe('the opening is too short');
-    expect(checkOpening('a'.repeat(601))).toMatch(/longer than 600/);
+    expect(checkOpening('a'.repeat(301))).toMatch(/longer than 300/);
   });
 });
 
@@ -95,9 +95,18 @@ describe('sentence limit', () => {
     expect(countSentences(`${real} Let's talk.`)).toBe(4);
     expect(countSentences('Revenue grew 4.5x in Q2, e.g. from flows. That is the goal.')).toBe(2);
   });
-  it('rejects openings over 3 sentences', () => {
-    expect(checkOpening(`${OPENING} Second one here. Third one here. Fourth one here.`)).toBe('the opening has 4 sentences (max 3)');
-    expect(checkOpening(`${OPENING} Second one here.`)).toBeNull();
+  it('allows one sentence only (Siv, Oct 27)', () => {
+    expect(checkOpening(`${OPENING} Second one here.`)).toBe('the opening has 2 sentences (max 1)');
+    expect(checkOpening(OPENING)).toBeNull();
+  });
+});
+
+describe('personal sentence off', () => {
+  it('drops the {opening} line and keeps the rest word for word', () => {
+    const letter = assembleLetter(TEMPLATE, '', LOOM);
+    expect(letter.startsWith(`Hi there,\n\nI recorded a quick Loom for you`)).toBe(true);
+    expect(letter).not.toContain('{opening}');
+    expect(letter).toContain(LOOM);
   });
 });
 

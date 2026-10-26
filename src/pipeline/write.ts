@@ -102,9 +102,11 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
 
   const sourceUrl = s.loom.sourceUrl || null; // the letter is checked and previewed with the source video; the copy goes in last
   const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
-  let opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude);
-  let problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-  if (problem) {
+  // Settings → Personal sentence off: no Claude sentence, the letter is the template alone.
+  const withOpening = s.letter.opening !== 'off';
+  let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
+  let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+  if (problem && withOpening) {
     opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
     problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
   }
