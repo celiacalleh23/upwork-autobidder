@@ -74,6 +74,9 @@ p{margin:0}
 .status strong{color:var(--fg); font-weight:600}
 .dot{width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle}
 .stats{display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:14px}
+.info{display:inline-grid; place-items:center; width:17px; height:17px; margin-left:6px; padding:0; border:1px solid var(--line); border-radius:50%; background:transparent; color:var(--muted); font:600 11px/1 inherit; font-style:italic; font-family:Georgia, serif; cursor:pointer; vertical-align:1px}
+.info:hover, .info[aria-expanded="true"]{color:var(--fg); border-color:var(--muted)}
+.tip-pop{position:absolute; z-index:60; max-width:min(300px, calc(100vw - 32px)); background:var(--surface); color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.45; font-weight:400; box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .stat{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:4px; min-width:0}
 .stat .label{font-size:13px; color:var(--muted)}
 .stat .value{font-size:28px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.15}
@@ -216,18 +219,18 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
       <span>Last scan: <strong id="lastScan">–</strong></span>
       <span>Scans every <strong id="scanEvery">5</strong> min</span>
-      <span>Active hours: <strong id="activeHours">–</strong></span>
-      <span>Mode: <strong id="modeText">Review first</strong></span>
-      <span>Sending: <strong id="sendState">–</strong></span>
+      <span>Active hours: <strong id="activeHours">–</strong><button class="info" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day. Searching runs every 5 minutes either way.">i</button></span>
+      <span>Mode: <strong id="modeText">Review first</strong><button class="info" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically. Only Siv switches to Auto-submit.">i</button></span>
+      <span>Sending: <strong id="sendState">–</strong><button class="info" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
       <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
 
     <section class="stats" aria-label="Today">
-      <div class="stat"><span class="label">Jobs scanned today</span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
-      <div class="stat"><span class="label">Proposals sent today</span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
-      <div class="stat"><span class="label">Waiting for review</span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
-      <div class="stat"><span class="label">Connects spent today</span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
-      <div class="stat"><span class="label">Failed today</span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
+      <div class="stat"><span class="label">Jobs scanned today<button class="info" type="button" aria-label="What this means" data-tip="New Upwork jobs the tool looked at today. Matched means the job passed your filters (keyword, client country) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
+      <div class="stat"><span class="label">Proposals sent today<button class="info" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
+      <div class="stat"><span class="label">Waiting for review<button class="info" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
+      <div class="stat"><span class="label">Connects spent today<button class="info" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today. The line below shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
+      <div class="stat"><span class="label">Failed today<button class="info" type="button" aria-label="What this means" data-tip="Proposals Upwork refused today, for example because the job closed or Rafa already applied. The reason is in the Activity log.">i</button></span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
     </section>
 
     <div class="cols">
@@ -776,12 +779,31 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     b.disabled = false; b.textContent = 'Scan now'; refresh();
   });
 
+  // ---------- "i" explanations: click to open, click elsewhere or Esc to close ----------
+  function infoBtn(tip) { return tip ? h('button', { class: 'info', type: 'button', 'aria-label': 'What this means', 'data-tip': tip, text: 'i' }) : null; }
+  let tipEl = null, tipFor = null;
+  function closeTip() { if (tipEl) tipEl.remove(); if (tipFor) tipFor.setAttribute('aria-expanded', 'false'); tipEl = tipFor = null; }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.info');
+    if (!b) { if (tipEl && !tipEl.contains(e.target)) closeTip(); return; }
+    e.preventDefault(); e.stopPropagation();
+    const same = tipFor === b; closeTip(); if (same) return;
+    tipEl = h('div', { class: 'tip-pop', role: 'tooltip', id: 'tipPop', text: b.dataset.tip });
+    document.body.append(tipEl);
+    const r = b.getBoundingClientRect(), w = tipEl.offsetWidth;
+    tipEl.style.top = `${r.bottom + window.scrollY + 8}px`;
+    tipEl.style.left = `${Math.max(16, Math.min(r.left + window.scrollX - 12, window.scrollX + document.documentElement.clientWidth - w - 16))}px`;
+    tipFor = b; b.setAttribute('aria-expanded', 'true'); b.setAttribute('aria-describedby', 'tipPop');
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && tipEl) { const b = tipFor; closeTip(); b && b.focus(); } });
+  window.addEventListener('resize', closeTip);
+
   // ---------- Rafa's Upwork account ----------
   const cnt = (c) => `${fmtNum(c.n)}${c.capped ? '+' : ''}`;
   const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
-  function renderAccount(st) {
+  function renderAccount(st, partial) {
     if (!st) return;
-    $('acctWhen').textContent = `· last ${st.windowDays} days · read ${ago(st.at)}`;
+    $('acctWhen').textContent = partial ? `· last ${st.windowDays} days · counting…` : `· last ${st.windowDays} days · read ${ago(st.at)}`;
     $('acctDays').value = String(st.windowDays);
     const P = st.proposals;
     const sentKeys = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired'];
@@ -789,26 +811,48 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const capped = sentKeys.some((k) => P[k].capped);
     const viewed = sentKeys.reduce((t, k) => t + P[k].viewed, 0);
     const offers = P.Offered.n + P.Hired.n;
-    const stat = (label, value, sub) => h('div', { class: 'stat' }, h('span', { class: 'label', text: label }), h('span', { class: 'value', text: value }), sub ? h('span', { class: 'sub', text: sub }) : null);
+    const stat = (label, value, sub, tip) => h('div', { class: 'stat' }, h('span', { class: 'label' }, label, infoBtn(tip)), h('span', { class: 'value', text: value }), sub ? h('span', { class: 'sub', text: sub }) : null);
     const labels = { Accepted: 'Submitted, open', Pending: 'Processing', Declined: 'Declined', Withdrawn: 'Withdrawn', Archived: 'Archived', Offered: 'Offer received', Hired: 'Hired', Activated: 'Invitation accepted' };
+    const tips = {
+      Accepted: 'Sent and still open: the client has not hired, declined or closed the job yet.',
+      Pending: 'Upwork is still processing the proposal.',
+      Declined: 'The client declined the proposal.',
+      Withdrawn: 'Rafa withdrew the proposal.',
+      Archived: 'Moved to the archive by Upwork, usually because the job was filled or closed, or after a long time with no reply.',
+      Offered: 'The client sent Rafa an offer.',
+      Hired: 'The client hired Rafa.',
+      Activated: 'Proposals sent in reply to a client invitation.',
+    };
     // replaceChildren would print a null child as the text "null"; drop optional parts that are absent.
     $('acctBody').replaceChildren(...[
       h('div', { class: 'stats' },
-        stat('Applications (Connects history)', cnt(st.connects.applications), `${fmtNum(st.connects.spent)} Connects spent · ${fmtNum(st.connects.refunded)} refunded`),
-        stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`),
-        stat('Offers or hires', fmtNum(offers), `${pct(offers, sent)} of proposals sent`),
-        stat('Contracts', `${cnt(st.contracts.active)} active`, `${cnt(st.contracts.closed)} closed · ${st.profile.totalJobs ?? '–'} completed jobs in total`),
-        stat('Connects balance', fmtNum(st.connects.balance), `${fmtNum(st.connects.received)} received in ${st.windowDays} days${st.connects.applications.capped ? ' (history read in part)' : ''}`)),
+        stat('Applications (Connects history)', cnt(st.connects.applications), `${fmtNum(st.connects.spent)} Connects spent · ${fmtNum(st.connects.refunded)} refunded`, 'Proposals that spent Connects from Rafa\'s own balance in this period, read from her Connects history. Proposals sent with agency Connects do not appear here.'),
+        stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`, 'Every proposal submitted from Rafa\'s account in this period, in any status (the table below, except invitations). Viewed means the client opened it.'),
+        stat('Offers or hires', fmtNum(offers), `${pct(offers, sent)} of proposals sent`, 'Proposals that led to an offer or a hire, and what share of all proposals sent that is.'),
+        stat('Contracts', `${cnt(st.contracts.active)} active`, `${cnt(st.contracts.closed)} closed · ${st.profile.totalJobs ?? '–'} completed jobs in total`, 'Contracts on Rafa\'s account right now: active and closed. Completed jobs is her all-time total shown on her Upwork profile.'),
+        stat('Connects balance', fmtNum(st.connects.balance), `${fmtNum(st.connects.received)} received in ${st.windowDays} days${st.connects.applications.capped ? ' (history read in part)' : ''}`, 'Connects available now in Rafa\'s account. Received counts Connects bought or granted by Upwork in this period.')),
       h('div', { class: 'tablewrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', { text: 'Viewed by client' }))),
-        h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', { text: labels[k] }), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
+        h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', {}, 'Viewed by client', infoBtn('How many of these proposals the client opened.')))),
+        h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', {}, labels[k], infoBtn(tips[k])), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
       st.unreadableDates ? h('p', { class: 'small', style: 'color:var(--warn-fg)', text: `${st.unreadableDates} proposal dates could not be read; they are counted as inside the period.` }) : null,
-      h('p', { class: 'small muted', text: 'Counts with + hit the read limit (30 per status); the real number is higher. All figures come straight from Upwork for this account.' })].filter(Boolean));
+      h('p', { class: 'small muted', text: 'All figures come straight from Upwork for this account (read-only).' })].filter(Boolean));
   }
   async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }
   $('acctRefresh').addEventListener('click', async (ev) => {
     const b = ev.currentTarget; b.disabled = true; b.textContent = 'Reading Upwork…';
-    try { renderAccount((await api('/api/account-stats', { method: 'POST', body: { days: Number($('acctDays').value) } })).stats); toast('Account figures updated.'); } catch (e) { toast(e.message, true); }
+    // Upwork lists 10 proposals per page, so a full count takes several requests; keep asking until it's done.
+    try {
+      const days = Number($('acctDays').value);
+      let r = await api('/api/account-stats', { method: 'POST', body: { days } });
+      for (let i = 0; !r.done && i < 40; i++) {
+        renderAccount(r.stats, true);
+        const so = Object.values(r.stats.proposals).reduce((t, c) => t + c.n, 0);
+        b.textContent = `Reading Upwork… ${fmtNum(so)} so far`;
+        r = await api('/api/account-stats', { method: 'POST', body: { days, resume: true } });
+      }
+      renderAccount(r.stats);
+      toast(r.done ? 'Account figures updated.' : 'Upwork is slow to answer. Press Refresh again to finish counting.', !r.done);
+    } catch (e) { toast(e.message, true); }
     b.disabled = false; b.textContent = 'Refresh from Upwork';
   });
   loadAccount();

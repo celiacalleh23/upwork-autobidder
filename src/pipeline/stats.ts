@@ -1,4 +1,4 @@
-import { putKv, getKv } from '../kv';
+import { delKv, getKv, putKv } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
@@ -8,7 +8,10 @@ import { loadState, type Env } from '../settings';
 // well under the Workers subrequest limit; capped counts are shown as "N+".
 
 export const WINDOWS = [30, 90, 365] as const;
-const PAGES_PER_STATUS = 3; // 10 per page
+// Proposal pages read per request: Workers allow 50 outside calls per request on the free plan, and the profile,
+// contracts and Connects history use about 12. The dashboard keeps asking until every status is counted.
+const PAGE_BUDGET = 25;
+const MAX_PAGES_PER_STATUS = 100; // 1,000 proposals per status; beyond that the count shows "+"
 const STATUSES = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired', 'Activated'] as const;
 
 export interface Count { n: number; capped: boolean }
@@ -44,14 +47,18 @@ const before = (v: unknown, cutoff: number) => { const t = parseWhen(v); return 
 
 const unreadable = { n: 0 };
 
-async function countProposals(client: McpClient, tool: string, org: string, status: string, cutoff: number): Promise<Count & { viewed: number }> {
-  let n = 0, viewed = 0, cursor: string | undefined;
-  for (let page = 0; page < PAGES_PER_STATUS; page++) {
+// Reads one status a page at a time, from `cursor`, for at most `budget` pages. Upwork returns 10 per page, so a full
+// count can take several requests; the caller keeps the cursor between them.
+interface PageRun { n: number; viewed: number; pages: number; done: boolean; cursor: string | null }
+export async function readProposalPages(client: McpClient, tool: string, org: string, status: string, cutoff: number, cursor: string | null, budget: number): Promise<PageRun> {
+  let n = 0, viewed = 0, pages = 0;
+  while (pages < budget) {
     const r = await client.callTool(tool, { action: 'list', org_uid: org, params: { status, limit: 10, sort_field: 'CREATEDDATETIME', sort_order: 'DESC', ...(cursor ? { cursor } : {}) } });
+    pages++;
     const edges = findKey(r, 'edges') ?? findKey(r, 'proposals') ?? [];
     const rows = Array.isArray(edges) ? edges.map((e) => findKey(e, 'node') ?? e) : [];
     // An empty page ends the list, even if Upwork still reports a next page (seen on Rafa's account, Oct 21).
-    if (!rows.length) return { n, viewed, capped: false };
+    if (!rows.length) return { n, viewed, pages, done: true, cursor: null };
     let older = false;
     for (const row of rows) {
       const created = findKey(row, 'createdDateTime') ?? findKey(row, 'created');
@@ -61,10 +68,10 @@ async function countProposals(client: McpClient, tool: string, org: string, stat
       if (findKey(row, 'viewedByClient') === true) viewed++;
     }
     const info = findKey(r, 'pageInfo') as { hasNextPage?: boolean; endCursor?: string } | undefined;
-    if (older || !info?.hasNextPage || !info.endCursor) return { n, viewed, capped: false };
+    if (older || !info?.hasNextPage || !info.endCursor) return { n, viewed, pages, done: true, cursor: null };
     cursor = info.endCursor;
   }
-  return { n, viewed, capped: true };
+  return { n, viewed, pages, done: false, cursor };
 }
 
 async function countContracts(client: McpClient, tool: string, org: string, status: 'ACTIVE' | 'CLOSED'): Promise<Count> {
@@ -108,45 +115,85 @@ async function connectsHistory(client: McpClient, tool: string, org: string, cut
   return out;
 }
 
-export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS[0]): Promise<AccountStats> {
+type Head = Omit<AccountStats, 'proposals' | 'unreadableDates'>;
+interface Progress {
+  days: number; cutoff: number; startedAt: number; head: Head;
+  idx: number; cursor: string | null; statusPages: number; cur: { n: number; viewed: number };
+  proposals: Partial<AccountStats['proposals']>; unreadable: number;
+}
+const PROGRESS_KEY = 'account_stats_progress';
+const PROGRESS_TTL_MS = 15 * 60_000;
+const ZERO = { n: 0, viewed: 0, capped: false };
+
+// Counts Rafa's proposals exactly, over as many requests as it takes: each call reads up to PAGE_BUDGET pages and
+// returns done:false with the figures so far until every status is counted. `resume` continues an unfinished count.
+export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS[0], resume = false): Promise<{ stats: AccountStats; done: boolean }> {
   const days = (WINDOWS as readonly number[]).includes(windowDays) ? windowDays : WINDOWS[0];
   const state = await loadState(env);
   const org = state.upwork.orgUid;
   const tools = state.upwork.toolNames;
   if (!org || !tools.list_freelancer_proposals) throw new Error('Upwork is not connected.');
   const client = await upworkClient(env);
-  const names = await client.listTools();
-  const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
-  const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
-  const cutoff = Date.now() - days * 86400_000;
-  unreadable.n = 0;
 
-  const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
-  const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
-  const proposals = {} as AccountStats['proposals'];
-  for (const s of STATUSES) {
-    proposals[s] = await countProposals(client, tools.list_freelancer_proposals, org, s, cutoff).catch(() => ({ n: 0, viewed: 0, capped: false }));
+  let prog: Progress | null = null;
+  if (resume) {
+    try { prog = JSON.parse((await getKv(env, PROGRESS_KEY)) ?? 'null'); } catch { prog = null; }
+    if (prog && (prog.days !== days || Date.now() - prog.startedAt > PROGRESS_TTL_MS)) prog = null;
   }
-  const contracts = contractsTool
-    ? { active: await countContracts(client, contractsTool, org, 'ACTIVE').catch(() => ({ n: 0, capped: false })),
-        closed: await countContracts(client, contractsTool, org, 'CLOSED').catch(() => ({ n: 0, capped: false })) }
-    : { active: { n: 0, capped: false }, closed: { n: 0, capped: false } };
-  const connects = profileTool ? await connectsHistory(client, profileTool, org, cutoff).catch(() => null) : null;
+  if (!prog) {
+    const names = await client.listTools();
+    const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
+    const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
+    const cutoff = Date.now() - days * 86400_000;
+    const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
+    const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
+    const contracts = contractsTool
+      ? { active: await countContracts(client, contractsTool, org, 'ACTIVE').catch(() => ({ n: 0, capped: false })),
+          closed: await countContracts(client, contractsTool, org, 'CLOSED').catch(() => ({ n: 0, capped: false })) }
+      : { active: { n: 0, capped: false }, closed: { n: 0, capped: false } };
+    const connects = profileTool ? await connectsHistory(client, profileTool, org, cutoff).catch(() => null) : null;
+    prog = {
+      days, cutoff, startedAt: Date.now(), idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0,
+      head: {
+        at: '', windowDays: days,
+        profile: {
+          title: String(findKey(findKey(profile, 'personalData'), 'title') ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim(),
+          totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
+        },
+        contracts,
+        connects: connects ?? { balance: state.connectsBalance, applications: { n: 0, capped: false }, spent: 0, refunded: 0, received: 0 },
+      },
+    };
+  }
 
-  const stats: AccountStats = {
-    at: new Date().toISOString(),
-    windowDays: days,
-    profile: {
-      title: String(findKey(findKey(profile, 'personalData'), 'title') ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim(),
-      totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
-    },
-    proposals,
-    contracts,
-    connects: connects ?? { balance: state.connectsBalance, applications: { n: 0, capped: false }, spent: 0, refunded: 0, received: 0 },
-    unreadableDates: unreadable.n,
-  };
-  await putKv(env, 'account_stats', JSON.stringify(stats));
-  return stats;
+  unreadable.n = prog.unreadable;
+  let budget = PAGE_BUDGET;
+  while (prog.idx < STATUSES.length && budget > 0) {
+    const status = STATUSES[prog.idx];
+    const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages))
+      .catch(() => ({ n: 0, viewed: 0, pages: 1, done: true, cursor: null } as PageRun));
+    budget -= run.pages;
+    prog.statusPages += run.pages;
+    prog.cur = { n: prog.cur.n + run.n, viewed: prog.cur.viewed + run.viewed };
+    const capped = !run.done && prog.statusPages >= MAX_PAGES_PER_STATUS;
+    if (run.done || capped) {
+      prog.proposals[status] = { ...prog.cur, capped };
+      Object.assign(prog, { idx: prog.idx + 1, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 } });
+    } else prog.cursor = run.cursor;
+  }
+  prog.unreadable = unreadable.n;
+
+  const done = prog.idx >= STATUSES.length;
+  const proposals = Object.fromEntries(STATUSES.map((s, k) => [s,
+    prog!.proposals[s] ?? (k === prog!.idx ? { ...prog!.cur, capped: false } : ZERO)])) as AccountStats['proposals'];
+  const stats: AccountStats = { ...prog.head, at: new Date().toISOString(), proposals, unreadableDates: prog.unreadable };
+  if (done) {
+    await putKv(env, 'account_stats', JSON.stringify(stats));
+    await delKv(env, PROGRESS_KEY);
+  } else {
+    await putKv(env, PROGRESS_KEY, JSON.stringify(prog));
+  }
+  return { stats, done };
 }
 
 export async function loadAccountStats(env: Env): Promise<AccountStats | null> {
