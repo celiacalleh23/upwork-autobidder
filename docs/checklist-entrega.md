@@ -51,7 +51,7 @@ Si un punto falla, se anota abajo, en "Notas", con la fecha.
 ## 5. Entrega (M8)
 
 - [ ] `npm run typecheck` y `npm test` pasan en `main`.
-- [ ] El **README** y el **`docs/SOP.md`** para Siv explican cómo cambiar las palabras clave, aprobar propuestas, pausar,
+- [ ] El **README** y el **`docs/SOP.md`** (guía para Siv, primera versión del 26/10) explican cómo cambiar las palabras clave, aprobar propuestas, pausar,
       **reconectar Upwork y Loom** (pasos de `connect.sid` y de la fecha de vencimiento), cambiar la API key y leer el reporte.
 - [ ] Siv respondió las 8 preguntas: Connects, agencia, Freelancer Plus, tarifa, SMS y migraciones, Loom, día de revisión y Cloudflare.
 - [ ] El repo se transfirió al GitHub de Siv y Workers Builds se reconectó a ese repo.
