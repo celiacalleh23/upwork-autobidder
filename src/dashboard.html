@@ -48,7 +48,8 @@ button,input,select,textarea{font:inherit; color:inherit}
 .pill span{color:var(--head-muted)}
 .btn-pause{border:1px solid #8A3A26; background:transparent; color:#F6B7A6; border-radius:10px; padding:9px 16px; font-size:14px; font-weight:600; min-height:40px; cursor:pointer}
 .btn-pause.resume{background:var(--accent-strong); border-color:var(--accent-strong); color:#fff}
-nav.tabs{max-width:1376px; margin:12px auto 0; display:flex; gap:4px}
+nav.tabs{max-width:1376px; margin:12px auto 0; display:flex; gap:4px; overflow-x:auto}
+nav.tabs a{white-space:nowrap}
 nav.tabs a{color:var(--head-muted); text-decoration:none; padding:8px 12px; border-radius:8px; font-size:14px; font-weight:500}
 nav.tabs a[aria-current="page"]{color:var(--head-fg); background:var(--head-chip)}
 
@@ -188,7 +189,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     </div>
   </div>
   <nav class="tabs" aria-label="Sections">
-    <a href="#dashboard" id="tabDash" aria-current="page">Dashboard</a>
+    <a href="#dashboard" id="tabDash" aria-current="page">Proposals</a>
+    <a href="#activity" id="tabLog">Activity log</a>
+    <a href="#account" id="tabAcct">Rafa's account</a>
     <a href="#settings" id="tabSettings">Settings</a>
     <a href="/logout" style="margin-left:auto">Sign out</a>
   </nav>
@@ -224,7 +227,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="stat"><span class="label">Proposals sent today</span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
       <div class="stat"><span class="label">Waiting for review</span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
       <div class="stat"><span class="label">Connects spent today</span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
-      <div class="stat"><span class="label">Failed today</span><span class="value" id="sFailed">0</span><a href="#log" class="sub">See the log</a></div>
+      <div class="stat"><span class="label">Failed today</span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
     </section>
 
     <div class="cols">
@@ -246,17 +249,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <p class="rules" id="rulesLine">Guardrails: 15 a day · 3 an hour · 10 min apart · stop below 20 Connects · auto-stop after 3 errors.</p>
       </aside>
     </div>
-
-    <section class="panel" id="acctPanel" aria-labelledby="aH">
-      <div class="row-head">
-        <h2 id="aH">Rafa's Upwork account <span class="small muted" id="acctWhen"></span></h2>
-        <div class="tools">
-          <label class="small muted" for="acctDays">Period</label>
-          <select id="acctDays"><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select>
-          <button type="button" class="btn outline" id="acctRefresh">Refresh from Upwork</button></div>
-      </div>
-      <div id="acctBody"><p class="small muted">Not read yet. Pick a period and press Refresh to read it from Upwork (read-only).</p></div>
-    </section>
 
     <section class="panel" id="jobs" aria-labelledby="jH">
       <div class="row-head">
@@ -284,6 +276,10 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div><button type="button" class="btn" id="jobMore" hidden>Load more</button></div>
     </section>
 
+  </div>
+
+  <!-- ACTIVITY LOG -->
+  <div id="viewLog" hidden style="flex-direction:column; gap:22px">
     <section class="panel" id="log" aria-labelledby="lH">
       <div class="row-head">
         <h2 id="lH">Activity log</h2>
@@ -309,6 +305,20 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       </div>
       <p class="small muted" id="logEmpty" hidden>Nothing here yet.</p>
       <div><button type="button" class="btn" id="logMore" hidden>Load more</button></div>
+    </section>
+  </div>
+
+  <!-- RAFA'S ACCOUNT -->
+  <div id="viewAcct" hidden style="flex-direction:column; gap:22px">
+    <section class="panel" id="acctPanel" aria-labelledby="aH">
+      <div class="row-head">
+        <h2 id="aH">Rafa's Upwork account <span class="small muted" id="acctWhen"></span></h2>
+        <div class="tools">
+          <label class="small muted" for="acctDays">Period</label>
+          <select id="acctDays"><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select>
+          <button type="button" class="btn outline" id="acctRefresh">Refresh from Upwork</button></div>
+      </div>
+      <div id="acctBody"><p class="small muted">Not read yet. Pick a period and press Refresh to read it from Upwork (read-only).</p></div>
     </section>
   </div>
 
@@ -987,12 +997,17 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   $('logMore').addEventListener('click', () => loadLog(true));
 
   // ---------- Routing + refresh ----------
+  // One tab per view: proposals (queue + jobs found), activity log, Rafa's account, settings.
+  const VIEWS = { '#dashboard': ['viewDash', 'tabDash'], '#activity': ['viewLog', 'tabLog'], '#account': ['viewAcct', 'tabAcct'], '#settings': ['viewSettings', 'tabSettings'] };
   async function route() {
-    const onSettings = location.hash === '#settings';
-    $('viewDash').hidden = onSettings; $('viewDash').style.display = onSettings ? 'none' : 'flex';
-    $('viewSettings').hidden = !onSettings;
-    $('tabDash').toggleAttribute('aria-current', !onSettings); if (!onSettings) $('tabDash').setAttribute('aria-current', 'page');
-    $('tabSettings').toggleAttribute('aria-current', onSettings); if (onSettings) $('tabSettings').setAttribute('aria-current', 'page');
+    const hash = VIEWS[location.hash] ? location.hash : '#dashboard';
+    for (const [key, [view, tab]] of Object.entries(VIEWS)) {
+      const on = key === hash;
+      $(view).hidden = !on;
+      if (view !== 'viewSettings') $(view).style.display = on ? 'flex' : 'none';
+      if (on) $(tab).setAttribute('aria-current', 'page'); else $(tab).removeAttribute('aria-current');
+    }
+    const onSettings = hash === '#settings';
     if (onSettings && !settings) {
       try { settings = await api('/api/settings'); fillForm(settings); } catch (e) { toast(e.message, true); }
     }
