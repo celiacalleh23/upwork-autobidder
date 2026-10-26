@@ -19,8 +19,10 @@ Every 5 minutes, all day:
 |---|---|
 | **Proposals** | Today's numbers, the **Review queue** (proposals waiting for you) and **Jobs found**: every job the tool looked at and why it was kept or skipped |
 | **Activity log** | Every proposal and what happened to it (waiting, approved, sent, failed, skipped). **Export CSV** downloads it |
-| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, Connects. Press **Refresh from Upwork** to update |
+| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, Connects. Press **Refresh from Upwork** to update (it counts every proposal, 10 at a time, so it can take a few seconds) |
 | **Settings** | All the rules. Press **Save changes** at the bottom after changing anything |
+
+Not sure what a number means? Click the small **i** next to it for a short explanation.
 
 ## Every day: the Review queue
 
