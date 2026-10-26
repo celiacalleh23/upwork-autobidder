@@ -7,6 +7,7 @@ import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oa
 import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
 import { refreshConnects, runSender } from './pipeline/send';
+import { sendDailyReport } from './pipeline/report';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
 import { loadSettings, type Env } from './settings';
 
@@ -155,5 +156,6 @@ export default {
     await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch((e) => console.error('loom cleanup failed', e instanceof Error ? e.message : e));
     await keepLoomAlive(env, s.loom.sourceUrl).catch((e) => console.error('loom keep-alive failed', e instanceof Error ? e.message : e));
     await checkLoomAlert(env).catch((e) => console.error('loom alert failed', e instanceof Error ? e.message : e));
+    await sendDailyReport(env).catch((e) => console.error('daily report failed', e instanceof Error ? e.message : e));
   },
 };

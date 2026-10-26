@@ -9,6 +9,7 @@ import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats } from './pipeline/stats';
+import { sendDailyReport } from './pipeline/report';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -165,6 +166,13 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       } catch (e) {
         console.error('account stats failed', e instanceof Error ? e.message : e);
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);
+      }
+    }
+    if (path === '/api/report/test' && method === 'POST') {
+      try {
+        return json(await sendDailyReport(env, { force: true }));
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : 'The report could not be sent', 502);
       }
     }
     if (path === '/api/loom/connect' && method === 'POST') {

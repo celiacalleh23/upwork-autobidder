@@ -434,7 +434,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <div class="field"><label for="floor">Stop when Connects drop below</label>
           <label class="check" for="floorOn"><input type="checkbox" id="floorOn"><span>Stop sending below a Connects balance</span></label>
           <input type="number" id="floor" min="0" aria-describedby="floorHint"><span class="hint" id="floorHint">Off = keep sending until a job costs more than the balance.</span></div>
-        <div class="field"><label for="connectsAlert">Email an alert when Connects drop below</label><input type="number" id="connectsAlert" min="0"><span class="hint">Sending continues. 0 = off. Goes to the report email.</span></div>
+        <div class="field"><label for="connectsAlert">Email an alert when Connects drop below</label><input type="number" id="connectsAlert" min="0"><span class="hint">Sending continues. 0 = off. Goes to the report emails.</span></div>
         <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label>
           <label class="check" for="maxConnectsOn"><input type="checkbox" id="maxConnectsOn"><span>Limit Connects per job</span></label>
           <input type="number" id="maxConnects" min="1" max="50" aria-describedby="maxConnectsHint"><span class="hint" id="maxConnectsHint">Off = apply to any job, whatever it costs.</span></div>
@@ -446,7 +446,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 
     <section class="section" aria-labelledby="s6">
       <header><h2 id="s6">Reports and connections</h2></header>
-      <div class="grid"><div class="field"><label for="reportEmail">Daily report email (6 pm)</label><input type="email" id="reportEmail" placeholder="name@company.com"></div></div>
+      <div class="grid">
+        <div class="field"><label for="reportEmail">Report emails (up to 3)</label><input type="text" id="reportEmail" inputmode="email" autocomplete="off" placeholder="siv@ltv-labs.com, celia@…"><span class="hint">Separate with commas. Gets the daily report and the alerts (Connects low, Loom). Without a domain verified in Resend, only the Resend account's own email receives them.</span></div>
+        <div class="field"><label for="reportHour">Send the daily report at</label><select id="reportHour"></select><span class="hint" id="reportTz">In the time zone set under Caps and guardrails.</span></div>
+        <div class="field"><span class="lbl">Check that it arrives</span><button type="button" class="btn outline" id="reportTest">Send test report</button><span class="hint">Sends today's report so far, marked [Test]. Save your changes first.</span></div>
+      </div>
       <div class="conn"><div><b>Upwork</b><div class="small muted" id="upworkStatus">Not connected. Rafa signs in once on the setup call.</div><div class="small msg bad" id="upworkError" role="alert" hidden></div></div>
         <div class="conn-actions"><span class="chip warn" id="upworkChip">Not connected</span>
           <a class="btn primary" id="upworkConnect" href="/oauth/upwork/start" target="_blank" rel="noopener">Connect Upwork</a>
@@ -957,6 +961,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('sendOn').checked = s.sendingEnabled; $('fixedAck').checked = s.fixedPriceTermsAcknowledged;
     $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
+    if (!$('reportHour').options.length) for (let hr = 0; hr < 24; hr++) $('reportHour').append(h('option', { value: String(hr), text: `${hr % 12 || 12}:00 ${hr < 12 ? 'AM' : 'PM'}` }));
+    $('reportHour').value = String(s.report.hour ?? 15);
+    $('reportTz').textContent = `${tzName(s.caps.timezone)} time (set under Caps and guardrails).`;
     $('saveMsg').textContent = ''; $('saveMsg').className = 'msg';
   }
   function readForm() {
@@ -981,7 +988,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       connectsAlertBelow: Number($('connectsAlert').value),
       sendingEnabled: $('sendOn').checked,
       fixedPriceTermsAcknowledged: $('fixedAck').checked,
-      report: { email: $('reportEmail').value.trim() },
+      report: { email: $('reportEmail').value.trim(), hour: Number($('reportHour').value) },
     };
   }
   function dirty() { $('saveMsg').textContent = 'Unsaved changes'; $('saveMsg').className = 'msg'; }
@@ -1044,6 +1051,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (!confirm('Disconnect Upwork? Nothing is scanned or sent until Rafa signs in again.')) return;
     try { await api('/api/upwork/disconnect', { method: 'POST' }); toast('Upwork disconnected.'); } catch (e) { toast(e.message, true); }
     loadState();
+  });
+  $('reportTest').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Sending…';
+    try { const r = await api('/api/report/test', { method: 'POST' }); toast(`Test report sent to ${r.to.join(', ')}. Check the inbox (and spam).`); }
+    catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Send test report';
   });
   $('loomConnect').addEventListener('click', () => { $('loomFinish').hidden = false; $('loomPaste').value = ''; $('loomExpires').value = ''; $('loomPaste').focus(); });
   $('loomFinishBtn').addEventListener('click', async (ev) => {

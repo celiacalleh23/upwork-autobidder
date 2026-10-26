@@ -1,7 +1,7 @@
 import { seal, unseal } from './crypto';
 import { emailConfigured, sendEmail } from './email';
 import { delKv, getKv, putKv } from './kv';
-import { loadSettings, loadState, patchState, type Env, type State } from './settings';
+import { loadSettings, loadState, patchState, reportEmails, type Env, type State } from './settings';
 
 // Loom copies (M5). Loom has no public API: these are the requests loom.com itself sends, captured by Celia on Oct 22
 // (docs/loom-api.md). The session is the browser cookie pasted in Settings → Loom; it is stored encrypted and never logged.
@@ -312,8 +312,8 @@ export async function checkLoomAlert(env: Env, now = Date.now()): Promise<void> 
   const alert = loomAlert(st.loom, st.loomAlertSentFor, now);
   if (!alert) return;
   const s = await loadSettings(env);
-  if (emailConfigured(env) && s.report.email) {
-    try { await sendEmail(env, [s.report.email], alert.subject, alert.text); }
+  if (emailConfigured(env) && reportEmails(s).length) {
+    try { await sendEmail(env, reportEmails(s), alert.subject, alert.text); }
     catch (e) { console.error('loom alert email failed', e instanceof Error ? e.message : e); return; } // retried next run
   }
   await patchState(env, { loomAlertSentFor: alert.key });

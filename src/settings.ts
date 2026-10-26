@@ -47,7 +47,7 @@ export interface Settings {
   sendingEnabled: boolean;    // M6 master switch; off until Siv/Celia turn it on in the dashboard, never in code
   fixedPriceTermsAcknowledged: boolean; // Upwork Dispute Assistance terms, acknowledged by Siv; else fixed-price jobs wait
   connectsAlertBelow: number; // email when the balance drops below this; sending continues. 0 = off
-  report: { email: string };
+  report: { email: string; hour: number }; // email: up to 3 addresses, comma-separated; hour: 0–23 in caps.timezone
 }
 
 export interface RunSummary { at: string; scanned: number; new: number; matched: number; queued?: number; errors: number; note: string | null }
@@ -118,7 +118,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sendingEnabled: false,
   fixedPriceTermsAcknowledged: false,
   connectsAlertBelow: 0,
-  report: { email: '' },
+  report: { email: '', hour: 15 }, // 3 pm (Siv: 3 pm California)
 };
 
 export const DEFAULT_STATE: State = {
@@ -154,6 +154,9 @@ async function putJson(env: Env, key: string, value: unknown): Promise<void> {
     "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
   ).bind(key, JSON.stringify(value)).run();
 }
+
+// The report addresses as a list (Settings keeps them comma-separated).
+export const reportEmails = (s: Settings) => s.report.email.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
 
 export const loadSettings = (env: Env) => getJson(env, 'settings', DEFAULT_SETTINGS);
 export const saveSettings = (env: Env, s: Settings) => putJson(env, 'settings', s);
@@ -233,8 +236,11 @@ export function validateSettings(input: unknown): Settings {
   if (loomUrl && !/^https:\/\/(www\.)?loom\.com\/share\/[A-Za-z0-9]+/.test(loomUrl)) {
     throw new InvalidInput('Loom video link must look like https://www.loom.com/share/…');
   }
-  const email = str(i.report.email, 200, 'Report email');
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new InvalidInput('Report email is not a valid address');
+  const emails = str(i.report.email, 400, 'Report emails').split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
+  if (emails.length > 3) throw new InvalidInput('Use at most 3 report emails');
+  const badEmail = emails.find((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (badEmail) throw new InvalidInput(`Report email "${badEmail}" is not a valid address`);
+  const email = emails.join(', ');
   return {
     keywords,
     titleOnly: bool(i.titleOnly),
@@ -274,6 +280,6 @@ export function validateSettings(input: unknown): Settings {
     sendingEnabled: bool(i.sendingEnabled),
     fixedPriceTermsAcknowledged: bool(i.fixedPriceTermsAcknowledged),
     connectsAlertBelow: num(i.connectsAlertBelow, 0, 10000, 'Connects alert'),
-    report: { email },
+    report: { email, hour: num(i.report.hour, 0, 23, 'Report time') },
   };
 }

@@ -3,7 +3,7 @@ import { emailConfigured, sendEmail } from '../email';
 import { acquireLease, getKv, putKv, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
-import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
+import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import type { Answer } from './letter';
 import { createPreview } from './preview';
@@ -72,9 +72,9 @@ export async function checkConnectsAlert(env: Env, balance: number | null) {
   const action = alertAction(balance, s.connectsAlertBelow, st.connectsAlertSentAt);
   if (action === 'reset') await patchState(env, { connectsAlertSentAt: null });
   if (action !== 'send') return;
-  if (emailConfigured(env) && s.report.email) {
+  if (emailConfigured(env) && reportEmails(s).length) {
     try {
-      await sendEmail(env, [s.report.email], `Upwork Connects low: ${balance} left`,
+      await sendEmail(env, reportEmails(s), `Upwork Connects low: ${balance} left`,
         `Rafa's Upwork account has ${balance} Connects, below the alert level of ${s.connectsAlertBelow}.\n\nSending continues while a job costs no more than the balance. Add Connects on Upwork to keep proposals going.\n\nUpwork Auto-Bidder`);
     } catch (e) { console.error('connects alert email failed', errText(e)); return; } // retried next run
   }

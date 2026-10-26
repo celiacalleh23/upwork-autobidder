@@ -6,9 +6,9 @@ import type { Env } from './settings';
 
 export const emailConfigured = (env: Env) => Boolean(env.RESEND_API_KEY);
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
-export async function sendEmail(env: Env, to: string[], subject: string, text: string): Promise<void> {
+export async function sendEmail(env: Env, to: string[], subject: string, text: string, html?: string): Promise<void> {
   if (!env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not set.');
   const recipients = to.map((t) => t.trim()).filter(Boolean);
   if (!recipients.length) throw new Error('No report email set in Settings.');
@@ -20,9 +20,16 @@ export async function sendEmail(env: Env, to: string[], subject: string, text: s
       to: recipients,
       subject,
       text,
-      html: `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5">${esc(text).replace(/\n/g, '<br>')}</div>`,
+      html: html ?? `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5">${esc(text).replace(/\n/g, '<br>')}</div>`,
     }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!res.ok) throw new Error(`Resend refused the email (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 300);
+    // Without a verified domain, Resend only delivers to the email that owns the Resend account.
+    if (res.status === 403 && /testing emails|own email|verify a domain/i.test(body)) {
+      throw new Error('Resend only sends to the email that owns the Resend account until a domain is verified. Use that address in Settings, or verify a domain in Resend.');
+    }
+    throw new Error(`Resend refused the email (${res.status}): ${body}`);
+  }
 }
