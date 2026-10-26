@@ -25,7 +25,7 @@ export interface Settings {
   letter: { template: string; rules: string };
   disclosure: { enabled: boolean; line: string };
   bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10'; profileRate: number }; // profileRate: USD/hr, 0 = unset
-  profileSummary: string; // Siv's notes about Rafa, added to his Upwork profile and cover letter for Claude
+  profileSummary: string; // Siv's notes about Rafa, added to her Upwork profile and cover letter for Claude
   scoreWeights: { profile: number; wins: number }; // % of the match score; they add up to 100
   loom: { sourceUrl: string; deleteAfterDays: number };
   caps: {

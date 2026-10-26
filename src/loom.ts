@@ -160,7 +160,14 @@ export async function markLoomError(env: Env, e: unknown) {
 // lost on an auth error. Null when Loom is not connected.
 async function withSession<T>(env: Env, fn: (sess: Session) => Promise<T>): Promise<T | null> {
   const sess = await loadSession(env);
-  if (!sess) return null;
+  if (!sess) {
+    if (!(await loadState(env)).loom.connected) return null;
+    // Marked connected but the saved session is missing or can't be decrypted (e.g. TOKEN_KEY changed): say so
+    // instead of quietly using the source video.
+    const e = new LoomAuthError('The saved Loom session could not be read. Press Reconnect in Settings → Loom video.');
+    await markLoomError(env, e);
+    throw e;
+  }
   try {
     const out = await fn(sess);
     await putKv(env, ACTIVE_KEY, String(Date.now()));

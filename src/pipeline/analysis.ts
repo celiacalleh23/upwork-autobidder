@@ -35,11 +35,11 @@ export function jobAnalysis(f: JobFacts, ai: Analysis = { pros: [], cons: [] }, 
   else if (f.keywords.length) cons.push(`"${f.keywords.join('", "')}" only in the description`);
 
   if (f.winScore !== null) {
-    if (f.winScore >= 70) pros.push(`Similar to jobs Rafa won (${f.winScore})`);
-    else if (f.winScore <= 30) cons.push(`Unlike Rafa's past wins (${f.winScore})`);
+    if (f.winScore >= 70) pros.push(`Similar to jobs Rafa won (${f.winScore}/100)`);
+    else if (f.winScore <= 30) cons.push(`Unlike Rafa's past wins (${f.winScore}/100)`);
   }
-  if (f.profileScore >= 70) pros.push(`Strong fit with Rafa's profile (${f.profileScore})`);
-  else if (f.profileScore < 40) cons.push(`Weak fit with Rafa's profile (${f.profileScore})`);
+  if (f.profileScore >= 70) pros.push(`Strong fit with Rafa's profile (${f.profileScore}/100)`);
+  else if (f.profileScore < 40) cons.push(`Weak fit with Rafa's profile (${f.profileScore}/100)`);
 
   const tier = tierLowerBound(f.proposalsTier ?? undefined);
   if (tier === 0) pros.push('Few proposals so far (fewer than 5)');

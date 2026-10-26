@@ -1,6 +1,6 @@
 import { dayStartUtc } from '../api';
 import { emailConfigured, sendEmail } from '../email';
-import { acquireLease, releaseLease } from '../kv';
+import { acquireLease, getKv, putKv, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
@@ -51,6 +51,19 @@ async function readBalance(client: McpClient, state: State): Promise<number | nu
   const r = await client.callTool(tool, { action: 'check', org_uid: state.upwork.orgUid });
   const n = Number(findKey(r, 'connectsBalance'));
   return Number.isFinite(n) ? n : null;
+}
+
+// The header's Connects count, kept fresh while Sending is off too (the sender reads it again before each send).
+const BALANCE_EVERY_MS = 30 * 60_000;
+export async function refreshConnects(env: Env, now = Date.now()): Promise<void> {
+  const state = await loadState(env);
+  if (!state.upwork.connected || !state.upwork.orgUid) return;
+  const last = Number(await getKv(env, 'connects:checkedAt'));
+  if (Number.isFinite(last) && now - last < BALANCE_EVERY_MS) return;
+  await putKv(env, 'connects:checkedAt', String(now));
+  const balance = await readBalance(await upworkClient(env), state);
+  if (balance !== null) await patchState(env, { connectsBalance: balance });
+  await checkConnectsAlert(env, balance);
 }
 
 // Low-Connects alert to the report email (Siv buys more); without email it shows on the dashboard.

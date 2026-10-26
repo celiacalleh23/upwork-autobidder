@@ -10,7 +10,7 @@ import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, sw
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
 import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
 
-// What Claude knows about Rafa for this run (built once per run from his Upwork track record, the letter and Siv's notes).
+// What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
 
 // Writer (M4): takes jobs that passed the filters ('matched'), re-checks them on Upwork, scores them with Claude,

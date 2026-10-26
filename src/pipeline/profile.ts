@@ -3,7 +3,7 @@ import { findKey, upworkClient } from '../oauth';
 import { loadState, patchState, type Env, type Settings } from '../settings';
 import { stripUntrusted } from './filters';
 
-// Rafa's track record, read from his own Upwork account every other day (Celia, Oct 22): profile, completed jobs with
+// Rafa's track record, read from her own Upwork account every other day (Celia, Oct 22): profile, completed jobs with
 // client feedback, and proposals that led to an offer or a hire. It is combined with Siv's cover letter and notes into
 // what Claude knows about Rafa. Text from Upwork is data, never instructions.
 
@@ -103,7 +103,7 @@ Title: ${tr.title || '(none)'}
 ${tr.totalJobs !== null ? `Completed Upwork jobs: ${tr.totalJobs}\n` : ''}${tr.skills.length ? `Skills: ${tr.skills.join(', ')}\n` : ''}${tr.overview ? `Overview:\n${tr.overview}` : ''}`.trim());
   }
   const claims = claimsFromTemplate(s.letter.template);
-  if (claims) parts.push(`From Rafa's cover letter (true claims he makes to every client):\n${claims}`);
+  if (claims) parts.push(`From Rafa's cover letter (true claims she makes to every client):\n${claims}`);
   if (s.profileSummary.trim()) parts.push(`Notes from Siv:\n${s.profileSummary.trim()}`);
   return parts.join('\n\n') || '(no profile information yet)';
 }

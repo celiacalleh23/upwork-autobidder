@@ -6,7 +6,7 @@ import { MissingKey } from './crypto';
 import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
 import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
-import { runSender } from './pipeline/send';
+import { refreshConnects, runSender } from './pipeline/send';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
 import { loadSettings, type Env } from './settings';
 
@@ -149,6 +149,7 @@ export default {
     // The writer follows each scan, so its numbers and notes land on that scan's run row. The sender runs every time.
     if (await runScan(env)) await runWriter(env);
     await runSender(env);
+    await refreshConnects(env).catch((e) => console.error('connects refresh failed', e instanceof Error ? e.message : e));
     const s = await loadSettings(env);
     await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch((e) => console.error('loom cleanup failed', e instanceof Error ? e.message : e));
     await keepLoomAlive(env, s.loom.sourceUrl).catch((e) => console.error('loom keep-alive failed', e instanceof Error ? e.message : e));
