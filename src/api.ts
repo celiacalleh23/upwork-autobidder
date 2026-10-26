@@ -89,6 +89,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const before = await loadSettings(env);
       const s = validateSettings(await readJson(req));
       await saveSettings(env, s);
+      // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
+      if (s.sendingEnabled !== before.sendingEnabled) {
+        await patchState(env, { senderNote: s.sendingEnabled ? 'on, the next approved proposal goes out within 5 minutes' : null });
+      }
       await recheckMatched(env, s);
       // A new source video also goes into letters that have not been sent yet.
       if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
