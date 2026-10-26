@@ -26,6 +26,8 @@
 }}
 *{box-sizing:border-box}
 html,body{margin:0}
+/* iPhone Safari enlarges text in wide tables ("text autosizing"); keep the sizes we set. */
+html{-webkit-text-size-adjust:100%; text-size-adjust:100%}
 body{background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:15px; line-height:1.45}
 a{color:var(--accent)} a:hover{color:var(--accent-strong)}
 button,input,select,textarea{font:inherit; color:inherit}
