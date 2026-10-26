@@ -145,10 +145,11 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const status = state.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
-      JSON.stringify(createParams), loomUrl, loomId, p?.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note),
+      JSON.stringify(createParams), loomUrl, loomId, p?.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note,
+      status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
     env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
   ]);
   // A proposal for this job already existed: the new copy is not used by anything.

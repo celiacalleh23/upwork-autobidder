@@ -748,7 +748,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (!append) body.replaceChildren();
     for (const r of data.rows) {
       const [label, tone] = STATUS[r.status] || [r.status, ''];
-      const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }), r.error ? h('span', { class: 'err', text: r.error }) : null);
+      const via = r.approved_via === 'auto-submit' ? 'by Auto-submit' : r.approved_via === 'dashboard' ? 'with the Approve button' : null;
+      const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }), r.error ? h('span', { class: 'err', text: r.error }) : null,
+        r.approved_at && via ? h('span', { class: 'sub-time', style: 'flex-basis:100%', text: `approved ${when(r.approved_at)} ${via}` }) : null);
       const statusCell = h('td', {}, stBox);
       if (r.status === 'approved') {
         stBox.append(h('button', { type: 'button', class: 'btn', style: 'min-height:32px; padding:4px 10px; font-size:13px', text: 'Undo',

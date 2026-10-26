@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   loom_url TEXT,
   loom_video_id TEXT,                -- the job's own Loom copy (M5), deleted after settings.loom.deleteAfterDays
   loom_deleted_at TEXT,
+  approved_at TEXT,                  -- when it was approved, and how: 'dashboard' (Approve button) or 'auto-submit'
+  approved_via TEXT,
   connects INTEGER,
   score INTEGER,
   win_score INTEGER,                 -- sub-scores behind score, kept for the M7 results report

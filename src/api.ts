@@ -16,7 +16,7 @@ const json = (data: unknown, status = 200) =>
 const fail = (message: string, status = 400) => json({ error: message }, status);
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
-  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params,
+  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params, approved_at, approved_via,
   (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason,
   (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at,
   (SELECT seen_at FROM jobs WHERE jobs.id = proposals.job_id) AS found_at,
@@ -27,7 +27,7 @@ interface ProposalRow {
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
   connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
   is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null; analysis: string | null;
-  posted_at: string | null; found_at: string | null;
+  posted_at: string | null; found_at: string | null; approved_at: string | null; approved_via: string | null;
 }
 
 const answersOf = (s: string | null): { question: string; answer: string }[] => {
@@ -43,6 +43,7 @@ const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
   submitted_at: toIso(r.submitted_at),
   posted_at: postedIso(r.posted_at),
   found_at: toIso(r.found_at),
+  approved_at: toIso(r.approved_at),
 });
 const safeList = (s: string | null): string[] => {
   try { const v = JSON.parse(s ?? '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
@@ -269,12 +270,12 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         return json({ ok: true });
       }
       if (method === 'POST' && action === 'approve') {
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL WHERE id = ? AND status = 'pending'").bind(id).run();
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending'").bind(id).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         return json({ ok: true, status: 'approved' });
       }
       if (method === 'POST' && action === 'unapprove') {
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'pending' WHERE id = ? AND status = 'approved'").bind(id).run();
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'pending', approved_at = NULL, approved_via = NULL WHERE id = ? AND status = 'approved'").bind(id).run();
         if (!r.meta.changes) return fail('This proposal is already being sent or was sent', 409);
         return json({ ok: true, status: 'pending' });
       }
