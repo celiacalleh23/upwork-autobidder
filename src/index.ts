@@ -6,10 +6,11 @@ import { MissingKey } from './crypto';
 import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
 import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
+import { syncDue, syncTrackRecord } from './pipeline/profile';
 import { refreshConnects, runSender } from './pipeline/send';
 import { sendDailyReport } from './pipeline/report';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
-import { loadSettings, type Env } from './settings';
+import { loadSettings, loadState, type Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy': [
@@ -160,6 +161,9 @@ export default {
       await runWriter(env).catch(log('writer'));
     } else if (event.cron === UPKEEP_CRON) {
       await refreshConnects(env).catch(log('connects refresh'));
+      // Rafa's track record (scoring input), every other day; the writer reads the stored copy.
+      const st = await loadState(env);
+      if (st.upwork.connected && syncDue(st.trackRecordSyncedAt)) await syncTrackRecord(env).catch(log('track record sync'));
       const s = await loadSettings(env);
       await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch(log('loom cleanup'));
       await keepLoomAlive(env, s.loom.sourceUrl).catch(log('loom keep-alive'));

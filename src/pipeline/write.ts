@@ -1,5 +1,5 @@
 import { answerQuestions, ClaudeConfigError, ClaudeDeclined, scoreJob, writeOpening, type JobForClaude } from '../claude';
-import { acquireLease, releaseLease } from '../kv';
+import { acquireLease, delKv, getKv, putKv, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
 import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
@@ -8,7 +8,7 @@ import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from '.
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
-import { loadTrackRecord, profileForClaude, syncDue, syncTrackRecord, weightedScore, winsForClaude } from './profile';
+import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
@@ -17,7 +17,11 @@ interface Who { profile: string; wins: string }
 // writes the opening paragraph into Siv's template, reads screening questions from a preview (nothing is sent) and
 // queues the proposal for review. Bounded to settings.maxNewJobsPerRun jobs per cron run.
 
-const LEASE_MS = 10 * 60_000;
+// Shorter than the 5 minutes between writer runs: a run cut short by Workers limits can't release it, and must not
+// block the next one.
+const LEASE_MS = 4 * 60_000;
+// A job that stops the writer this many times is set aside as an error, so the jobs after it get written.
+const MAX_TRIES = 3;
 
 interface JobRow {
   id: string; title: string; url: string | null; job_type: string | null; budget: string | null; client_country: string | null;
@@ -166,18 +170,27 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
     const { results: jobs } = await env.DB.prepare(
       "SELECT id, title, url, job_type, budget, client_country, reason, posted_at, proposals_tier FROM jobs WHERE status = 'matched' ORDER BY posted_at DESC, seen_at DESC LIMIT ?",
     ).bind(s.maxNewJobsPerRun).all<JobRow>();
-    // Every other day, refresh Rafa's track record first; on failure keep the last one.
-    let record = await loadTrackRecord(env);
-    if (syncDue(state.trackRecordSyncedAt)) {
-      record = await syncTrackRecord(env).catch((e) => { console.error('track record sync failed', errText(e)); summary.note = `Upwork profile not refreshed: ${errText(e)}`; return record; });
-    }
+    // Rafa's track record is refreshed by the upkeep run (index.ts), not here, to keep this run light.
+    const record = await loadTrackRecord(env);
+    await patchState(env, { writer: { ...state.writer, startedAt: new Date().toISOString() } });
     const who: Who = { profile: profileForClaude(record, s), wins: winsForClaude(record) };
     const client = await upworkClient(env);
     const invited = await invitedJobIds(client, state).catch(() => new Set<string>());
     for (const job of jobs) {
+      const tryKey = `writeTry:${job.id}`;
+      const tries = Number(await getKv(env, tryKey) ?? 0) + 1;
+      if (tries > MAX_TRIES) {
+        summary.errors++;
+        await setJob(env, job.id, 'error', `Could not prepare: the run stopped ${MAX_TRIES} times on this job (check Cloudflare logs)`);
+        await delKv(env, tryKey);
+        continue;
+      }
+      await putKv(env, tryKey, String(tries));
       try {
         summary[await processJob(env, client, state, s, who, job, invited)]++;
+        await delKv(env, tryKey);
       } catch (e) {
+        await delKv(env, tryKey); // it finished, with an error: not a run that was cut short
         if (e instanceof ClaudeConfigError) { summary.note = e.message; break; } // the job stays 'matched' for the next run
         summary.errors++;
         const msg = errText(e);
@@ -194,6 +207,9 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
     console.error('writer failed', summary.note);
   } finally {
     await record(env, summary);
+    const done = [summary.queued && `${summary.queued} written`, summary.lowScore && `${summary.lowScore} low score`, summary.filtered && `${summary.filtered} filtered`, summary.errors && `${summary.errors} errors`].filter(Boolean).join(', ');
+    const st = await loadState(env);
+    await patchState(env, { writer: { startedAt: st.writer.startedAt, finishedAt: new Date().toISOString(), note: [done || 'nothing to write', summary.note].filter(Boolean).join(' · ') } });
     await releaseLease(env, 'write');
   }
   return summary;

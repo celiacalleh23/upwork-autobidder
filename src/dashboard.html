@@ -258,7 +258,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 
     <section class="panel" id="jobs" aria-labelledby="jH">
       <div class="row-head">
-        <h2 id="jH">Jobs found</h2>
+        <h2 id="jH">Jobs found <span class="small muted" id="writerLine"></span></h2>
         <div class="tools">
           <label class="small muted" for="jobFilter">Show</label>
           <select id="jobFilter">
@@ -602,6 +602,13 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('upworkConnect').className = 'btn ' + (s.upwork.connected ? 'outline' : 'primary');
     $('upworkCheck').hidden = !s.upwork.connected;
     $('upworkDisconnect').hidden = !s.upwork.connected;
+    // When the writer last ran: a start with no finish after it means the run was cut short (Workers limits).
+    const w = s.writer || {};
+    const cut = w.startedAt && (!w.finishedAt || Date.parse(w.finishedAt) < Date.parse(w.startedAt)) && Date.now() - Date.parse(w.startedAt) > 120000;
+    $('writerLine').textContent = !w.startedAt ? '' : cut
+      ? `· writing stopped before finishing (started ${ago(w.startedAt)})`
+      : `· last writing ${ago(w.finishedAt || w.startedAt)}${w.note ? `: ${w.note}` : ''}`;
+    $('writerLine').style.color = cut ? 'var(--bad-fg)' : '';
     $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Not connected';
     $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
     $('loomStatus').textContent = s.loom.connected

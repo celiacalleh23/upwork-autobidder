@@ -75,6 +75,7 @@ export interface State {
   switchedToReviewReason: string | null; // set when Upwork refused an automatic confirm; cleared when Auto is turned back on
   connectsAlertSentAt: string | null;    // the low-Connects alert went out; cleared once the balance is back above the threshold
   loomAlertSentFor: string | null;       // the last Loom alert emailed (expiring:<date> or disconnected:<connected at>)
+  writer: { startedAt: string | null; finishedAt: string | null; note: string | null }; // last writer run, shown under Jobs found
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -137,6 +138,7 @@ export const DEFAULT_STATE: State = {
   switchedToReviewReason: null,
   connectsAlertSentAt: null,
   loomAlertSentFor: null,
+  writer: { startedAt: null, finishedAt: null, note: null },
 };
 
 async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {
