@@ -234,7 +234,14 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (letter.length > 5000) return fail(`The letter is ${letter.length} characters. Upwork allows 5,000.`);
         const found = contactDetailsIn(letter.replaceAll(/https:\/\/(www\.)?loom\.com\/share\/\S+/g, ''));
         if (found) return fail(`Remove ${found} from the letter. Upwork does not allow contact details in proposals.`);
-        const r = await env.DB.prepare("UPDATE proposals SET cover_letter = ? WHERE id = ? AND status = 'pending'").bind(letter, id).run();
+        // The bid can be changed per proposal on review (Celia, Oct 26); the sender uses this column.
+        let bid: number | null = null;
+        if (body.bid !== undefined) {
+          bid = Number(body.bid);
+          if (!Number.isFinite(bid) || bid < 1 || bid > 10000) return fail('The bid must be a number between 1 and 10,000');
+          bid = Math.round(bid * 100) / 100;
+        }
+        const r = await env.DB.prepare("UPDATE proposals SET cover_letter = ?, bid = COALESCE(?, bid) WHERE id = ? AND status = 'pending'").bind(letter, bid, id).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         return json({ ok: true });
       }

@@ -620,10 +620,15 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const counter = h('div', { class: 'count' });
     const updateCount = () => { counter.textContent = `${ta.value.length.toLocaleString('en-US')} / 5,000`; counter.classList.toggle('over', ta.value.length > 5000); };
     ta.addEventListener('input', updateCount); updateCount();
-    editWrap.append(ta, counter);
+    const bidIn = h('input', { type: 'number', id: `bid-${p.id}`, min: '1', max: '10000', step: '0.01', style: 'max-width:160px' });
+    bidIn.value = p.bid ?? '';
+    const bidLabel = h('label', { for: `bid-${p.id}`, text: p.job_type === 'hourly' ? 'Bid (USD per hour)' : 'Bid (USD, whole project)' });
+    editWrap.append(ta, counter, bidLabel, bidIn);
 
-    const editBtn = h('button', { type: 'button', class: 'btn outline', text: 'Edit letter' });
+    const editBtn = h('button', { type: 'button', class: 'btn outline', text: 'Edit' });
     const approveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Approve' });
+    const bidText = () => (p.bid !== null ? `Bid $${p.bid}${p.job_type === 'hourly' ? '/hr' : ''}` : 'No bid');
+    const bidChip = h('span', { class: 'chip', text: bidText() });
     const skipBtn = h('button', { type: 'button', class: 'btn', text: 'Skip' });
     const el = h('article', { class: 'card' },
       h('div', { class: 'card-top' },
@@ -635,7 +640,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
           p.is_example ? h('span', { class: 'chip info', text: 'Example' }) : null,
           p.score !== null ? h('span', { class: 'chip good', text: `Match ${p.score}/100` }) : null,
           p.connects !== null ? h('span', { class: 'chip', text: `${p.connects} Connects` }) : null,
-          p.bid !== null ? h('span', { class: 'chip', text: `Bid $${p.bid}${p.job_type === 'hourly' ? '/hr' : ''}` }) : null)),
+          bidChip)),
       p.keywords.length ? h('div', { class: 'chips' }, p.keywords.map((k) => h('span', { class: 'kw', text: k }))) : null,
       whyBox(p.analysis),
       letterBox, editWrap,
@@ -650,15 +655,16 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 
     editBtn.addEventListener('click', async () => {
       if (editWrap.hidden) {
-        editing.add(p.id); editWrap.hidden = false; letterBox.hidden = true; editBtn.textContent = 'Save letter'; approveBtn.disabled = true; ta.focus();
+        editing.add(p.id); editWrap.hidden = false; letterBox.hidden = true; editBtn.textContent = 'Save'; approveBtn.disabled = true; ta.focus();
         return;
       }
       editBtn.disabled = true;
       try {
-        await api(`/api/proposals/${p.id}`, { method: 'PATCH', body: { cover_letter: ta.value } });
+        await api(`/api/proposals/${p.id}`, { method: 'PATCH', body: { cover_letter: ta.value, ...(bidIn.value !== '' ? { bid: Number(bidIn.value) } : {}) } });
         p.cover_letter = ta.value.trim(); letterBox.textContent = p.cover_letter;
-        editing.delete(p.id); editWrap.hidden = true; letterBox.hidden = false; editBtn.textContent = 'Edit letter'; approveBtn.disabled = false;
-        toast('Letter saved.');
+        if (bidIn.value !== '') { p.bid = Math.round(Number(bidIn.value) * 100) / 100; bidChip.textContent = bidText(); }
+        editing.delete(p.id); editWrap.hidden = true; letterBox.hidden = false; editBtn.textContent = 'Edit'; approveBtn.disabled = false;
+        toast('Saved.');
       } catch (e) { toast(e.message, true); }
       editBtn.disabled = false;
     });
