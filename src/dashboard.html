@@ -74,8 +74,8 @@ p{margin:0}
 .status strong{color:var(--fg); font-weight:600}
 .dot{width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle}
 .stats{display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:14px}
-.info{display:inline-grid; place-items:center; width:17px; height:17px; margin-left:6px; padding:0; border:1px solid var(--line); border-radius:50%; background:transparent; color:var(--muted); font:600 11px/1 inherit; font-style:italic; font-family:Georgia, serif; cursor:pointer; vertical-align:1px}
-.info:hover, .info[aria-expanded="true"]{color:var(--fg); border-color:var(--muted)}
+.info-btn{display:inline-grid; place-items:center; width:17px; height:17px; margin-left:6px; padding:0; border:1px solid var(--line); border-radius:50%; background:transparent; color:var(--muted); font-weight:600; font-size:11px; line-height:1; font-style:italic; font-family:Georgia, serif; cursor:pointer; vertical-align:1px}
+.info-btn:hover, .info-btn[aria-expanded="true"]{color:var(--fg); border-color:var(--muted)}
 .tip-pop{position:absolute; z-index:60; max-width:min(300px, calc(100vw - 32px)); background:var(--surface); color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.45; font-weight:400; box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .stat{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:4px; min-width:0}
 .stat .label{font-size:13px; color:var(--muted)}
@@ -131,7 +131,10 @@ table{width:100%; min-width:760px; border-collapse:collapse; font-size:14px}
 th{text-align:left; font-size:12.5px; font-weight:500; color:var(--muted); padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap}
 td{padding:11px 12px; border-bottom:1px solid var(--line-soft); vertical-align:top}
 td.when{font-family:var(--font-mono); font-size:13px; white-space:nowrap}
+.sub-time{display:block; color:var(--muted); font-size:12px; margin-top:2px}
 td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
+.st-cell{display:flex; flex-wrap:wrap; align-items:center; gap:6px}
+.st-cell .err{flex-basis:100%; margin-top:0}
 
 /* Settings */
 .settings{display:flex; flex-direction:column; gap:18px; max-width:1040px}
@@ -219,18 +222,18 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
       <span>Last scan: <strong id="lastScan">–</strong></span>
       <span>Scans every <strong id="scanEvery">5</strong> min</span>
-      <span>Active hours: <strong id="activeHours">–</strong><button class="info" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day. Searching runs every 5 minutes either way.">i</button></span>
-      <span>Mode: <strong id="modeText">Review first</strong><button class="info" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically. Only Siv switches to Auto-submit.">i</button></span>
-      <span>Sending: <strong id="sendState">–</strong><button class="info" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
+      <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day. Searching runs every 5 minutes either way.">i</button></span>
+      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically. Only Siv switches to Auto-submit.">i</button></span>
+      <span>Sending: <strong id="sendState">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
       <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
 
     <section class="stats" aria-label="Today">
-      <div class="stat"><span class="label">Jobs scanned today<button class="info" type="button" aria-label="What this means" data-tip="New Upwork jobs the tool looked at today. Matched means the job passed your filters (keyword, client country) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
-      <div class="stat"><span class="label">Proposals sent today<button class="info" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
-      <div class="stat"><span class="label">Waiting for review<button class="info" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
-      <div class="stat"><span class="label">Connects spent today<button class="info" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today. The line below shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
-      <div class="stat"><span class="label">Failed today<button class="info" type="button" aria-label="What this means" data-tip="Proposals Upwork refused today, for example because the job closed or Rafa already applied. The reason is in the Activity log.">i</button></span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
+      <div class="stat"><span class="label">Jobs scanned today<button class="info-btn" type="button" aria-label="What this means" data-tip="New Upwork jobs the tool looked at today. Matched means the job passed your filters (keyword, client country) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
+      <div class="stat"><span class="label">Proposals sent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
+      <div class="stat"><span class="label">Waiting for review<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
+      <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today. The line below shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub" id="sFloor">Stops below 20</span></div>
+      <div class="stat"><span class="label">Failed today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals Upwork refused today, for example because the job closed or Rafa already applied. The reason is in the Activity log.">i</button></span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
     </section>
 
     <div class="cols">
@@ -302,7 +305,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>Time</th><th>Job</th><th>Status</th><th>Score</th><th>Connects</th><th>Loom</th></tr></thead>
+          <thead><tr><th>Found</th><th>Job</th><th>Status</th><th>Submitted</th><th>Speed <button class="info-btn" type="button" aria-label="What this means" data-tip="Time from the job being posted on Upwork to the proposal being submitted. The second line is the time from when the tool found the job.">i</button></th><th>Score</th><th>Connects</th><th>Loom</th></tr></thead>
           <tbody id="logBody"></tbody>
         </table>
       </div>
@@ -510,6 +513,14 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (s < 86400) return `${Math.round(s / 3600)} h ago`;
     return `${Math.round(s / 86400)} d ago`;
   }
+  // "4 min", "1 h 20 min", "2 d 3 h": time between two moments, for posted → found → submitted.
+  function dur(fromIso, toIso) {
+    if (!fromIso || !toIso) return null;
+    const m = Math.max(0, Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 60000));
+    if (m < 60) return `${m} min`;
+    if (m < 1440) return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+    return `${Math.floor(m / 1440)} d${Math.floor((m % 1440) / 60) ? ` ${Math.floor((m % 1440) / 60)} h` : ''}`;
+  }
   function when(iso) {
     if (!iso) return '–';
     const d = new Date(iso);
@@ -614,7 +625,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     let rows;
     try { rows = await api('/api/queue'); } catch (e) { toast(e.message, true); return; }
     const list = $('queueList'); list.replaceChildren();
-    $('qCount').textContent = rows.length ? `${rows.length} waiting · highest match first` : '';
+    $('qCount').textContent = rows.length ? `${rows.length} waiting · newest first` : '';
     if (!rows.length) {
       list.append(h('div', { class: 'empty' },
         h('b', { text: 'Nothing waiting for review' }),
@@ -625,7 +636,10 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   }
 
   function card(p) {
-    const meta = [p.client_country, p.job_type === 'hourly' ? 'Hourly' : p.job_type === 'fixed' ? 'Fixed price' : null, p.budget, `found ${ago(p.created_at)}`].filter(Boolean).join(' · ');
+    const found = p.found_at || p.created_at;
+    const meta = [p.client_country, p.job_type === 'hourly' ? 'Hourly' : p.job_type === 'fixed' ? 'Fixed price' : null, p.budget].filter(Boolean).join(' · ');
+    const times = [p.posted_at ? `Posted on Upwork ${when(p.posted_at)}` : null,
+      `found ${p.posted_at ? `${dur(p.posted_at, found)} later` : when(found)} (${ago(found)})`].filter(Boolean).join(' · ');
     const letterBox = h('div', { class: 'letter', text: p.cover_letter });
     const editWrap = h('div', { class: 'field', hidden: true });
     const ta = h('textarea', { rows: '10', id: `letter-${p.id}`, 'aria-label': `Cover letter for ${p.title}` });
@@ -648,6 +662,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('div', {},
           h('h3', {}, p.url ? h('a', { href: p.url, target: '_blank', rel: 'noopener noreferrer', text: p.title }) : p.title),
           h('div', { class: 'meta', text: meta }),
+          h('div', { class: 'meta', text: times }),
           p.score_reason ? h('div', { class: 'meta', style: 'margin-top:2px', text: outOf100(p.score_reason) }) : null),
         h('div', { class: 'chips' },
           p.is_example ? h('span', { class: 'chip info', text: 'Example' }) : null,
@@ -710,15 +725,20 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (!append) body.replaceChildren();
     for (const r of data.rows) {
       const [label, tone] = STATUS[r.status] || [r.status, ''];
-      const statusCell = h('td', {}, h('span', { class: `chip ${tone}`, text: label }), r.error ? h('span', { class: 'err', text: r.error }) : null);
+      const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }), r.error ? h('span', { class: 'err', text: r.error }) : null);
+      const statusCell = h('td', {}, stBox);
       if (r.status === 'approved') {
-        statusCell.append(' ', h('button', { type: 'button', class: 'btn', style: 'min-height:32px; padding:4px 10px; font-size:13px; margin-top:6px', text: 'Undo',
+        stBox.append(h('button', { type: 'button', class: 'btn', style: 'min-height:32px; padding:4px 10px; font-size:13px', text: 'Undo',
           onclick: async () => { try { await api(`/api/proposals/${r.id}/unapprove`, { method: 'POST' }); toast('Moved back to the review queue.'); refresh(); } catch (e) { toast(e.message, true); } } }));
       }
+      const found = r.found_at || r.created_at, sent = r.status === 'submitted' ? r.submitted_at : null;
+      const fromPost = dur(r.posted_at, sent), fromFound = dur(found, sent);
       body.append(h('tr', {},
-        h('td', { class: 'when', text: when(r.submitted_at || r.created_at) }),
+        h('td', { class: 'when' }, when(found), r.posted_at ? h('span', { class: 'sub-time', text: `posted ${when(r.posted_at)}` }) : null),
         h('td', {}, r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: r.title }) : r.title, r.is_example ? h('span', { class: 'chip info', style: 'margin-left:8px', text: 'Example' }) : null),
         statusCell,
+        h('td', { class: 'when', text: sent ? when(sent) : '–' }),
+        h('td', { class: 'when' }, fromPost ? `${fromPost} after posting` : '–', fromFound ? h('span', { class: 'sub-time', text: `${fromFound} after found` }) : null),
         h('td', { class: 'mono', text: r.score === null || r.score === undefined ? '–' : `${r.score}/100` }),
         h('td', { class: 'mono', text: r.status === 'submitted' ? (r.connects ?? '–') : '–' }),
         h('td', {}, r.loom_url ? h('a', { href: r.loom_url, target: '_blank', rel: 'noopener noreferrer', text: 'Open' }) : '–')));
@@ -780,11 +800,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   });
 
   // ---------- "i" explanations: click to open, click elsewhere or Esc to close ----------
-  function infoBtn(tip) { return tip ? h('button', { class: 'info', type: 'button', 'aria-label': 'What this means', 'data-tip': tip, text: 'i' }) : null; }
+  function infoBtn(tip) { return tip ? h('button', { class: 'info-btn', type: 'button', 'aria-label': 'What this means', 'data-tip': tip, text: 'i' }) : null; }
   let tipEl = null, tipFor = null;
   function closeTip() { if (tipEl) tipEl.remove(); if (tipFor) tipFor.setAttribute('aria-expanded', 'false'); tipEl = tipFor = null; }
   document.addEventListener('click', (e) => {
-    const b = e.target.closest('.info');
+    const b = e.target.closest('.info-btn');
     if (!b) { if (tipEl && !tipEl.contains(e.target)) closeTip(); return; }
     e.preventDefault(); e.stopPropagation();
     const same = tipFor === b; closeTip(); if (same) return;

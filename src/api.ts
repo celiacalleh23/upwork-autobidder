@@ -17,6 +17,8 @@ const fail = (message: string, status = 400) => json({ error: message }, status)
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
   connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params,
   (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason,
+  (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at,
+  (SELECT seen_at FROM jobs WHERE jobs.id = proposals.job_id) AS found_at,
   (SELECT analysis FROM jobs WHERE jobs.id = proposals.job_id) AS analysis`;
 
 interface ProposalRow {
@@ -24,6 +26,7 @@ interface ProposalRow {
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
   connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
   is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null; analysis: string | null;
+  posted_at: string | null; found_at: string | null;
 }
 
 const answersOf = (s: string | null): { question: string; answer: string }[] => {
@@ -37,12 +40,20 @@ const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
   is_example: r.is_example === 1,
   created_at: toIso(r.created_at),
   submitted_at: toIso(r.submitted_at),
+  posted_at: postedIso(r.posted_at),
+  found_at: toIso(r.found_at),
 });
 const safeList = (s: string | null): string[] => {
   try { const v = JSON.parse(s ?? '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
 };
 // D1 stores datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC
 const toIso = (s: string | null) => (s ? s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z') : null);
+// Upwork's published date comes as ISO text, or as "YYYY-MM-DD HH:MM:SS" in UTC like D1's; null when unreadable.
+export function postedIso(s: string | null): string | null {
+  if (!s) return null;
+  const t = Date.parse(/T/.test(s) ? s : `${s.trim().replace(' ', 'T')}Z`);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
 const toSql = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
 
 // Start of "today" in the given time zone, as a D1 UTC timestamp string
@@ -179,7 +190,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
     if (path === '/api/queue' && method === 'GET') {
       const { results } = await env.DB.prepare(
-        `SELECT ${PROPOSAL_COLS} FROM proposals WHERE status = 'pending' ORDER BY score DESC, created_at ASC LIMIT 100`,
+        `SELECT ${PROPOSAL_COLS} FROM proposals WHERE status = 'pending' ORDER BY COALESCE(found_at, created_at) DESC, created_at DESC LIMIT 100`,
       ).all<ProposalRow>();
       return json(results.map(shape));
     }
@@ -345,7 +356,7 @@ async function csv(env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(
     `SELECT ${PROPOSAL_COLS} FROM proposals ORDER BY COALESCE(submitted_at, created_at) DESC LIMIT 5000`,
   ).all<ProposalRow>();
-  const cols = ['created_at', 'submitted_at', 'status', 'title', 'url', 'job_type', 'budget', 'score', 'connects', 'bid', 'loom_url', 'upwork_proposal_id', 'error'] as const;
+  const cols = ['posted_at', 'found_at', 'created_at', 'submitted_at', 'status', 'title', 'url', 'job_type', 'budget', 'score', 'connects', 'bid', 'loom_url', 'upwork_proposal_id', 'error'] as const;
   const cell = (v: unknown) => {
     let s = v === null || v === undefined ? '' : String(v);
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // stop spreadsheet formula injection from job titles
