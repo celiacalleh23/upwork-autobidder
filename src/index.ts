@@ -108,6 +108,11 @@ async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Res
   return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': await sessionCookie(env, secure) } });
 }
 
+// Must match wrangler.toml [triggers]. Separate runs so each gets its own Workers CPU and subrequest limits.
+const SEND_CRON = '*/5 * * * *';
+const WRITE_CRON = '1,6,11,16,21,26,31,36,41,46,51,56 * * * *';
+const UPKEEP_CRON = '3,8,13,18,23,28,33,38,43,48,53,58 * * * *';
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -143,19 +148,23 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
 
-  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → Loom copy (M5) → submit (M6). Reports (M7) next.
+  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → Loom copy (M5) → submit (M6) → report (M7).
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
-    if (event.cron !== '*/5 * * * *') return;
-    // The sender goes first: if a run is cut short (Workers CPU or time limits), sending approved proposals must not
-    // depend on the scan finishing. The writer follows each scan, so its numbers land on that scan's run row.
-    await runSender(env).catch((e) => console.error('sender failed', e instanceof Error ? e.message : e));
-    if (await runScan(env)) await runWriter(env);
-    await refreshConnects(env).catch((e) => console.error('connects refresh failed', e instanceof Error ? e.message : e));
-    const s = await loadSettings(env);
-    await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch((e) => console.error('loom cleanup failed', e instanceof Error ? e.message : e));
-    await keepLoomAlive(env, s.loom.sourceUrl).catch((e) => console.error('loom keep-alive failed', e instanceof Error ? e.message : e));
-    await checkLoomAlert(env).catch((e) => console.error('loom alert failed', e instanceof Error ? e.message : e));
-    await sendDailyReport(env).catch((e) => console.error('daily report failed', e instanceof Error ? e.message : e));
+    const log = (what: string) => (e: unknown) => console.error(`${what} failed`, e instanceof Error ? e.message : e);
+    if (event.cron === SEND_CRON) {
+      // Sending first: approved proposals must not wait on the scan.
+      await runSender(env).catch(log('sender'));
+      await runScan(env).catch(log('scan'));
+    } else if (event.cron === WRITE_CRON) {
+      await runWriter(env).catch(log('writer'));
+    } else if (event.cron === UPKEEP_CRON) {
+      await refreshConnects(env).catch(log('connects refresh'));
+      const s = await loadSettings(env);
+      await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch(log('loom cleanup'));
+      await keepLoomAlive(env, s.loom.sourceUrl).catch(log('loom keep-alive'));
+      await checkLoomAlert(env).catch(log('loom alert'));
+      await sendDailyReport(env).catch(log('daily report'));
+    }
   },
 };
