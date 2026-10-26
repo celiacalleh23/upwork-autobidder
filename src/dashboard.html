@@ -274,7 +274,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>Found</th><th>Job</th><th>Client</th><th>Budget</th><th>Result</th></tr></thead>
+          <thead><tr><th>Found</th><th style="min-width:240px">Job</th><th>Client</th><th>Budget</th><th>Result</th></tr></thead>
           <tbody id="jobBody"></tbody>
         </table>
       </div>
@@ -305,7 +305,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>Found</th><th>Job</th><th>Status</th><th>Submitted</th><th>Speed <button class="info-btn" type="button" aria-label="What this means" data-tip="Time from the job being posted on Upwork to the proposal being submitted. The second line is the time from when the tool found the job.">i</button></th><th>Score</th><th>Connects</th><th>Loom</th></tr></thead>
+          <thead><tr><th>Found</th><th style="min-width:240px">Job</th><th>Status</th><th>Submitted</th><th>Speed <button class="info-btn" type="button" aria-label="What this means" data-tip="Time from the job being posted on Upwork to the proposal being submitted. The second line is the time from when the tool found the job.">i</button></th><th>Score</th><th>Connects</th><th>Loom</th></tr></thead>
           <tbody id="logBody"></tbody>
         </table>
       </div>
@@ -738,7 +738,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('td', {}, r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: r.title }) : r.title, r.is_example ? h('span', { class: 'chip info', style: 'margin-left:8px', text: 'Example' }) : null),
         statusCell,
         h('td', { class: 'when', text: sent ? when(sent) : '–' }),
-        h('td', { class: 'when' }, fromPost ? `${fromPost} after posting` : '–', fromFound ? h('span', { class: 'sub-time', text: `${fromFound} after found` }) : null),
+        h('td', { class: 'when' }, fromPost ? `${fromPost} after posting` : '–', fromFound ? h('span', { class: 'sub-time', text: `${fromFound} after found` }) : null,
+          !sent && ['pending', 'approved'].includes(r.status) && (r.posted_at || found) ? h('span', { class: 'sub-time', text: `waiting ${dur(r.posted_at || found, new Date().toISOString())} since ${r.posted_at ? 'posting' : 'found'}` }) : null),
         h('td', { class: 'mono', text: r.score === null || r.score === undefined ? '–' : `${r.score}/100` }),
         h('td', { class: 'mono', text: r.status === 'submitted' ? (r.connects ?? '–') : '–' }),
         h('td', {}, r.loom_url ? h('a', { href: r.loom_url, target: '_blank', rel: 'noopener noreferrer', text: 'Open' }) : '–')));
