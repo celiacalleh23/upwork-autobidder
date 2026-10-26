@@ -553,7 +553,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('sWaiting').textContent = fmtNum(t.waiting);
     $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
     $('sConnects').textContent = fmtNum(t.connectsSpent);
-    $('sFloor').textContent = c.connectsFloor ? `Stops below ${c.connectsFloor}` : 'No Connects floor';
+    // The 250 is an alert (email, sending continues), not a floor (Siv, Oct 21); show whichever applies.
+    $('sFloor').textContent = [c.connectsFloor ? `Stops below ${c.connectsFloor}` : null, s.connectsAlertBelow ? `Alert email below ${fmtNum(s.connectsAlertBelow)}` : null]
+      .filter(Boolean).join(' · ') || 'No Connects floor or alert';
     $('sFailed').textContent = fmtNum(t.failed);
     $('sFailed').className = 'value' + (t.failed ? ' v-bad' : '');
     const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', `${c.gapMinutes} min apart`];
