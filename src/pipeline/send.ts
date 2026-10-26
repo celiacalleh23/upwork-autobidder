@@ -169,7 +169,8 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       : cannotApply(d.canApply, d.connectsCost, balance ?? d.connectsBalance) === 'closed' ? CLOSED_REASON
       : connectsOverLimit(d.connectsCost, s);
     if (drop) { await setProposal(env, row.id, { status: 'failed', error: drop }); summary.note = drop; return summary; }
-    const wait = connectsGate(balance, d.connectsCost, s);
+    // The job details carry the balance too; use it when the account read failed.
+    const wait = connectsGate(balance ?? d.connectsBalance, d.connectsCost, s);
     if (wait) { summary.note = wait; return summary; }
     if (row.bid === null) { await setProposal(env, row.id, { status: 'failed', error: 'No bid amount stored' }); return summary; }
 

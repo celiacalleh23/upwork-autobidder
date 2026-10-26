@@ -549,7 +549,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const low = s.connectsAlertSentAt && s.connectsAlertBelow && s.connectsBalance !== null && s.connectsBalance < s.connectsAlertBelow;
     $('connectsBanner').hidden = !low;
     $('connectsText').textContent = low ? `Connects are low: ${s.connectsBalance} left (alert below ${s.connectsAlertBelow}). Add Connects on Upwork to keep proposals going.` : '';
-    $('sendState').textContent = !s.sendingEnabled ? 'off' : (s.senderNote || 'on');
+    // senderNote is written by the last sender run; ignore a leftover "off" note once Sending is switched on.
+    $('sendState').textContent = !s.sendingEnabled ? 'off' : (s.senderNote && !/^Sending is off/.test(s.senderNote) ? `on · ${s.senderNote}` : 'on');
     $('exampleBanner').hidden = !s.hasExamples;
     $('examplesRow').hidden = !s.hasExamples;
 

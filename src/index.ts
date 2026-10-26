@@ -146,9 +146,10 @@ export default {
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
     if (event.cron !== '*/5 * * * *') return;
-    // The writer follows each scan, so its numbers and notes land on that scan's run row. The sender runs every time.
+    // The sender goes first: if a run is cut short (Workers CPU or time limits), sending approved proposals must not
+    // depend on the scan finishing. The writer follows each scan, so its numbers land on that scan's run row.
+    await runSender(env).catch((e) => console.error('sender failed', e instanceof Error ? e.message : e));
     if (await runScan(env)) await runWriter(env);
-    await runSender(env);
     await refreshConnects(env).catch((e) => console.error('connects refresh failed', e instanceof Error ? e.message : e));
     const s = await loadSettings(env);
     await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch((e) => console.error('loom cleanup failed', e instanceof Error ? e.message : e));
