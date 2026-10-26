@@ -253,7 +253,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       return summary;
     }
     await setProposal(env, row.id, { status: 'submitted', submitted_at: attemptAt, upwork_proposal_id: out.proposalId, connects: d.connectsCost, error: null });
-    summary.sent = 1; summary.note = `Sent: ${row.title}`;
+    summary.sent = 1; summary.note = `last proposal sent at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: s.caps.timezone })}`;
     const after = await readBalance(client, state).catch(() => null) ?? (balance !== null && d.connectsCost !== null ? balance - d.connectsCost : null);
     await patchState(env, { lastSendAt: new Date().toISOString(), consecutiveErrors: 0, ...(after !== null ? { connectsBalance: after } : {}) });
     await checkConnectsAlert(env, after);

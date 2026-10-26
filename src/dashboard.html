@@ -75,7 +75,10 @@ p{margin:0}
 .status{display:flex; flex-wrap:wrap; align-items:center; gap:8px 22px; font-size:14px; color:var(--muted)}
 .status strong{color:var(--fg); font-weight:600}
 .dot{width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle}
-.stats{display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:14px}
+.stats{display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:14px}
+/* Five tiles: 5 across, then 3 + 2, then 2 + 2 + 1, with the last tile filling its row so none sits alone. */
+@media (max-width: 1000px){.stats{grid-template-columns:repeat(3, minmax(0, 1fr))} .stats > :nth-child(5){grid-column:span 2}}
+@media (max-width: 560px){.stats{grid-template-columns:repeat(2, minmax(0, 1fr))} .stats > :nth-child(5){grid-column:1 / -1}}
 .info-btn{display:inline-grid; place-items:center; width:17px; height:17px; margin-left:6px; padding:0; border:1px solid var(--line); border-radius:50%; background:transparent; color:var(--muted); font-weight:600; font-size:11px; line-height:1; font-style:italic; font-family:Georgia, serif; cursor:pointer; vertical-align:1px}
 .info-btn:hover, .info-btn[aria-expanded="true"]{color:var(--fg); border-color:var(--muted)}
 .tip-pop{position:absolute; z-index:60; max-width:min(300px, calc(100vw - 32px)); background:var(--surface); color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.45; font-weight:400; box-shadow:0 8px 24px rgba(0,0,0,.14)}
