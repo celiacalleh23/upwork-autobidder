@@ -876,16 +876,48 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     // replaceChildren would print a null child as the text "null"; drop optional parts that are absent.
     $('acctBody').replaceChildren(...[
       h('div', { class: 'stats' },
-        stat('Applications (Connects history)', cnt(st.connects.applications), `${fmtNum(st.connects.spent)} Connects spent (${usd(st.connects.spent)}) · ${fmtNum(st.connects.refunded)} refunded`, 'Proposals that spent Connects from Rafa\'s own balance in this period, read from her Connects history. Proposals sent with agency Connects do not appear here.'),
+        stat('Connects spent', `${fmtNum(st.connects.spent - st.connects.refunded)} · ${usd(st.connects.spent - st.connects.refunded)}`, `${cnt(st.connects.applications)} applications · ${fmtNum(st.connects.refunded)} refunded`, 'Everything Rafa\'s own balance paid for in this period (proposals, boosts, Profile Boost, Availability Badge), minus refunds, read from her Connects history. The table below splits it. Proposals sent with agency Connects do not appear here.'),
         stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`, 'Every proposal submitted from Rafa\'s account in this period, in any status (the table below, except invitations). Viewed means the client opened it.'),
         stat('Offers or hires', fmtNum(offers), `${pct(offers, sent)} of proposals sent`, 'Proposals that led to an offer or a hire, and what share of all proposals sent that is.'),
         stat('Contracts', `${cnt(st.contracts.active)} active`, `${cnt(st.contracts.closed)} closed · ${st.profile.totalJobs ?? '–'} completed jobs in total`, 'Contracts on Rafa\'s account right now: active and closed. Completed jobs is her all-time total shown on her Upwork profile.'),
         stat('Connects balance', `${fmtNum(st.connects.balance)} · ${usd(st.connects.balance)}`, `${fmtNum(st.connects.received)} received in ${st.windowDays} days (${usd(st.connects.received)})${st.connects.applications.capped ? ' (history read in part)' : ''}`, 'Connects available now in Rafa\'s account, and their value at $0.15 each. Received counts Connects bought or granted by Upwork in this period.')),
+      spendTable(st),
+      boostersLine(st),
       h('div', { class: 'tablewrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', {}, 'Viewed by client', infoBtn('How many of these proposals the client opened.')))),
         h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', {}, labels[k], infoBtn(tips[k])), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
       st.unreadableDates ? h('p', { class: 'small', style: 'color:var(--warn-fg)', text: `${st.unreadableDates} proposal dates could not be read; they are counted as inside the period.` }) : null,
       h('p', { class: 'small muted', text: 'All figures come straight from Upwork for this account (read-only).' })].filter(Boolean));
+  }
+  // Connects by what they paid for (Siv, Oct 27): proposals, proposal boosts, Profile Boost, Availability Badge.
+  const SPEND = [
+    ['applications', 'Proposals', 'Connects charged to apply to jobs.'],
+    ['proposalBoosts', 'Proposal boosts', 'Boost bids Upwork charged: only for proposals that landed in a paid spot on the client\'s list.'],
+    ['profileBoost', 'Profile Boost', 'Connects spent on Profile Boost ads, which show Rafa\'s profile higher in client searches.'],
+    ['badge', 'Availability Badge', 'The weekly charge for the "Available now" badge.'],
+    ['other', 'Other', 'Connects spent on something not listed above, as Upwork labels it in the history.'],
+  ];
+  function spendTable(st) {
+    const by = st.connects.byKind;
+    if (!by) return null; // figures read before Oct 27: press Refresh for the split
+    const rows = SPEND.filter(([k]) => k !== 'other' || by.other.n || by.other.refunded);
+    const net = (k) => by[k].spent - by[k].refunded;
+    const total = rows.reduce((t, [k]) => t + net(k), 0);
+    const cell = (k) => h('td', { class: 'mono' }, fmtNum(net(k)), by[k].refunded ? h('span', { class: 'sub-time', text: `${fmtNum(by[k].refunded)} refunded` }) : null);
+    return h('div', { class: 'tablewrap' }, h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'Connects spent on', infoBtn('From Rafa\'s Connects history for this period, refunds subtracted.')), h('th', { text: 'Charges' }), h('th', { text: 'Connects' }), h('th', { text: 'Value' }))),
+      h('tbody', {},
+        ...rows.map(([k, label, tip]) => h('tr', {}, h('td', {}, label, infoBtn(tip)), h('td', { class: 'mono', text: fmtNum(by[k].n) }), cell(k), h('td', { class: 'mono', text: usd(net(k)) }))),
+        h('tr', {}, h('td', {}, h('b', { text: 'Total' })), h('td', { class: 'mono', text: fmtNum(rows.reduce((t, [k]) => t + by[k].n, 0)) }),
+          h('td', { class: 'mono' }, h('b', { text: `${fmtNum(total)}${st.connects.applications.capped ? '+' : ''}` })), h('td', { class: 'mono' }, h('b', { text: usd(total) }))))));
+  }
+  function boostersLine(st) {
+    const b = st.boosters, credits = Object.entries(st.connects.adCredits || {});
+    const parts = [];
+    if (b && b.badge) parts.push(`Availability Badge: ${b.badge.active ? `on${b.badge.price !== null ? ` · ${fmtNum(b.badge.price)} Connects a week` : ''}${b.badge.renewsAt ? ` · renews ${when(b.badge.renewsAt)}` : ''}` : 'off'}`);
+    if (b) parts.push(`Profile Boost: ${b.profileBoost ? `${b.profileBoost.status.toLowerCase()}${b.profileBoost.bid !== null ? ` · bid ${fmtNum(b.profileBoost.bid)} Connects` : ''}` : 'off'}`);
+    if (credits.length) parts.push(`Ad credits (apart from Connects): ${credits.map(([k, v]) => `${k} ${fmtNum(v)}`).join(', ')}`);
+    return parts.length ? h('p', { class: 'small muted', text: `${parts.join(' · ')} (now, from Upwork)` }) : null;
   }
   async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }
   $('acctRefresh').addEventListener('click', async (ev) => {
@@ -897,7 +929,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       for (let i = 0; !r.done && i < 40; i++) {
         renderAccount(r.stats, true);
         const so = Object.values(r.stats.proposals).reduce((t, c) => t + c.n, 0);
-        b.textContent = `Reading Upwork… ${fmtNum(so)} so far`;
+        b.textContent = so ? `Reading Upwork… ${fmtNum(so)} so far` : 'Reading Upwork… Connects history';
         r = await api('/api/account-stats', { method: 'POST', body: { days, resume: true } });
       }
       renderAccount(r.stats);

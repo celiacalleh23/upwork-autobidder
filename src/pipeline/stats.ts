@@ -4,14 +4,16 @@ import { findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
 
 // Rafa's Upwork account at a glance (on demand from the dashboard): proposals by status over the last 30 days, how many
-// clients viewed them, contracts, completed jobs and Connects spent. Read-only, small pages, capped so one refresh stays
-// well under the Workers subrequest limit; capped counts are shown as "N+".
+// clients viewed them, contracts, completed jobs, and Connects spent by kind (proposals, proposal boosts, Profile Boost,
+// Availability Badge; Siv, Oct 27). Read-only, small pages, capped so one refresh stays well under the Workers
+// subrequest limit; capped counts are shown as "N+".
 
 export const WINDOWS = [30, 90, 365] as const;
 // Proposal pages read per request: Workers allow 50 outside calls per request on the free plan, and the profile,
 // contracts and Connects history use about 12. The dashboard keeps asking until every status is counted.
 const PAGE_BUDGET = 25;
 const MAX_PAGES_PER_STATUS = 100; // 1,000 proposals per status; beyond that the count shows "+"
+const MAX_CONNECTS_PAGES = 300;  // 3,000 Connects transactions (about 3 months of daily bidding); beyond that "read in part"
 const STATUSES = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired', 'Activated'] as const;
 
 export interface Count { n: number; capped: boolean }
@@ -21,8 +23,51 @@ export interface AccountStats {
   profile: { title: string; totalJobs: number | null; fixedJobs: number | null; hourlyJobs: number | null; feedbackCount: number | null };
   proposals: Record<(typeof STATUSES)[number], Count & { viewed: number }>;
   contracts: { active: Count; closed: Count };
-  connects: { balance: number | null; applications: Count; spent: number; refunded: number; received: number };
+  connects: {
+    balance: number | null; applications: Count; spent: number; refunded: number; received: number;
+    byKind: Record<SpendKind, Spend>; // what the Connects were spent on (refunds subtracted per kind)
+    adCredits: Record<string, number>; // Upwork product credits (ads), kept apart from the Connects balance
+  };
+  boosters: Boosters | null; // Availability Badge and Profile Boost as they stand now
   unreadableDates: number; // proposals whose date could not be read (counted as inside the period)
+}
+
+export const SPEND_KINDS = ['applications', 'proposalBoosts', 'profileBoost', 'badge', 'other'] as const;
+export type SpendKind = (typeof SPEND_KINDS)[number];
+export interface Spend { n: number; spent: number; refunded: number }
+
+// What a Connects transaction paid for, from Upwork's reason text and whether it is tied to a job. Seen on a real
+// account (Oct 27): "Job application" and "Refund job cancellation" with a jobPost. The wording for boosts and the badge
+// is not confirmed yet, so the patterns are broad and anything unrecognised is counted as "other", never dropped.
+export function spendKind(reason: string, hasJob: boolean): SpendKind {
+  const r = reason.toLowerCase();
+  const boost = /boost|\bbid\b/.test(r);
+  // Tied to a job: the application or its boost (a refund "job no longer available" must not read as the badge).
+  if (hasJob || /proposal/.test(r)) return boost ? 'proposalBoosts' : 'applications';
+  if (/availab|badge|\bpib\b/.test(r)) return 'badge';
+  if (boost || /\bads?\b|advert|promot|spotlight/.test(r)) return 'profileBoost';
+  if (/appl/.test(r)) return 'applications';
+  return 'other';
+}
+
+export interface Boosters {
+  badge: { active: boolean; price: number | null; renewsAt: string | null } | null;
+  profileBoost: { status: string; bid: number | null } | null;
+}
+
+// boost_profile get_status (read-only): pib_details.pibStatus is the Availability Badge, boost_status the Profile Boost ad.
+export function readBoosters(r: unknown): Boosters {
+  const n = (v: unknown) => (v === null || v === undefined || v === '' ? null : num(typeof v === 'object' ? findKey(v, 'rawValue') ?? findKey(v, 'amount') : v));
+  const pib = findKey(r, 'pibStatus') as Record<string, unknown> | undefined;
+  const ad = findKey(r, 'boost_status');
+  return {
+    badge: pib && typeof pib === 'object'
+      ? { active: pib.active === true || String(pib.status ?? '').toUpperCase() === 'ON', price: n(pib.currentPrice), renewsAt: typeof pib.nextRenewalAt === 'string' ? pib.nextRenewalAt : null }
+      : null,
+    profileBoost: ad && typeof ad === 'object'
+      ? { status: String(findKey(ad, 'status') ?? findKey(ad, 'adStatus') ?? 'unknown'), bid: n(findKey(ad, 'bid') ?? findKey(ad, 'bidAmount') ?? findKey(ad, 'connectsBid')) }
+      : null,
+  };
 }
 
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -86,38 +131,68 @@ async function countContracts(client: McpClient, tool: string, org: string, stat
   return { n, capped: true };
 }
 
-async function connectsHistory(client: McpClient, tool: string, org: string, cutoff: number) {
-  const out = { balance: null as number | null, applications: { n: 0, capped: false }, spent: 0, refunded: 0, received: 0 };
-  let cursor: string | undefined;
-  for (let page = 0; page < 5; page++) {
-    const r = await client.callTool(tool, { action: 'connects_balance', org_uid: org, params: { limit: 10, ...(cursor ? { cursor } : {}) } });
-    if (out.balance === null) out.balance = num(findKey(findKey(r, 'balance'), 'connectsBalance'));
+// Rafa's Connects history, a page (10 transactions) at a time from `run.cursor`, for at most `budget` pages, newest first;
+// stops at the first transaction older than the period. The caller keeps `run` between requests.
+export interface ConnectsRun {
+  cursor: string | null; pages: number; done: boolean; capped: boolean;
+  balance: number | null; received: number; byKind: Record<SpendKind, Spend>; adCredits: Record<string, number>;
+}
+export const newConnectsRun = (): ConnectsRun => ({
+  cursor: null, pages: 0, done: false, capped: false, balance: null, received: 0, adCredits: {},
+  byKind: Object.fromEntries(SPEND_KINDS.map((k) => [k, { n: 0, spent: 0, refunded: 0 }])) as Record<SpendKind, Spend>,
+});
+
+export async function readConnectsPages(client: McpClient, tool: string, org: string, cutoff: number, run: ConnectsRun, budget: number): Promise<number> {
+  let used = 0;
+  while (!run.done && used < budget) {
+    const r = await client.callTool(tool, { action: 'connects_balance', org_uid: org, params: { limit: 10, ...(run.cursor ? { cursor: run.cursor } : {}) } });
+    used++; run.pages++;
+    if (run.balance === null) run.balance = num(findKey(findKey(r, 'balance'), 'connectsBalance'));
+    const credits = findKey(r, 'product_credits');
+    if (run.pages === 1 && credits && typeof credits === 'object') {
+      for (const [k, v] of Object.entries(credits)) {
+        const c = num(typeof v === 'object' && v ? findKey(v, 'balance') ?? findKey(v, 'rawValue') ?? findKey(v, 'amount') : v);
+        if (c !== null) run.adCredits[k] = c;
+      }
+    }
     const tx = findKey(r, 'transactions');
     let older = false;
     for (const t of Array.isArray(tx) ? tx : []) {
       if (before(findKey(t, 'createdDateTime'), cutoff)) { older = true; break; }
-      const amount = num(findKey(findKey(t, 'amount'), 'rawValue')) ?? 0;
+      const amount = Math.abs(num(findKey(findKey(t, 'amount'), 'rawValue')) ?? 0);
       const type = String(findKey(t, 'transactionType') ?? '');
-      if (/spent/i.test(type)) {
-        out.spent += Math.abs(amount);
-        // Connects spent on a job are an application (or its boost), whatever wording Upwork uses for the reason.
-        const job = findKey(t, 'jobPost');
-        if ((job && typeof job === 'object') || /appl|proposal/i.test(String(findKey(t, 'reason') ?? ''))) out.applications.n++;
-      }
-      else if (/refund/i.test(type)) out.refunded += amount;
-      else if (/receiv|purchas|bought/i.test(type)) out.received += amount;
+      const job = findKey(t, 'jobPost');
+      const kind = spendKind(String(findKey(t, 'reason') ?? ''), !!job && typeof job === 'object');
+      if (/spent/i.test(type)) { run.byKind[kind].spent += amount; run.byKind[kind].n++; }
+      else if (/refund/i.test(type)) run.byKind[kind].refunded += amount;
+      else if (/receiv|purchas|bought/i.test(type)) run.received += amount;
     }
-    const next = findKey(r, 'next_cursor');
-    if (older || findKey(r, 'hasMore') === false || typeof next !== 'string') return out;
-    cursor = next;
+    const info = findKey(r, 'pageInfo') as { hasNextPage?: boolean; endCursor?: string } | undefined;
+    const next = findKey(r, 'next_cursor') ?? (info?.hasNextPage ? info.endCursor : undefined);
+    if (older || findKey(r, 'hasMore') === false || typeof next !== 'string' || !next) { run.done = true; run.cursor = null; }
+    else if (run.pages >= MAX_CONNECTS_PAGES) { run.done = true; run.capped = true; run.cursor = null; }
+    else run.cursor = next;
   }
-  out.applications.capped = true;
-  return out;
+  return used;
 }
 
-type Head = Omit<AccountStats, 'proposals' | 'unreadableDates'>;
+function connectsSummary(run: ConnectsRun, fallbackBalance: number | null): AccountStats['connects'] {
+  const kinds = Object.values(run.byKind);
+  return {
+    balance: run.balance ?? fallbackBalance,
+    applications: { n: run.byKind.applications.n, capped: run.capped || !run.done },
+    spent: kinds.reduce((t, k) => t + k.spent, 0),
+    refunded: kinds.reduce((t, k) => t + k.refunded, 0),
+    received: run.received,
+    byKind: run.byKind,
+    adCredits: run.adCredits,
+  };
+}
+
+type Head = Omit<AccountStats, 'proposals' | 'unreadableDates' | 'connects'>;
 interface Progress {
-  days: number; cutoff: number; startedAt: number; head: Head;
+  days: number; cutoff: number; startedAt: number; head: Head; balance: number | null;
+  connectsTool: string | null; cx: ConnectsRun;
   idx: number; cursor: string | null; statusPages: number; cur: { n: number; viewed: number };
   proposals: Partial<AccountStats['proposals']>; unreadable: number;
 }
@@ -138,12 +213,13 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
   let prog: Progress | null = null;
   if (resume) {
     try { prog = JSON.parse((await getKv(env, PROGRESS_KEY)) ?? 'null'); } catch { prog = null; }
-    if (prog && (prog.days !== days || Date.now() - prog.startedAt > PROGRESS_TTL_MS)) prog = null;
+    if (prog && (prog.days !== days || !prog.cx || Date.now() - prog.startedAt > PROGRESS_TTL_MS)) prog = null;
   }
   if (!prog) {
     const names = await client.listTools();
     const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
     const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
+    const boostTool = names.find((n) => n === 'boost_profile' || n.endsWith('__boost_profile'));
     const cutoff = Date.now() - days * 86400_000;
     const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
     const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
@@ -151,9 +227,11 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
       ? { active: await countContracts(client, contractsTool, org, 'ACTIVE').catch(() => ({ n: 0, capped: false })),
           closed: await countContracts(client, contractsTool, org, 'CLOSED').catch(() => ({ n: 0, capped: false })) }
       : { active: { n: 0, capped: false }, closed: { n: 0, capped: false } };
-    const connects = profileTool ? await connectsHistory(client, profileTool, org, cutoff).catch(() => null) : null;
+    // get_status only reads the badge and the ad; this tool's other actions are never called.
+    const boosters = boostTool ? await client.callTool(boostTool, { action: 'get_status', org_uid: org }).then(readBoosters, () => null) : null;
     prog = {
       days, cutoff, startedAt: Date.now(), idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0,
+      balance: state.connectsBalance, connectsTool: profileTool ?? null, cx: newConnectsRun(),
       head: {
         at: '', windowDays: days,
         profile: {
@@ -161,13 +239,22 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
           totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
         },
         contracts,
-        connects: connects ?? { balance: state.connectsBalance, applications: { n: 0, capped: false }, spent: 0, refunded: 0, received: 0 },
+        boosters,
       },
     };
   }
 
   unreadable.n = prog.unreadable;
   let budget = PAGE_BUDGET;
+  // The Connects history first, then the proposals by status; both resume where the last request stopped.
+  if (!prog.cx.done) {
+    if (!prog.connectsTool) prog.cx.done = true;
+    else {
+      const startPages = prog.cx.pages;
+      budget -= await readConnectsPages(client, prog.connectsTool, org, prog.cutoff, prog.cx, budget)
+        .catch(() => { prog!.cx.done = true; prog!.cx.capped = true; return prog!.cx.pages - startPages + 1; });
+    }
+  }
   while (prog.idx < STATUSES.length && budget > 0) {
     const status = STATUSES[prog.idx];
     const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages))
@@ -183,10 +270,10 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
   }
   prog.unreadable = unreadable.n;
 
-  const done = prog.idx >= STATUSES.length;
+  const done = prog.idx >= STATUSES.length && prog.cx.done;
   const proposals = Object.fromEntries(STATUSES.map((s, k) => [s,
     prog!.proposals[s] ?? (k === prog!.idx ? { ...prog!.cur, capped: false } : ZERO)])) as AccountStats['proposals'];
-  const stats: AccountStats = { ...prog.head, at: new Date().toISOString(), proposals, unreadableDates: prog.unreadable };
+  const stats: AccountStats = { ...prog.head, connects: connectsSummary(prog.cx, prog.balance), at: new Date().toISOString(), proposals, unreadableDates: prog.unreadable };
   if (done) {
     await putKv(env, 'account_stats', JSON.stringify(stats));
     await delKv(env, PROGRESS_KEY);

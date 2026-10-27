@@ -19,7 +19,7 @@ Every 5 minutes, all day (every 2 minutes in Auto-submit):
 |---|---|
 | **Proposals** | Today's numbers, the **Review queue** (proposals waiting for you) and **Jobs found**: every job the tool looked at and why it was kept or skipped |
 | **Activity log** | Every proposal and what happened to it (waiting, approved, sent, failed, skipped). **Export CSV** downloads it |
-| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, Connects. Press **Refresh from Upwork** to update (it counts every proposal, 10 at a time, so it can take a few seconds) |
+| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, and **Connects spent on proposals, proposal boosts, Profile Boost and Availability Badge**, with the total in dollars. Press **Refresh from Upwork** to update (it reads every record, 10 at a time, so it can take a few seconds) |
 | **Settings** | All the rules. Press **Save changes** at the bottom after changing anything |
 
 Not sure what a number means? Click the small **i** next to it for a short explanation.
@@ -59,6 +59,7 @@ The tool also pauses itself on any Upwork warning or limit. The reason shows in 
 - Proposals use the Connects in **Rafa's own account**. The balance shows at the top of the page and updates every 30 minutes.
 - Below **250**, you get an email to buy more. Sending continues while there are enough Connects for the next job.
 - To buy more: Upwork → Rafa's account → **Connects**.
+- **What the Connects went to:** Rafa's account tab → **Connects spent on**: proposals, proposal boosts, Profile Boost and Availability Badge, refunds subtracted, with the total. Below it, whether the badge and Profile Boost are on now. Profile Boost and the badge are switched on and off on upwork.com.
 
 ### Boosting strong matches
 
