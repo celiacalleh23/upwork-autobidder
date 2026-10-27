@@ -2,13 +2,14 @@ name = "upwork-autobidder"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 
-# Three separate 5-minute runs, so each gets its own Workers limits (Oct 26: one run doing everything was cut short on
-# the free plan and new jobs waited in "Matched"):
-#   minute 0, 5, 10…  send one approved proposal, then scan Upwork
-#   minute 1, 6, 11…  score and write proposals for matched jobs
-#   minute 3, 8, 13…  upkeep: Connects balance, Loom cleanup/keep-alive/alerts, daily report (3 pm Pacific)
+# Three separate runs, so each gets its own Workers limits (Oct 26: one run doing everything was cut short on the free
+# plan and new jobs waited in "Matched"). The code decides which minutes do work (src/pipeline/pace.ts):
+#   every minute       send one approved proposal, then scan Upwork. Review: minute 0, 5, 10…; Auto: every minute
+#                      (scan every 2 minutes)
+#   minutes 1–59       score and write proposals for matched jobs. Review: minute 1, 6, 11…; Auto: every minute
+#   minute 3, 8, 13…   upkeep: Connects balance, Loom cleanup/keep-alive/alerts, daily report (3 pm Pacific)
 [triggers]
-crons = ["*/5 * * * *", "1,6,11,16,21,26,31,36,41,46,51,56 * * * *", "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"]
+crons = ["* * * * *", "1-59 * * * *", "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"]
 
 # The dashboard HTML is bundled into the Worker as text.
 [[rules]]

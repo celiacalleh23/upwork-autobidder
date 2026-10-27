@@ -10,12 +10,16 @@ import { createPreview } from './preview';
 import { alertAction, classifyFailure, connectsGate, readConfirm, sendGate } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 
-// Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first, only when
-// Settings → Sending is on (Siv or Celia switch it on in the dashboard; never in code). A confirm whose result is
-// unclear is marked 'unknown' and never resent; the next runs look for it on Upwork.
+// Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
+// newest job first in Auto (pace.ts), only when Settings → Sending is on (Siv or Celia switch it on in the dashboard;
+// never in code). A confirm whose result is unclear is marked 'unknown' and never resent; the next runs look for it on Upwork.
 
 const LEASE_MS = 10 * 60_000;
 const UNKNOWN_GIVE_UP_MS = 24 * 3600_000;
+// Auto runs the sender every minute (pace.ts). After a wait or an error from Upwork, and between checks of unclear
+// sends, Upwork is asked again only 5 minutes later, as in Review (30 s slack for the cron).
+const RETRY_AFTER_MS = 5 * 60_000 - 30_000;
+const holdRetries = (env: Env) => putKv(env, 'send:retryAt', String(Date.now() + RETRY_AFTER_MS));
 
 interface Row {
   id: number; job_id: string; title: string; job_type: string | null; cover_letter: string; bid: number | null;
@@ -87,6 +91,9 @@ async function verifyUnknown(env: Env, client: McpClient, state: State) {
     .all<{ id: number; job_id: string; submitted_at: string | null }>();
   const tool = state.upwork.toolNames.list_freelancer_proposals;
   if (!results.length || !tool || !state.upwork.orgUid) return;
+  const last = Number(await getKv(env, 'unknown:checkedAt'));
+  if (Number.isFinite(last) && Date.now() - last < RETRY_AFTER_MS) return;
+  await putKv(env, 'unknown:checkedAt', String(Date.now()));
   const nodes: unknown[] = [];
   for (const status of ['Pending', 'Accepted']) {
     const r = await client.callTool(tool, { action: 'list', org_uid: state.upwork.orgUid, params: { status, limit: 10, sort_field: 'CREATEDDATETIME', sort_order: 'DESC' } }).catch(() => null);
@@ -133,15 +140,20 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
   if (gate && !(hasUnknown && s.sendingEnabled && !state.paused && state.upwork.connected)) { await setNote(env, gate); return null; }
 
   const fixedOk = s.fixedPriceTermsAcknowledged ? 1 : 0;
+  // Review: the closest match first. Auto: the newest job first, since speed after posting matters most (Siv, Oct 27).
+  const order = state.mode === 'auto' ? 'j.posted_at DESC, p.created_at DESC' : 'p.score DESC, p.created_at ASC';
   const row = gate ? null : await env.DB.prepare(
-    `SELECT id, job_id, title, job_type, cover_letter, bid, create_params, score, submitted_at FROM proposals
-     WHERE status = 'approved' AND (job_type IS NOT 'fixed' OR ? = 1) ORDER BY score DESC, created_at ASC LIMIT 1`,
+    `SELECT p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at
+     FROM proposals p LEFT JOIN jobs j ON j.id = p.job_id
+     WHERE p.status = 'approved' AND (p.job_type IS NOT 'fixed' OR ? = 1) ORDER BY ${order} LIMIT 1`,
   ).bind(fixedOk).first<Row>();
   if (!gate && !row) {
     const fixedWaiting = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'approved' AND job_type = 'fixed'").first<{ n: number }>();
     await setNote(env, fixedWaiting?.n ? `${fixedWaiting.n} fixed-price proposal(s) wait for the Upwork terms acknowledgement (Settings → Sending).` : 'Nothing approved to send.');
     if (!hasUnknown) return null;
   }
+  const held = Number(await getKv(env, 'send:retryAt')) > Date.now();
+  if (held && !hasUnknown) return null; // the note from the last try stays
   if (!(await acquireLease(env, 'send', LEASE_MS))) return null;
 
   const summary: SendSummary = { sent: 0, note: gate ?? (row ? null : 'Nothing approved to send.') };
@@ -150,6 +162,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
     const client = await upworkClient(env);
     if (hasUnknown) await verifyUnknown(env, client, state);
     if (!row || gate) return summary;
+    if (held) { summary.note = state.senderNote; return summary; }
     // While a send from the last hour has an unclear result, send nothing new: a flaky Upwork must not cause a chain.
     const unclear = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'unknown' AND submitted_at >= datetime('now', '-60 minutes')").first<{ n: number }>();
     if (unclear?.n) { summary.note = `Checking ${unclear.n} unclear send(s) on Upwork before sending more.`; return summary; }
@@ -171,7 +184,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
     if (drop) { await setProposal(env, row.id, { status: 'failed', error: drop }); summary.note = drop; return summary; }
     // The job details carry the balance too; use it when the account read failed.
     const wait = connectsGate(balance ?? d.connectsBalance, d.connectsCost, s);
-    if (wait) { summary.note = wait; return summary; }
+    if (wait) { summary.note = wait; await holdRetries(env); return summary; }
     if (row.bid === null) { await setProposal(env, row.id, { status: 'failed', error: 'No bid amount stored' }); return summary; }
 
     // Claim it, so a parallel run or an Undo can't race this send.
@@ -189,7 +202,8 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         summary.note = 'A proposal went back to review: new screening questions.'; return summary;
       }
       if (p.connectsCost !== null && balance !== null && p.connectsCost > balance) {
-        await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`; return summary;
+        await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
+        await holdRetries(env); return summary;
       }
       previewId = p.previewId;
     } catch (e) {
@@ -197,6 +211,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       const kind = classifyFailure(e);
       if (kind === 'refused') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${errText(e)}` }); return summary; }
       await setProposal(env, row.id, { status: 'approved', submitted_at: null });
+      await holdRetries(env);
       if (kind === 'rate_limit') await patchState(env, { paused: true, pausedReason: `Upwork rate limit or warning while sending: ${errText(e)}` });
       else await countError(env, s, errText(e));
       summary.note = `Preview failed: ${errText(e)}`; return summary;
@@ -263,6 +278,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
     summary.note = `Sender: ${errText(e)}`;
     console.error('sender failed', summary.note);
     // Before the confirm it is safe to retry later; after it, never: the proposal may already be on Upwork.
+    if (row && !confirmAttempted) await holdRetries(env).catch(() => undefined);
     if (row) {
       await env.DB.prepare(confirmAttempted
         ? "UPDATE proposals SET status = 'unknown', error = 'Error after sending; checking on Upwork, not resending' WHERE id = ? AND status = 'submitting'"

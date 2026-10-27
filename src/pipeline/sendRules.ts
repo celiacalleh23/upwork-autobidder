@@ -17,7 +17,7 @@ export function sendGate(state: State, s: Settings, counts: SendCounts, now = ne
   if (s.caps.hourly > 0 && counts.sentLastHour >= s.caps.hourly) return `Hourly cap reached (${s.caps.hourly}).`;
   if (state.lastSendAt) {
     const wait = s.caps.gapMinutes * 60_000 - (now.getTime() - Date.parse(state.lastSendAt));
-    // 30 s slack: the cron fires every 5 minutes and a 5-minute gap should not skip a whole run.
+    // 30 s slack: the sender runs on the minute (every 5 minutes in Review) and a 5-minute gap should not skip a run.
     if (wait > 30_000) return `Next proposal in ${Math.ceil(wait / 60_000)} min (${s.caps.gapMinutes} min apart).`;
   }
   return null;

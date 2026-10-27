@@ -8,6 +8,7 @@ import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
 import { syncDue, syncTrackRecord } from './pipeline/profile';
 import { refreshConnects, runSender } from './pipeline/send';
+import { sendAndScanDue, writeDue } from './pipeline/pace';
 import { sendDailyReport } from './pipeline/report';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
 import { loadSettings, loadState, type Env } from './settings';
@@ -110,9 +111,10 @@ async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Res
   return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': await sessionCookie(env, secure) } });
 }
 
-// Must match wrangler.toml [triggers]. Separate runs so each gets its own Workers CPU and subrequest limits.
-const SEND_CRON = '*/5 * * * *';
-const WRITE_CRON = '1,6,11,16,21,26,31,36,41,46,51,56 * * * *';
+// Must match wrangler.toml [triggers]. Separate runs so each gets its own Workers CPU and subrequest limits; which
+// minutes do work depends on the mode (pace.ts).
+const SEND_CRON = '* * * * *';
+const WRITE_CRON = '1-59 * * * *';
 const UPKEEP_CRON = '3,8,13,18,23,28,33,38,43,48,53,58 * * * *';
 
 export default {
@@ -154,11 +156,14 @@ export default {
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
     const log = (what: string) => (e: unknown) => console.error(`${what} failed`, e instanceof Error ? e.message : e);
+    const minute = new Date(event.scheduledTime).getUTCMinutes();
     if (event.cron === SEND_CRON) {
+      if (!sendAndScanDue(minute, (await loadState(env)).mode)) return;
       // Sending first: approved proposals must not wait on the scan.
       await runSender(env).catch(log('sender'));
       await runScan(env).catch(log('scan'));
     } else if (event.cron === WRITE_CRON) {
+      if (!writeDue(minute, (await loadState(env)).mode)) return;
       await runWriter(env).catch(log('writer'));
     } else if (event.cron === UPKEEP_CRON) {
       await refreshConnects(env).catch(log('connects refresh'));

@@ -32,7 +32,7 @@ Every 5 minutes (configurable 5–30), during active hours, unless paused:
 | Topic | Decision |
 | --- | --- |
 | Rollout | Launch in **Review mode**. Auto only after ~2 weeks with no Upwork warnings, switched on by Siv in the dashboard. Never enable Auto in code or migrations. |
-| Scan interval | Every 5 minutes by default (setting allows 5/10/15). No faster. |
+| Scan interval | Every 5 minutes by default (setting allows 5/10/15) in Review. **Auto mode: every 2 minutes** (Siv and Celia, Oct 27; see §11a "Speed in Auto"). |
 | Caps (defaults) | **No daily or hourly cap** (Celia, Oct 21: send every good match; `0` = no limit). One proposal at a time, ≥ 5 min apart (one per cron run). Was: 15/day, 3/hour, 10 min between submissions, 07:00–21:00 America/New_York, Connects floor 20, max 16 Connects per job, boost off, auto-pause after 3 errors in a row. Siv sends 15–30/day today, so the daily cap can rise toward 30 in Auto. |
 | Approvals | Approving in Review does **not** send instantly; it marks `approved` and the sender sends at the next free slot. |
 | Video | **Option C, Loom copies.** Siv has a paid Loom plan. Unofficial route (no public Loom API): if it fails, send the proposal without the link and flag it. Fallback if Loom breaks for good is Option B (Google Drive copies), not in scope now. |
@@ -293,6 +293,8 @@ Local dev: `.dev.vars` (git-ignored). Never commit secrets or tokens, and never 
 | Connects floor | **Alert only:** email `siv@ltv-labs.com` when the balance falls below **250**; sending continues | New setting `connectsAlertBelow = 250`, emailed once per drop below (reset when the balance is back above). Keep the hard stop only for "balance < job cost". `caps.connectsFloor = 0`. |
 | Daily report | **3 pm California** to `siv@ltv-labs.com`: job titles and Connects spent on each | Schedule in `America/Los_Angeles` (not fixed 23:00 UTC, which is 4 pm in summer). |
 | Loom source video | `https://www.loom.com/share/de64065f88f648be910277062a18e601` | `loom.sourceUrl` |
+| Speed in Auto | **Faster once Auto is on** (Siv, Oct 27; Celia approved): scan every 2 minutes, send each proposal as soon as it is written, newest job first. Review keeps the 5-minute rhythm and highest score first. Plan: switch to Auto on Monday Nov 2. | `src/pipeline/pace.ts`. Crons: `* * * * *` (send, then scan) and `1-59 * * * *` (write) fire every minute; the code works every minute in Auto and at minute 0/5/10… (send+scan) and 1/6/11… (write) in Review. Send and write stay in separate runs for the Workers limits. The ≥ 5 min gap between proposals (`caps.gapMinutes`) still applies. Sender order in Auto: `jobs.posted_at DESC`. No new switch: it follows the mode. |
+| Score weights | **Profile 100 / past wins 0** (Siv, Oct 27, in the dashboard): Rafa's past wins are not email marketing. | `scoreWeights`, no code change. |
 | Letter | Fixed template below. Personalise only an opening paragraph (2–3 sentences) per job; the body, Loom line, links and sign-off stay the same. | Claude returns only the opening; the code assembles opening + fixed body. `contactDetailsIn` still runs on the opening. |
 
 Still open: max Connects per job (default 16), Rafa's profile summary (draft it from the template for Siv to approve), whether Loom view counts can be hidden, Workers Paid approval. The Claude API key and Loom access are with Celia and get set as a secret / pasted in the dashboard, never shared in chat or committed.

@@ -218,6 +218,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <section class="confirm" id="autoConfirm" hidden aria-labelledby="autoH">
     <h2 id="autoH">Turn on Auto-submit?</h2>
     <p>Proposals will be sent without your approval, inside your caps: <b id="capLine">15 a day, 3 an hour, 10 minutes apart</b>, during active hours only. We recommend switching after about two weeks in Review with no warnings from Upwork.</p>
+    <p>Auto-submit also runs faster: Upwork is scanned every 2 minutes, each proposal goes out as soon as it is written, and the newest job goes first.</p>
     <p class="small muted">If Upwork ever stops allowing automatic confirmation, the tool switches itself back to Review and tells you.</p>
     <div class="actions"><button type="button" class="btn" id="autoCancel">Keep Review first</button><button type="button" class="btn primary" id="autoOk">Turn on Auto-submit</button></div>
   </section>
@@ -227,9 +228,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <section class="status" aria-label="Pipeline status">
       <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
       <span>Last scan: <strong id="lastScan">–</strong></span>
-      <span>Scans every <strong id="scanEvery">5</strong> min</span>
-      <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day. Searching runs every 5 minutes either way.">i</button></span>
-      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically. Only Siv switches to Auto-submit.">i</button></span>
+      <span>Scans every <strong id="scanEveryText">5</strong> min</span>
+      <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day. Searching runs either way, every 5 minutes (every 2 in Auto-submit).">i</button></span>
+      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically and the tool runs faster: it scans every 2 minutes, sends each proposal as soon as it is written and sends the newest job first. Only Siv switches to Auto-submit.">i</button></span>
       <span>Sending: <strong id="sendState">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
       <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
@@ -426,7 +427,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <section class="section" aria-labelledby="s5">
       <header><h2 id="s5">Caps and guardrails</h2><p>0 means no limit. Proposals always go out one at a time, a few minutes apart, and any Upwork warning pauses everything.</p></header>
       <div class="grid">
-        <div class="field"><label for="scanEvery">Scan Upwork every</label><select id="scanEvery"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
+        <div class="field"><label for="scanEvery">Scan Upwork every (in Review first; Auto-submit scans every 2 minutes)</label><select id="scanEvery"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
         <div class="field"><label for="capDaily">Proposals per day (0 = no limit)</label><input type="number" id="capDaily" min="0" max="500"></div>
         <div class="field"><label for="capHourly">Proposals per hour (0 = no limit)</label><input type="number" id="capHourly" min="0" max="60"></div>
         <div class="field"><label for="capGap">Minutes between proposals</label><input type="number" id="capGap" min="5" max="120"></div>
@@ -580,7 +581,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('lastRunNote').textContent = lr && lr.errors ? `Last run problem: ${lr.note || 'see the Worker logs'}` : (lr && lr.note) || '';
     $('lastRunNote').className = 'msg' + (lr && lr.errors ? ' bad' : '');
     $('lastRunNote').hidden = !(lr && (lr.errors || lr.note));
-    $('scanEvery').textContent = s.scanEveryMinutes;
+    $('scanEveryText').textContent = s.scanEveryMinutes;
     $('activeHours').textContent = s.activeHours.start === s.activeHours.end ? '24/7' : `${s.activeHours.start}–${s.activeHours.end} (${tzName(s.activeHours.timezone)})`;
 
     const t = s.today, c = s.caps;
@@ -1029,7 +1030,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   $('modeReview').addEventListener('click', async () => {
     $('autoConfirm').hidden = true;
     if (state.mode === 'review') return;
-    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'review' } })) }; renderState(); toast('Review first is on. Every proposal waits for your approval.'); }
+    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'review' } })) }; renderState(); loadState(); toast('Review first is on. Every proposal waits for your approval.'); }
     catch (e) { toast(e.message, true); }
   });
   $('modeAuto').addEventListener('click', () => {
@@ -1038,7 +1039,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   });
   $('autoCancel').addEventListener('click', () => { $('autoConfirm').hidden = true; });
   $('autoOk').addEventListener('click', async () => {
-    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'auto', confirm: true } })) }; $('autoConfirm').hidden = true; renderState(); toast('Auto-submit is on.'); }
+    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'auto', confirm: true } })) }; $('autoConfirm').hidden = true; renderState(); loadState(); toast('Auto-submit is on.'); }
     catch (e) { toast(e.message, true); }
   });
   async function togglePause() {

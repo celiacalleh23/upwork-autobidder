@@ -2,7 +2,8 @@
 
 Siv's private dashboard and bidding pipeline, running on Cloudflare Workers + D1.
 
-**Status: M6 — sender.** Approved proposals are submitted one at a time, highest score first, at least 5 minutes
+**Status: M6 — sender.** Approved proposals are submitted one at a time, highest score first (in Auto mode: newest job
+first, scanning every 2 minutes and sending as soon as a proposal is written; see `src/pipeline/pace.ts`), at least 5 minutes
 apart, only when **Settings → Sending** is switched on (off by default; never switched on in code). Unclear results
 are marked `unknown`, checked on Upwork and never resent; a rate limit or a request for human confirmation pauses
 everything. Below the Connects alert level the dashboard shows a warning (and emails the report address once

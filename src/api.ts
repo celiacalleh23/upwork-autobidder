@@ -10,6 +10,7 @@ import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
+import { scanEveryMinutes } from './pipeline/pace';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -346,7 +347,7 @@ async function getState(env: Env) {
   return {
     ...state,
     lastScanAt: state.lastScanAt,
-    scanEveryMinutes: settings.scanEveryMinutes,
+    scanEveryMinutes: scanEveryMinutes(state.mode, settings),
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
     sendingEnabled: settings.sendingEnabled,
     connectsAlertBelow: settings.connectsAlertBelow,

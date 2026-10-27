@@ -4,10 +4,10 @@ Dashboard: **https://upwork-autobidder.siv-4c9.workers.dev** (sign in with the d
 
 ## What the tool does
 
-Every 5 minutes, all day:
+Every 5 minutes, all day (every 2 minutes in Auto-submit):
 
 1. **Finds** new Klaviyo jobs on Upwork from clients in the US, Canada and the UK.
-2. **Scores** each one out of 100: half for how close it is to jobs Rafa has won, half for how well it fits her profile.
+2. **Scores** each one out of 100 for how well it fits Rafa's profile (the weights are in Settings → Which jobs to bid on).
 3. **Writes** the proposal: your template word for word, plus a short personal intro (2–3 sentences) for each job.
 4. **Makes a Loom copy** of your video for each proposal, named after the job.
 5. **Waits for review** in the dashboard. It sends nothing until Sending is switched on.
@@ -39,6 +39,7 @@ The switch is at the top of the page.
 
 - **Review first** (current): every proposal waits for your approval.
 - **Auto-submit:** proposals go out without approval. **Only you switch this on**, once you're happy with the quality. The tool never turns it on by itself.
+- **Auto-submit is also faster:** it looks for jobs every 2 minutes instead of 5, sends each proposal as soon as it's written instead of waiting for the next round, and sends the newest job first instead of the highest score. Proposals still go out at least 5 minutes apart. Going back to Review first returns to the normal pace.
 - If Upwork ever asks for a human check, the tool goes back to Review first and tells you.
 
 ## Sending on and off
@@ -71,7 +72,7 @@ The tool also pauses itself on any Upwork warning or limit. The reason shows in 
 | Daily/hourly limits, hours, Connects alert | **Caps and guardrails** |
 | Report email | **Reports and connections** |
 
-Current rules: Klaviyo in the title or description · US, Canada, UK · minimum score 35 · hourly bid = top of the client's range, or $30/hr when there's no range · fixed price = the client's budget · 24/7, 5 minutes apart · no daily limit · alert below 250 Connects · boost never.
+Current rules: Klaviyo in the title or description · US, Canada, UK · minimum score 35 · hourly bid = top of the client's range, or $30/hr when there's no range · fixed price = the client's budget · 24/7, 5 minutes apart (Auto-submit: scans every 2 minutes, newest job first) · no daily limit · alert below 250 Connects · boost never.
 
 ## Reconnecting
 

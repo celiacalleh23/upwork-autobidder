@@ -2,6 +2,7 @@ import { acquireLease, getKv, putKv, releaseLease } from '../kv';
 import { McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type RunSummary, type Settings } from '../settings';
+import { scanEveryMinutes } from './pace';
 import { containsTerm, evaluateJob, recheckStored, reopenable, stripUntrusted, type StoredJob, type UpworkJob } from './filters';
 
 // Scanner: small, recent result pages per keyword, every new job recorded once with its filter verdict.
@@ -70,7 +71,7 @@ export function scanDue(lastScanAt: string | null, everyMinutes: number, now = D
 export async function runScan(env: Env, opts: { force?: boolean } = {}): Promise<RunSummary | null> {
   const [state, settings] = await Promise.all([loadState(env), loadSettings(env)]);
   if (state.paused || !state.upwork.connected || !state.upwork.orgUid) return null;
-  if (!opts.force && !scanDue(state.lastScanAt, settings.scanEveryMinutes)) return null;
+  if (!opts.force && !scanDue(state.lastScanAt, scanEveryMinutes(state.mode, settings))) return null;
   if (!(await acquireLease(env, 'scan', LEASE_MS))) return null;
 
   const summary: RunSummary = { at: new Date().toISOString(), scanned: 0, new: 0, matched: 0, errors: 0, note: null };
