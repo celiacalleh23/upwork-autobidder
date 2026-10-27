@@ -446,7 +446,10 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <div class="field"><label for="maxConnects">Skip jobs costing more than (Connects)</label>
           <label class="check" for="maxConnectsOn"><input type="checkbox" id="maxConnectsOn"><span>Limit Connects per job</span></label>
           <input type="number" id="maxConnects" min="1" max="50" aria-describedby="maxConnectsHint"><span class="hint" id="maxConnectsHint">Off = apply to any job, whatever it costs.</span></div>
-        <div class="field"><label for="boost">Boost</label><select id="boost"><option value="never">Never</option><option value="up_to_10">If a top slot costs 10 or less</option><option value="up_to_20">If a top slot costs 20 or less</option></select></div>
+        <div class="field"><label for="boostScore">Boost proposals with a match score of at least</label>
+          <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches</span></label>
+          <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
+        <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="100"><span class="hint">If a top slot needs more, the proposal goes out without a boost.</span></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
       </div>
       <p class="note info">Always on: one proposal per job, no contact details in letters, and an automatic pause at any rate-limit or account warning from Upwork.</p>
@@ -767,7 +770,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('td', { class: 'when' }, fromPost ? `${fromPost} after posting` : '–', fromFound ? h('span', { class: 'sub-time', text: `${fromFound} after found` }) : null,
           !sent && ['pending', 'approved'].includes(r.status) && (r.posted_at || found) ? h('span', { class: 'sub-time', text: `waiting ${dur(r.posted_at || found, new Date().toISOString())} since ${r.posted_at ? 'posting' : 'found'}` }) : null),
         h('td', { class: 'mono', text: r.score === null || r.score === undefined ? '–' : `${r.score}/100` }),
-        h('td', { class: 'mono', text: r.status === 'submitted' ? (r.connects ?? '–') : '–' }),
+        h('td', { class: 'mono', text: r.status === 'submitted' ? `${r.connects ?? '–'}${r.boost_connects ? ` + ${r.boost_connects} boost` : ''}` : '–' }),
         h('td', {}, r.loom_url ? h('a', { href: r.loom_url, target: '_blank', rel: 'noopener noreferrer', text: 'Open' }) : '–')));
     }
     logOffset += data.rows.length;
@@ -956,6 +959,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     b.disabled = false; b.textContent = 'Sync from Upwork now'; loadTrack();
   });
   $('floorOn').addEventListener('change', (e) => { $('floor').disabled = !e.target.checked; });
+  $('boostOn').addEventListener('change', (e) => { $('boostScore').disabled = $('boostMax').disabled = !e.target.checked; });
   $('ctInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('ctInput', ct, drawCt); } });
 
   function fillForm(s) {
@@ -980,7 +984,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('floorOn').checked = s.caps.connectsFloorEnabled; $('floor').disabled = !s.caps.connectsFloorEnabled;
     $('connectsAlert').value = s.connectsAlertBelow;
     $('sendOn').checked = s.sendingEnabled; $('fixedAck').checked = s.fixedPriceTermsAcknowledged;
-    $('boost').value = s.caps.boost; $('stopErrors').value = s.caps.stopAfterErrors;
+    $('boostOn').checked = s.caps.boostEnabled; $('boostScore').value = s.caps.boostMinScore; $('boostMax').value = s.caps.boostMaxConnects;
+    $('boostScore').disabled = $('boostMax').disabled = !s.caps.boostEnabled;
+    $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
     if (!$('reportHour').options.length) for (let hr = 0; hr < 24; hr++) $('reportHour').append(h('option', { value: String(hr), text: `${hr % 12 || 12}:00 ${hr < 12 ? 'AM' : 'PM'}` }));
     $('reportHour').value = String(s.report.hour ?? 15);
@@ -1002,7 +1008,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),
         activeStart: $('activeStart').value, activeEnd: $('activeEnd').value, timezone: $('timezone').value,
         connectsFloorEnabled: $('floorOn').checked, connectsFloor: Number($('floor').value), maxConnectsEnabled: $('maxConnectsOn').checked, maxConnectsPerJob: Number($('maxConnects').value),
-        boost: $('boost').value, stopAfterErrors: Number($('stopErrors').value),
+        boostEnabled: $('boostOn').checked, boostMinScore: Number($('boostScore').value), boostMaxConnects: Number($('boostMax').value),
+        stopAfterErrors: Number($('stopErrors').value),
       },
       scanEveryMinutes: Number($('scanEvery').value),
       maxNewJobsPerRun: settings ? settings.maxNewJobsPerRun : 3,

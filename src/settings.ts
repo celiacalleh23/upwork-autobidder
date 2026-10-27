@@ -39,7 +39,9 @@ export interface Settings {
     connectsFloor: number;
     maxConnectsEnabled: boolean; // off = apply to jobs whatever they cost in Connects (Siv, Oct 21)
     maxConnectsPerJob: number;
-    boost: 'never' | 'up_to_10' | 'up_to_20';
+    boostEnabled: boolean;    // boost strong matches (Siv, Oct 27); off until Siv switches it on
+    boostMinScore: number;    // only proposals with at least this match score
+    boostMaxConnects: number; // never bid more than this per job
     stopAfterErrors: number;
   };
   scanEveryMinutes: number;
@@ -112,7 +114,9 @@ export const DEFAULT_SETTINGS: Settings = {
     connectsFloor: 20,
     maxConnectsEnabled: false,
     maxConnectsPerJob: 16,
-    boost: 'never',
+    boostEnabled: false,
+    boostMinScore: 75,
+    boostMaxConnects: 20,
     stopAfterErrors: 3,
   },
   scanEveryMinutes: 5,
@@ -275,7 +279,9 @@ export function validateSettings(input: unknown): Settings {
       connectsFloor: num(caps.connectsFloor, 0, 1000, 'Connects floor'),
       maxConnectsEnabled: bool(caps.maxConnectsEnabled),
       maxConnectsPerJob: num(caps.maxConnectsPerJob, 1, 50, 'Max Connects per job'),
-      boost: oneOf(caps.boost, ['never', 'up_to_10', 'up_to_20'] as const, 'Boost'),
+      boostEnabled: bool(caps.boostEnabled),
+      boostMinScore: num(caps.boostMinScore, 0, 100, 'Boost: minimum match score'),
+      boostMaxConnects: num(caps.boostMaxConnects, 1, 100, 'Boost: max Connects per job'),
       stopAfterErrors: num(caps.stopAfterErrors, 1, 10, 'Stop after errors'),
     },
     scanEveryMinutes: num(i.scanEveryMinutes, 5, 30, 'Scan interval'),

@@ -17,7 +17,7 @@ const json = (data: unknown, status = 200) =>
 const fail = (message: string, status = 400) => json({ error: message }, status);
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
-  connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params, approved_at, approved_via,
+  connects, boost_connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params, approved_at, approved_via,
   (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason,
   (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at,
   (SELECT seen_at FROM jobs WHERE jobs.id = proposals.job_id) AS found_at,
@@ -26,7 +26,7 @@ const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country,
 interface ProposalRow {
   id: number; job_id: string; title: string; url: string | null; job_type: string | null; budget: string | null;
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
-  connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
+  connects: number | null; boost_connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
   is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null; analysis: string | null;
   posted_at: string | null; found_at: string | null; approved_at: string | null; approved_via: string | null;
 }
@@ -370,7 +370,7 @@ async function csv(env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(
     `SELECT ${PROPOSAL_COLS} FROM proposals ORDER BY COALESCE(submitted_at, created_at) DESC LIMIT 5000`,
   ).all<ProposalRow>();
-  const cols = ['posted_at', 'found_at', 'created_at', 'submitted_at', 'status', 'title', 'url', 'job_type', 'budget', 'score', 'connects', 'bid', 'loom_url', 'upwork_proposal_id', 'error'] as const;
+  const cols = ['posted_at', 'found_at', 'created_at', 'submitted_at', 'status', 'title', 'url', 'job_type', 'budget', 'score', 'connects', 'boost_connects', 'bid', 'loom_url', 'upwork_proposal_id', 'error'] as const;
   const cell = (v: unknown) => {
     let s = v === null || v === undefined ? '' : String(v);
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // stop spreadsheet formula injection from job titles

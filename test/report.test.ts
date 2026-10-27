@@ -60,4 +60,12 @@ describe('buildReport', () => {
     expect(r.text).toContain('PAUSED: Upwork rate limit');
     expect(r.text).toContain('Loom: NOT connected');
   });
+  it('shows boost bids apart from the Connects spent', () => {
+    const r = buildReport({ ...base, sent: [{ ...base.sent[0], boost: 3 }, base.sent[1]] });
+    expect(r.subject).toBe('Upwork report Mon, Oct 26: 2 sent, 20 Connects ($3.00)');
+    expect(r.text).toContain('8 Connects ($1.20) + 3 boost bid');
+    expect(r.text).toContain('Boosted: 1 · boost bids 3 Connects ($0.45), charged only for proposals that land in a paid slot');
+    expect(r.html).toContain('+3 boost bid');
+    expect(buildReport(base).text).not.toContain('Boosted');
+  });
 });

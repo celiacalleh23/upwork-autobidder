@@ -6,7 +6,7 @@ import { loadSettings, loadState, reportEmails, type Env, type Settings } from '
 // Daily report (M7): one email a day at settings.report.hour in the Settings time zone (Siv: 3 pm California), with
 // what was sent that day (title, Connects, speed), what waits, what failed, and the account's state.
 
-export interface SentRow { title: string; url: string | null; submittedAt: string; postedAt: string | null; connects: number | null; bid: number | null; jobType: string | null; loomUrl: string | null }
+export interface SentRow { title: string; url: string | null; submittedAt: string; postedAt: string | null; connects: number | null; bid: number | null; jobType: string | null; loomUrl: string | null; boost?: number | null }
 export interface Problem { title: string; url: string | null; status: string; error: string | null }
 export interface ReportData {
   dateLabel: string; timeZone: string; now: string;
@@ -47,6 +47,10 @@ const toIso = (s: string) => `${s.replace(' ', 'T')}${s.endsWith('Z') ? '' : 'Z'
 export function buildReport(d: ReportData): { subject: string; text: string; html: string } {
   const time = (iso: string) => new Intl.DateTimeFormat('en-US', { timeZone: d.timeZone, hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
   const spent = d.sent.reduce((t, r) => t + (r.connects ?? 0), 0);
+  // Boost bids are charged only when the proposal lands in a paid slot, so they are shown apart from the Connects spent.
+  const boosted = d.sent.filter((r) => r.boost);
+  const boostBids = boosted.reduce((t, r) => t + (r.boost ?? 0), 0);
+  const boostLine = boosted.length ? `Boosted: ${boosted.length} · boost bids ${boostBids} Connects (${usd(boostBids)}), charged only for proposals that land in a paid slot` : null;
   const speeds = d.sent.map((r) => minutes(r.postedAt, r.submittedAt)).filter((m): m is number => m !== null).sort((a, b) => a - b);
   const median = speeds.length ? speeds[Math.floor(speeds.length / 2)] : null;
   const subject = `Upwork report ${d.dateLabel}: ${d.sent.length} sent, ${spent} Connects (${usd(spent)})`;
@@ -56,11 +60,12 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
     `Connects balance: ${d.balance ?? 'unknown'}${d.balance !== null && d.alertBelow && d.balance < d.alertBelow ? ` (below ${d.alertBelow}, buy more)` : ''}`,
     `Loom: ${d.loom.connected ? `connected${d.loom.expiresAt ? `, session valid until ${new Date(d.loom.expiresAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}` : 'NOT connected (letters use the source video)'}`,
   ];
-  const sentLines = d.sent.map((r) => `- ${time(r.submittedAt)} · ${r.title} · ${r.connects ?? '?'} Connects (${usd(r.connects ?? 0)}) · bid $${r.bid ?? '?'}${r.jobType === 'hourly' ? '/hr' : ''} · ${durText(minutes(r.postedAt, r.submittedAt))} after posting${r.url ? `\n  ${r.url}` : ''}`);
+  const sentLines = d.sent.map((r) => `- ${time(r.submittedAt)} · ${r.title} · ${r.connects ?? '?'} Connects (${usd(r.connects ?? 0)})${r.boost ? ` + ${r.boost} boost bid` : ''} · bid $${r.bid ?? '?'}${r.jobType === 'hourly' ? '/hr' : ''} · ${durText(minutes(r.postedAt, r.submittedAt))} after posting${r.url ? `\n  ${r.url}` : ''}`);
   const failLines = d.failed.map((r) => `- ${r.title}: ${r.error ?? r.status}`);
   const text = [
     `Upwork Auto-Bidder, ${d.dateLabel} (so far, ${time(d.now)})`, '',
     `Sent today: ${d.sent.length} · Connects spent: ${spent} (${usd(spent)} at $${CONNECT_USD.toFixed(2)} each)${median !== null ? ` · median speed: ${durText(median)} after posting` : ''}`,
+    ...(boostLine ? [boostLine] : []),
     `Jobs scanned: ${d.scanned} (${d.matched} matched) · waiting for review: ${d.waiting} · approved, sending soon: ${d.approved}`, '',
     ...status, '',
     d.sent.length ? 'Proposals sent:' : 'No proposals sent today.', ...sentLines,
@@ -69,13 +74,14 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
   ].join('\n');
 
   const cell = 'padding:8px 10px;border-bottom:1px solid #e5e7e3;vertical-align:top;font-size:14px';
-  const rows = d.sent.map((r) => `<tr><td style="${cell};white-space:nowrap">${esc(time(r.submittedAt))}</td><td style="${cell}">${r.url ? `<a href="${esc(r.url)}" style="color:#1F5F4F">${esc(r.title)}</a>` : esc(r.title)}${r.loomUrl ? `<br><a href="${esc(r.loomUrl)}" style="color:#5B615A;font-size:12px">Loom</a>` : ''}</td><td style="${cell};text-align:right;white-space:nowrap">${r.connects ?? '–'}${r.connects ? `<br><span style="color:#5B615A;font-size:12px">${usd(r.connects)}</span>` : ''}</td><td style="${cell};text-align:right;white-space:nowrap">$${r.bid ?? '–'}${r.jobType === 'hourly' ? '/hr' : ''}</td><td style="${cell};white-space:nowrap">${esc(durText(minutes(r.postedAt, r.submittedAt)))}</td></tr>`).join('');
+  const rows = d.sent.map((r) => `<tr><td style="${cell};white-space:nowrap">${esc(time(r.submittedAt))}</td><td style="${cell}">${r.url ? `<a href="${esc(r.url)}" style="color:#1F5F4F">${esc(r.title)}</a>` : esc(r.title)}${r.loomUrl ? `<br><a href="${esc(r.loomUrl)}" style="color:#5B615A;font-size:12px">Loom</a>` : ''}</td><td style="${cell};text-align:right;white-space:nowrap">${r.connects ?? '–'}${r.connects ? `<br><span style="color:#5B615A;font-size:12px">${usd(r.connects)}</span>` : ''}${r.boost ? `<br><span style="color:#5B615A;font-size:12px">+${r.boost} boost bid</span>` : ''}</td><td style="${cell};text-align:right;white-space:nowrap">$${r.bid ?? '–'}${r.jobType === 'hourly' ? '/hr' : ''}</td><td style="${cell};white-space:nowrap">${esc(durText(minutes(r.postedAt, r.submittedAt)))}</td></tr>`).join('');
   const tile = (label: string, value: string, sub = '') => `<td style="padding:12px 14px;border:1px solid #e5e7e3;border-radius:10px;background:#fff"><div style="font-size:12px;color:#5B615A">${esc(label)}</div><div style="font-size:22px;font-weight:700;margin-top:2px">${esc(value)}</div>${sub ? `<div style="font-size:13px;font-weight:600;margin-top:2px">${esc(sub)}</div>` : ''}</td>`;
   const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#16181D;background:#F3F4F2;padding:20px">
 <div style="max-width:680px;margin:0 auto">
 <h1 style="font-size:20px;margin:0 0 4px">Upwork report · ${esc(d.dateLabel)}</h1>
 <p style="margin:0 0 16px;color:#5B615A;font-size:14px">So far today, at ${esc(time(d.now))}${d.paused ? ` · <b style="color:#8A2A15">PAUSED: ${esc(d.paused)}</b>` : ''}</p>
 <table role="presentation" style="border-collapse:separate;border-spacing:8px;margin:0 -8px 8px"><tr>${tile('Sent today', String(d.sent.length))}${tile('Connects spent', String(spent), usd(spent))}${tile('Median speed', median === null ? '–' : durText(median))}${tile('Connects left', d.balance === null ? '–' : String(d.balance))}</tr></table>
+${boostLine ? `<p style="font-size:14px;margin:0 0 6px">${esc(boostLine)}</p>` : ''}
 <p style="font-size:14px;margin:0 0 6px">Jobs scanned: <b>${d.scanned}</b> (${d.matched} matched) · Waiting for review: <b>${d.waiting}</b> · Approved, sending soon: <b>${d.approved}</b></p>
 <p style="font-size:14px;margin:0 0 16px;color:#5B615A">${status.map(esc).join(' · ')}</p>
 ${d.sent.length ? `<table style="border-collapse:collapse;width:100%;background:#fff;border:1px solid #e5e7e3;border-radius:10px"><thead><tr>${['Sent', 'Job', 'Connects', 'Bid', 'After posting'].map((h) => `<th style="${cell};text-align:left;font-size:12px;color:#5B615A">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>` : '<p style="font-size:14px">No proposals sent today.</p>'}
@@ -90,7 +96,7 @@ export async function collectReport(env: Env, s: Settings, now = new Date()): Pr
   const since = dayStartUtc(s.caps.timezone, now);
   const [sent, failed, counts, jobs] = await env.DB.batch<Record<string, unknown>>([
     env.DB.prepare(
-      `SELECT title, url, submitted_at, connects, bid, job_type, loom_url, (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at
+      `SELECT title, url, submitted_at, connects, boost_connects, bid, job_type, loom_url, (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at
        FROM proposals WHERE status = 'submitted' AND submitted_at >= ? AND is_example = 0 ORDER BY submitted_at`,
     ).bind(since),
     env.DB.prepare(
@@ -105,6 +111,7 @@ export async function collectReport(env: Env, s: Settings, now = new Date()): Pr
     sent: sent.results.map((r) => ({
       title: String(r.title), url: (r.url as string) ?? null, submittedAt: toIso(String(r.submitted_at)), postedAt: postedIso((r.posted_at as string) ?? null),
       connects: (r.connects as number) ?? null, bid: (r.bid as number) ?? null, jobType: (r.job_type as string) ?? null, loomUrl: (r.loom_url as string) ?? null,
+      boost: (r.boost_connects as number) ?? null,
     })),
     failed: failed.results.map((r) => ({ title: String(r.title), url: (r.url as string) ?? null, status: String(r.status), error: (r.error as string) ?? null })),
     waiting: Number(c.waiting ?? 0), approved: Number(c.approved ?? 0), scanned: Number(j.scanned ?? 0), matched: Number(j.matched ?? 0),

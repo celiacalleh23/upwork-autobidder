@@ -1,13 +1,13 @@
 import { dayStartUtc } from '../api';
 import { emailConfigured, sendEmail } from '../email';
-import { acquireLease, getKv, putKv, releaseLease } from '../kv';
+import { acquireLease, delKv, getKv, putKv, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import type { Answer } from './letter';
 import { createPreview } from './preview';
-import { alertAction, classifyFailure, connectsGate, readConfirm, sendGate } from './sendRules';
+import { alertAction, boostBid, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
@@ -193,7 +193,10 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
 
     const { extra, answers } = storedParams(row);
     const fixed = row.job_type === 'fixed';
+    const boostKey = `boostRefused:${row.id}`;
+    const boostRefusals = Number(await getKv(env, boostKey) ?? 0);
     let previewId: string;
+    let boost: number | null = null;
     try {
       const p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra, answers });
       if (cannotApply(p.canApply, p.connectsCost, balance) === 'closed') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: CLOSED_REASON }); return summary; }
@@ -205,7 +208,12 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
         await holdRetries(env); return summary;
       }
-      previewId = p.previewId;
+      // Boost strong matches (Siv, Oct 27): a second preview carries the bid. After two refused bids, no boost.
+      const left = balance !== null && p.connectsCost !== null ? balance - p.connectsCost : null;
+      boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left) : null;
+      previewId = boost
+        ? (await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra: p.extra, answers, boostConnects: boost })).previewId
+        : p.previewId;
     } catch (e) {
       // Nothing was sent at the preview step, so the proposal can go back to approved.
       const kind = classifyFailure(e);
@@ -216,6 +224,14 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       else await countError(env, s, errText(e));
       summary.note = `Preview failed: ${errText(e)}`; return summary;
     }
+
+    // Upwork re-read the bids at confirm and sent nothing: back to approved; the next run bids again or sends unboosted.
+    const boostRefused = async (message: string) => {
+      await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
+      await putKv(env, boostKey, String(boostRefusals + 1));
+      summary.note = `The boost bid no longer took a top slot (${message.slice(0, 120)}); trying again.`;
+      return summary;
+    };
 
     const attemptAt = sql(new Date());
     confirmAttempted = true;
@@ -233,6 +249,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         await patchState(env, { mode: 'review', paused: true, pausedReason: 'Upwork asked for a person to confirm proposals. Nothing is sent until you resume.', switchedToReviewReason: `Upwork asked for a person to confirm: ${errText(e)}` });
         summary.note = 'Switched to Review: Upwork asked for a person to confirm.'; return summary;
       }
+      if (kind === 'refused' && boost && isBoostRefusal(errText(e))) return await boostRefused(errText(e));
       if (kind === 'refused') {
         await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${errText(e)}` });
         await countError(env, s, errText(e));
@@ -246,7 +263,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         summary.note = 'Paused: Upwork rate limit or warning.'; return summary;
       }
       // Timeout, dropped connection, 5xx: it may have gone through. Never resend; verify on the next runs.
-      await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, error: `Unclear answer from Upwork (${errText(e)}); checking, not resending` });
+      await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, boost_connects: boost, error: `Unclear answer from Upwork (${errText(e)}); checking, not resending` });
       await countError(env, s, errText(e));
       summary.note = 'Unclear answer from Upwork; checking before anything else is sent.';
       return summary;
@@ -261,14 +278,16 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         await patchState(env, { mode: 'review', paused: true, pausedReason: 'Upwork asked for a person to confirm proposals. Nothing is sent until you resume.', switchedToReviewReason: `Upwork asked for a person to confirm: ${out.message}` });
         summary.note = 'Switched to Review: Upwork asked for a person to confirm.'; return summary;
       }
+      if (kind !== 'rate_limit' && boost && isBoostRefusal(out.message)) return await boostRefused(out.message);
       await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${out.message}` });
       summary.note = `Upwork refused a proposal: ${out.message}`;
       if (kind === 'rate_limit') await patchState(env, { paused: true, pausedReason: `Upwork rate limit or warning while sending: ${out.message}` });
       else await countError(env, s, out.message);
       return summary;
     }
-    await setProposal(env, row.id, { status: 'submitted', submitted_at: attemptAt, upwork_proposal_id: out.proposalId, connects: d.connectsCost, error: null });
-    summary.sent = 1; summary.note = `last proposal sent at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: s.caps.timezone })}`;
+    await setProposal(env, row.id, { status: 'submitted', submitted_at: attemptAt, upwork_proposal_id: out.proposalId, connects: d.connectsCost, boost_connects: boost, error: null });
+    if (boostRefusals) await delKv(env, boostKey);
+    summary.sent = 1; summary.note = `last proposal sent at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: s.caps.timezone })}${boost ? ` (boosted, bid ${boost} Connects)` : ''}`;
     const after = await readBalance(client, state).catch(() => null) ?? (balance !== null && d.connectsCost !== null ? balance - d.connectsCost : null);
     await patchState(env, { lastSendAt: new Date().toISOString(), consecutiveErrors: 0, ...(after !== null ? { connectsBalance: after } : {}) });
     await checkConnectsAlert(env, after);

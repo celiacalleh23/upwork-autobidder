@@ -169,7 +169,7 @@ Work in small commits. Run `npm run typecheck` (and tests) before every push, be
 - Then:
   1. Set `submitting`.
   2. `manage_proposals create` with the stored params.
-  3. Boost only per the rule, using `preview.boost.recommended_connects` ≤ the rule's limit and only when `boost.available`.
+  3. Boost only per the rule, using `preview.boost.recommended_connects` ≤ the rule's limit and only when `boost.available` (built Oct 27, see §11a Boost).
   4. `confirm_preview`.
 - **Success:** `submitted`, `submitted_at`, `upwork_proposal_id`, `connects`, refresh the balance, `consecutiveErrors = 0`.
 - **Clear refusal** (already applied, job closed, invalid params): `failed` with the Upwork message.
@@ -282,7 +282,7 @@ Local dev: `.dev.vars` (git-ignored). Never commit secrets or tokens, and never 
 | Client filters | Only clients in **USA, Canada, UK**; no other filters | New setting `allowedCountries: string[]` (filter on `client.country`). `verifiedOnly = false`, `maxExistingProposals = 0`. |
 | Active hours | 24/7 | `activeStart = activeEnd = '00:00'` means all day; the sender must treat equal times as all day (unit test). |
 | Daily / hourly cap | **None.** Send as many proposals as there are good matches; the account warms up as it goes. | `caps.daily = 0`, `caps.hourly = 0` (0 = no limit). Pace stays one proposal per cron run, `gapMinutes = 5`. |
-| Boost | **Never** (Siv, Oct 21; confirmed by Celia, Oct 22) | `caps.boost = 'never'`. No Connects bid on top of a job's own cost. |
+| Boost | Was **never** (Siv, Oct 21). **Oct 27 (Siv; Celia approved): boost matches scoring 75+**, part of the M6 scope at no extra cost | `caps.boostEnabled` (default **off**, Siv switches it on), `boostMinScore = 75`, `boostMaxConnects = 20` (Siv to confirm). Sender: first preview reads `boost`; if the rule applies, a second preview with `boost_connects = recommended_connects` (within the max, `max_boost_connects` and the Connects floor). Confirm refused because the bid no longer takes a paid slot → back to `approved`, try again; after 2 refusals send without a boost. Bid stored in `proposals.boost_connects`, shown in the log, CSV and daily email apart from Connects spent (charged only if it lands in a paid slot). Applies in Review and Auto. |
 | Connects budget | **No limit** (Celia, Oct 22). No reserve rule: when the balance drops below 250 the alert email goes to Siv, who buys more. | The sender still picks the highest-scoring approved proposal first and skips a job only when the balance is below its cost. |
 | Match score | **50 % similarity to jobs Rafa already won, 50 % fit with her profile; client quality and post clarity 0 %** (Celia, Oct 22: first 90/10, changed to 50/50 after the first sync showed Rafa's 3 past wins are translation / project management, not Klaviyo) | Claude returns `win_similarity` and `profile_fit`; the code weighs them (`scoreWeights`, editable, sum 100). No past wins yet → profile fit alone. |
 | Rafa's profile | **Built from her Upwork account + Siv's cover letter**, plus optional notes | `src/pipeline/profile.ts`: profile, work history with client feedback, Hired/Offered proposals (read-only, ≤10 per call), refreshed **every other day** (and "Sync now"). Rafa's $/hr on Upwork is **not used** (Celia, Oct 22): hourly jobs with no rate use the rate in Settings only. |

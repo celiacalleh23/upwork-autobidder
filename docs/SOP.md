@@ -60,6 +60,16 @@ The tool also pauses itself on any Upwork warning or limit. The reason shows in 
 - Below **250**, you get an email to buy more. Sending continues while there are enough Connects for the next job.
 - To buy more: Upwork → Rafa's account → **Connects**.
 
+### Boosting strong matches
+
+**Settings → Caps and guardrails → "Boost strong matches".** Off until you switch it on.
+
+- When it's on, every proposal with a match score at or above your number (75 by default) is boosted: the tool bids the Connects Upwork recommends for a top spot on the client's list, usually just a few.
+- It never bids more than your **max per job** (20 by default). If a top spot needs more, the proposal goes out without a boost.
+- Upwork charges the boost only if the proposal lands in a paid spot (or the client opens it before the bidding closes).
+- If someone outbids you in the seconds before sending, Upwork sends nothing; the tool tries again with the new price, and after two tries sends without a boost.
+- Boost bids show next to the Connects in the Activity log ("8 + 3 boost") and in the daily email.
+
 ## Changing the rules (Settings)
 
 | To change… | Go to |
@@ -72,7 +82,7 @@ The tool also pauses itself on any Upwork warning or limit. The reason shows in 
 | Daily/hourly limits, hours, Connects alert | **Caps and guardrails** |
 | Report email | **Reports and connections** |
 
-Current rules: Klaviyo in the title or description · US, Canada, UK · minimum score 35 · hourly bid = top of the client's range, or $30/hr when there's no range · fixed price = the client's budget · 24/7, 5 minutes apart (Auto-submit: scans every 2 minutes, newest job first) · no daily limit · alert below 250 Connects · boost never.
+Current rules: Klaviyo in the title or description · US, Canada, UK · minimum score 35 · hourly bid = top of the client's range, or $30/hr when there's no range · fixed price = the client's budget · 24/7, 5 minutes apart (Auto-submit: scans every 2 minutes, newest job first) · no daily limit · alert below 250 Connects · boost: off until switched on (75+ score, max 20 Connects per job).
 
 ## Reconnecting
 

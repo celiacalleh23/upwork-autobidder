@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   approved_at TEXT,                  -- when it was approved, and how: 'dashboard' (Approve button) or 'auto-submit'
   approved_via TEXT,
   connects INTEGER,
+  boost_connects INTEGER,            -- Connects bid to boost it (charged only if it lands in a paid slot)
   score INTEGER,
   win_score INTEGER,                 -- sub-scores behind score, kept for the M7 results report
   profile_score INTEGER,

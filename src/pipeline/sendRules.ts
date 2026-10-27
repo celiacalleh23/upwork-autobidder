@@ -65,3 +65,30 @@ export function alertAction(balance: number | null, threshold: number, sentAt: s
   if (balance < threshold) return sentAt ? null : 'send';
   return sentAt ? 'reset' : null;
 }
+
+// The preview's boost block: boosting is a Connects bid for a top slot on the client's list, charged only if the
+// proposal lands in a paid slot (or the client engages it before the auction closes).
+export interface BoostInfo { available: boolean; recommended: number | null; max: number | null; skip: boolean }
+
+export function readBoost(b: unknown): BoostInfo | null {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
+  const o = b as Record<string, unknown>;
+  const n = (v: unknown) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  return { available: o.available === true, recommended: n(o.recommended_connects), max: n(o.max_boost_connects), skip: String(o.recommendation ?? '').toLowerCase() === 'skip' };
+}
+
+// Connects to bid on a boost (Siv, Oct 27: strong matches only), or null for no boost. The bid is Upwork's recommended
+// one, the smallest that takes a top slot, within the per-job maximum, the balance left after the job's own cost and
+// the Connects floor when it is on. `left` is the balance minus the job's cost, when known.
+export function boostBid(score: number | null, b: BoostInfo | null, s: Settings, left: number | null): number | null {
+  const c = s.caps;
+  if (!c.boostEnabled || score === null || score < c.boostMinScore) return null;
+  if (!b || !b.available || b.skip || b.recommended === null) return null;
+  const bid = Math.max(1, Math.ceil(b.recommended));
+  if (bid > c.boostMaxConnects || (b.max !== null && bid > b.max)) return null;
+  if (left !== null && bid > left - (c.connectsFloorEnabled ? c.connectsFloor : 0)) return null;
+  return bid;
+}
+
+// Upwork re-reads the bids at confirm and refuses (sends nothing) when the boost no longer takes a paid slot.
+export const isBoostRefusal = (message: string) => /paid slot|bids? to beat|outbid|boost/i.test(message);
