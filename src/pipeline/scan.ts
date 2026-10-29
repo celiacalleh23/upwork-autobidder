@@ -4,7 +4,7 @@ import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type RunSummary, type Settings } from '../settings';
 import { scanEveryMinutes } from './pace';
 import { skillsOf } from './trends';
-import { clearThrottle, isThrottle, noteThrottle } from '../upworkPace';
+import { clearThrottle, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
 import { containsTerm, evaluateJob, recheckStored, reopenable, stripUntrusted, type StoredJob, type UpworkJob } from './filters';
 
 // Scanner: small, recent result pages per keyword, every new job recorded once with its filter verdict.
@@ -138,7 +138,7 @@ export async function runScan(env: Env, opts: { force?: boolean } = {}): Promise
       summary.errors++;
       summary.note = msg.slice(0, 300);
       // Plan §2: an account warning from Upwork pauses everything until Siv resumes.
-      if (isAccountWarning(msg)) await patchState(env, { paused: true, pausedReason: `Upwork account warning during the job scan: ${msg.slice(0, 200)}` });
+      if (isAccountWarning(msg)) await pauseForWarning(env, 'the job scan', msg);
     }
   } finally {
     await env.DB.prepare(

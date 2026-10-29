@@ -1,6 +1,6 @@
 import { delKv, getKv, putKv } from './kv';
-import { throttleWait } from './mcp';
-import { patchState, type Env } from './settings';
+import { isAccountWarning, throttleWait } from './mcp';
+import { loadState, patchState, type Env, type State } from './settings';
 
 // Rafa's account and Keyword trends read Upwork slowly (Celia, Oct 29), so bidding keeps most of Upwork's limit
 // (Oct 29: "~12 requests/min sustained for find_jobs, find_freelancers, get_profile, and write tools", refilled
@@ -25,9 +25,22 @@ async function reserve(env: Env, now: number): Promise<number> {
   return Number(r?.value ?? now);
 }
 
+// An Upwork restriction or account warning (BUILD_PLAN §2; Oct 30: search restricted for Terms of Service violations):
+// bidding pauses at once and every Upwork call (bidding, upkeep and the extras) stays stopped until someone resumes,
+// since retrying can make a restriction worse.
+export const WARNING_PREFIX = 'Upwork restricted or warned the account';
+export const heldByUpwork = (st: State) => st.paused && (st.pausedReason ?? '').startsWith(WARNING_PREFIX);
+export async function pauseForWarning(env: Env, where: string, msg: string): Promise<void> {
+  await patchState(env, {
+    paused: true,
+    pausedReason: `${WARNING_PREFIX} (${where}): ${msg.slice(0, 300)} — Nothing is searched or sent until you resume. Check Rafa's Upwork messages and support first.`,
+  });
+}
+
 // Runs one Upwork call at the slow pace. The client already waits out one rate limit (mcp.ts); a second one is an error
-// for the caller to show (these extras never pause bidding).
+// for the caller to show (these extras never pause bidding, except for an Upwork warning).
 export async function paced<T>(env: Env, call: () => Promise<T>): Promise<T> {
+  if (heldByUpwork(await loadState(env))) throw new UpworkBusy('Paused: Upwork restricted or warned the account. Nothing is read from Upwork until bidding is resumed.');
   const queued = Number(await getKv(env, SLOT_KEY)) || 0;
   if (queued + SLOW_GAP_MS - Date.now() > MAX_WAIT_MS) throw new UpworkBusy('Upwork is busy with other reads. Try again in a minute.');
   const at = await reserve(env, Date.now());
@@ -36,6 +49,8 @@ export async function paced<T>(env: Env, call: () => Promise<T>): Promise<T> {
     return await call();
   } catch (e) {
     if (throttleWait(e) !== null) throw new UpworkBusy('Upwork asked to slow down. Try again in a minute; bidding is not affected.');
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isAccountWarning(msg)) { await pauseForWarning(env, 'a dashboard read', msg); throw new UpworkBusy(`Upwork restricted or warned the account; bidding is paused. ${msg.slice(0, 200)}`); }
     throw e;
   }
 }

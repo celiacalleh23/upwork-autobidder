@@ -17,8 +17,10 @@ interface RpcMessage {
 // Upwork's per-minute limit (Oct 29: "Wait about 5 seconds before retrying (~12 requests/min sustained for find_jobs,
 // find_freelancers, get_profile, and write tools). There is no daily cap"). Returns how long Upwork asked to wait, in ms
 // (its own figure plus a second, at most 31 s), or null when the error is not that limit. An account warning is never
-// a wait: it pauses bidding (BUILD_PLAN §2).
-export const isAccountWarning = (msg: string) => /account (warning|restricted|suspended)|unusual activity/i.test(msg);
+// a wait: it pauses bidding (BUILD_PLAN §2). Oct 30, find_jobs: "Your access to search has been restricted due to
+// violations of our Terms of Service ... Changing search parameters or immediately retrying ...".
+export const isAccountWarning = (msg: string) =>
+  /account (warning|restricted|suspended)|unusual activity|terms of service|violation|(access|account)\b.{0,40}\b(restricted|suspended|blocked|banned|disabled)/i.test(msg);
 export function throttleWait(e: unknown): number | null {
   const msg = e instanceof Error ? e.message : String(e);
   if (isAccountWarning(msg) || !/rate.?limit|too many requests|\b429\b/i.test(msg)) return null;

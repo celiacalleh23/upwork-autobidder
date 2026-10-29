@@ -9,7 +9,7 @@ import type { Answer } from './letter';
 import { createPreview } from './preview';
 import { alertAction, boostBid, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
-import { clearThrottle, isThrottle, noteThrottle } from '../upworkPace';
+import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
 // newest job first in Auto (pace.ts), only when Settings → Sending is on (Siv or Celia switch it on in the dashboard;
@@ -62,7 +62,7 @@ async function readBalance(client: McpClient, state: State): Promise<number | nu
 const BALANCE_EVERY_MS = 30 * 60_000;
 export async function refreshConnects(env: Env, now = Date.now()): Promise<void> {
   const state = await loadState(env);
-  if (!state.upwork.connected || !state.upwork.orgUid) return;
+  if (!state.upwork.connected || !state.upwork.orgUid || heldByUpwork(state)) return;
   const last = Number(await getKv(env, 'connects:checkedAt'));
   if (Number.isFinite(last) && now - last < BALANCE_EVERY_MS) return;
   await putKv(env, 'connects:checkedAt', String(now));
@@ -223,7 +223,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       await setProposal(env, row.id, { status: 'approved', submitted_at: null });
       if (kind === 'throttle') { await noteThrottle(env, 'sending', errText(e)); summary.note = 'Upwork asked to slow down; sending again next round.'; return summary; }
       await holdRetries(env);
-      if (kind === 'warning') await patchState(env, { paused: true, pausedReason: `Upwork account warning while sending: ${errText(e)}` });
+      if (kind === 'warning') await pauseForWarning(env, 'sending', errText(e));
       else await countError(env, s, errText(e));
       summary.note = `Preview failed: ${errText(e)}`; return summary;
     }
@@ -268,7 +268,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       if (kind === 'warning') {
         // An account warning: not sent. Pause everything until Siv resumes.
         await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
-        await patchState(env, { paused: true, pausedReason: `Upwork account warning while sending: ${errText(e)}` });
+        await pauseForWarning(env, 'sending', errText(e));
         summary.note = 'Paused: Upwork account warning.'; return summary;
       }
       // Timeout, dropped connection, 5xx: it may have gone through. Never resend; verify on the next runs.
@@ -295,7 +295,7 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       if (kind !== 'warning' && boost && isBoostRefusal(out.message)) return await boostRefused(out.message);
       await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${out.message}` });
       summary.note = `Upwork refused a proposal: ${out.message}`;
-      if (kind === 'warning') await patchState(env, { paused: true, pausedReason: `Upwork account warning while sending: ${out.message}` });
+      if (kind === 'warning') await pauseForWarning(env, 'sending', out.message);
       else await countError(env, s, out.message);
       return summary;
     }

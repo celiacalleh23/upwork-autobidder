@@ -3,7 +3,7 @@ import { acquireLease, delKv, getKv, putKv, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
-import { paced } from '../upworkPace';
+import { heldByUpwork, paced } from '../upworkPace';
 
 // Rafa's Upwork account at a glance: proposals by status for a period, how many clients viewed them, contracts,
 // completed jobs, and Connects spent by kind (proposals, proposal boosts, Profile Boost, Availability Badge; Siv, Oct 27).
@@ -310,6 +310,7 @@ export async function refreshAccountStats(env: Env, range: Range, resume = false
   const org = state.upwork.orgUid;
   const tools = state.upwork.toolNames;
   if (!org || !tools.list_freelancer_proposals) throw new Error('Upwork is not connected.');
+  if (heldByUpwork(state)) throw new Error('Paused: Upwork restricted or warned the account. Nothing is read from Upwork until bidding is resumed.');
   const client = await upworkClient(env);
   const { key, ttl } = PROGRESS[slot];
 
@@ -393,7 +394,7 @@ export async function refreshAccountStats(env: Env, range: Range, resume = false
 const AUTO_EVERY_MS = 12 * 3600_000;
 export async function accountUpkeep(env: Env, tz: string, now = Date.now()): Promise<void> {
   const state = await loadState(env);
-  if (!state.upwork.connected || !state.upwork.orgUid || !state.upwork.toolNames.list_freelancer_proposals) return;
+  if (!state.upwork.connected || !state.upwork.orgUid || !state.upwork.toolNames.list_freelancer_proposals || heldByUpwork(state)) return;
   const sync = await loadLedgerSync(env);
   if (!sync.complete || sync.cursor !== null) {
     if (await acquireLease(env, 'ledger', 5 * 60_000)) {

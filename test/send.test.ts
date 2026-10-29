@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { McpAuthError, McpError, McpToolError } from '../src/mcp';
+import { isAccountWarning, McpAuthError, McpError, McpToolError, throttleWait } from '../src/mcp';
 import { alertAction, classifyFailure, connectsGate, readConfirm, sendGate } from '../src/pipeline/sendRules';
 import { DEFAULT_SETTINGS, DEFAULT_STATE, type Settings, type State } from '../src/settings';
 
@@ -61,6 +61,13 @@ describe('classifyFailure', () => {
     expect(classifyFailure(new McpToolError('Upwork find_jobs: {"error_code":"SENSITIVE_RATE_LIMIT_EXCEEDED","reason":"Rate limit exceeded for this tool. Wait about 5 seconds before retrying"}'))).toBe('throttle');
     expect(classifyFailure(new McpToolError('Upwork manage_proposals: Your account is restricted after unusual activity'))).toBe('warning');
     expect(classifyFailure(new McpToolError('Upwork find_jobs: rate limit: account warning issued'))).toBe('warning');
+    // Oct 30, on Rafa's account:
+    const restricted = 'Upwork find_jobs: {"error_code":"CLIENT","reason":"Your access to search has been restricted due to violations of our Terms of Service. Please contact support if you believe this is an error. This restriction applies to this account\'s search surface. Changing search parameters or immediately retrying will not help."}';
+    expect(classifyFailure(new McpToolError(restricted))).toBe('warning');
+    expect(isAccountWarning(restricted)).toBe(true);
+    expect(throttleWait(new McpToolError(restricted))).toBeNull(); // never waited out and retried
+    expect(isAccountWarning('Upwork find_jobs: {"error_code":"SENSITIVE_RATE_LIMIT_EXCEEDED","reason":"Rate limit exceeded for this tool. Wait about 5 seconds before retrying"}')).toBe(false);
+    expect(isAccountWarning('Upwork manage_proposals: This job is no longer accepting proposals')).toBe(false);
     expect(classifyFailure(new McpToolError('Upwork confirm_preview: This action requires explicit user confirmation in the Upwork app'))).toBe('needs_confirmation');
   });
 });

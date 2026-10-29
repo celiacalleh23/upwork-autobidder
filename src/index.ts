@@ -11,6 +11,7 @@ import { refreshConnects, runSender } from './pipeline/send';
 import { sendAndScanDue, writeDue } from './pipeline/pace';
 import { sendDailyReport } from './pipeline/report';
 import { accountUpkeep } from './pipeline/stats';
+import { heldByUpwork } from './upworkPace';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
 import { loadSettings, loadState, type Env } from './settings';
 
@@ -172,7 +173,7 @@ export default {
       await refreshConnects(env).catch(log('connects refresh'));
       // Rafa's track record (scoring input), every other day; the writer reads the stored copy.
       const st = await loadState(env);
-      if (st.upwork.connected && syncDue(st.trackRecordSyncedAt)) await syncTrackRecord(env).catch(log('track record sync'));
+      if (st.upwork.connected && !heldByUpwork(st) && syncDue(st.trackRecordSyncedAt)) await syncTrackRecord(env).catch(log('track record sync'));
       const s = await loadSettings(env);
       await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch(log('loom cleanup'));
       await keepLoomAlive(env, s.loom.sourceUrl).catch(log('loom keep-alive'));

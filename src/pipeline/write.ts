@@ -8,7 +8,7 @@ import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from '.
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
-import { isThrottle, noteThrottle } from '../upworkPace';
+import { isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
@@ -206,11 +206,13 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
           break;
         }
         summary.errors++;
-        await setJob(env, job.id, 'error', e instanceof ClaudeDeclined ? msg : `Could not prepare: ${msg}`);
+        // An Upwork restriction or warning: pause everything; the job stays matched for after the resume.
         if (e instanceof McpError && isAccountWarning(msg)) {
-          await patchState(env, { paused: true, pausedReason: `Upwork account warning while preparing proposals: ${msg.slice(0, 200)}` });
+          summary.note = 'Upwork restricted or warned the account; bidding is paused.';
+          await pauseForWarning(env, 'preparing proposals', msg);
           break;
         }
+        await setJob(env, job.id, 'error', e instanceof ClaudeDeclined ? msg : `Could not prepare: ${msg}`);
       }
     }
   } catch (e) {
