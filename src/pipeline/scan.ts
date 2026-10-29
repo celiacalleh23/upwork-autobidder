@@ -1,9 +1,10 @@
 import { acquireLease, getKv, putKv, releaseLease } from '../kv';
-import { McpError, type McpClient } from '../mcp';
+import { isAccountWarning, McpError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type RunSummary, type Settings } from '../settings';
 import { scanEveryMinutes } from './pace';
 import { skillsOf } from './trends';
+import { clearThrottle, isThrottle, noteThrottle } from '../upworkPace';
 import { containsTerm, evaluateJob, recheckStored, reopenable, stripUntrusted, type StoredJob, type UpworkJob } from './filters';
 
 // Scanner: small, recent result pages per keyword, every new job recorded once with its filter verdict.
@@ -124,14 +125,20 @@ export async function runScan(env: Env, opts: { force?: boolean } = {}): Promise
       ));
     }
     if (inserts.length) await env.DB.batch(inserts);
+    await clearThrottle(env);
   } catch (e) {
-    summary.errors++;
     const msg = e instanceof Error ? e.message : String(e);
-    summary.note = msg.slice(0, 300);
     console.error('scan failed', msg);
-    // Plan §2: any rate limit from Upwork pauses everything until Siv resumes.
-    if (/\b429\b|rate.?limit|too many requests/i.test(msg)) {
-      await patchState(env, { paused: true, pausedReason: `Upwork rate limit during the job scan: ${msg.slice(0, 200)}` });
+    if (isThrottle(e)) {
+      // Upwork's per-minute limit, still there after waiting once (mcp.ts): the next scan tries again; only 3 rounds in
+      // a row pause bidding (Celia, Oct 29).
+      summary.note = 'Upwork asked to slow down; the next scan tries again.';
+      await noteThrottle(env, 'the job scan', msg);
+    } else {
+      summary.errors++;
+      summary.note = msg.slice(0, 300);
+      // Plan §2: an account warning from Upwork pauses everything until Siv resumes.
+      if (isAccountWarning(msg)) await patchState(env, { paused: true, pausedReason: `Upwork account warning during the job scan: ${msg.slice(0, 200)}` });
     }
   } finally {
     await env.DB.prepare(

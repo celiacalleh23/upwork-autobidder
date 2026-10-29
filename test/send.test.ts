@@ -56,8 +56,11 @@ describe('classifyFailure', () => {
     expect(classifyFailure(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }))).toBe('ambiguous');
     expect(classifyFailure(new McpToolError('Upwork confirm_preview: upstream timeout, try again'))).toBe('ambiguous');
   });
-  it('spots rate limits and requests for a human confirmation', () => {
-    expect(classifyFailure(new McpToolError('Upwork confirm_preview: 429 Too Many Requests'))).toBe('rate_limit');
+  it('tells Upwork\'s per-minute limit from an account warning, and spots requests for a human confirmation', () => {
+    expect(classifyFailure(new McpToolError('Upwork confirm_preview: 429 Too Many Requests'))).toBe('throttle');
+    expect(classifyFailure(new McpToolError('Upwork find_jobs: {"error_code":"SENSITIVE_RATE_LIMIT_EXCEEDED","reason":"Rate limit exceeded for this tool. Wait about 5 seconds before retrying"}'))).toBe('throttle');
+    expect(classifyFailure(new McpToolError('Upwork manage_proposals: Your account is restricted after unusual activity'))).toBe('warning');
+    expect(classifyFailure(new McpToolError('Upwork find_jobs: rate limit: account warning issued'))).toBe('warning');
     expect(classifyFailure(new McpToolError('Upwork confirm_preview: This action requires explicit user confirmation in the Upwork app'))).toBe('needs_confirmation');
   });
 });

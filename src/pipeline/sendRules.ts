@@ -1,5 +1,5 @@
 import { isActiveNow } from '../api';
-import { McpAuthError, McpToolError } from '../mcp';
+import { isAccountWarning, McpAuthError, McpToolError } from '../mcp';
 import type { Mode, Settings, State } from '../settings';
 import { findKey } from '../oauth';
 
@@ -33,13 +33,15 @@ export function connectsGate(balance: number | null, cost: number | null, s: Set
   return null;
 }
 
-export type FailureKind = 'needs_confirmation' | 'rate_limit' | 'refused' | 'ambiguous';
+// warning: an account warning (pause everything); throttle: Upwork's per-minute limit, nothing done (try again next run).
+export type FailureKind = 'needs_confirmation' | 'warning' | 'throttle' | 'refused' | 'ambiguous';
 
 // How to treat an error from create or confirm. Only an answer from Upwork itself (a tool error) counts as a definite
 // refusal; dropped connections, timeouts and 5xx are ambiguous because the proposal may have gone through.
 export function classifyFailure(e: unknown): FailureKind {
   const msg = e instanceof Error ? e.message : String(e);
-  if (/\b429\b|rate.?limit|too many requests|account (warning|restricted|suspended)|unusual activity/i.test(msg)) return 'rate_limit';
+  if (isAccountWarning(msg)) return 'warning';
+  if (/\b429\b|rate.?limit|too many requests/i.test(msg)) return 'throttle';
   if (/(requires?|needs?|awaiting).{0,40}(user|human|explicit).{0,20}(confirm|approv)|not (allowed|permitted) to confirm|confirmation (is )?required|permission/i.test(msg)) return 'needs_confirmation';
   if (e instanceof McpAuthError) return 'refused';
   if (e instanceof McpToolError && !/timeout|timed out|temporar|try again|\b5\d\d\b|internal error|unavailable/i.test(msg)) return 'refused';

@@ -9,6 +9,7 @@ import type { Answer } from './letter';
 import { createPreview } from './preview';
 import { alertAction, boostBid, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
+import { clearThrottle, isThrottle, noteThrottle } from '../upworkPace';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
 // newest job first in Auto (pace.ts), only when Settings → Sending is on (Siv or Celia switch it on in the dashboard;
@@ -220,8 +221,9 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
       const kind = classifyFailure(e);
       if (kind === 'refused') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${errText(e)}` }); return summary; }
       await setProposal(env, row.id, { status: 'approved', submitted_at: null });
+      if (kind === 'throttle') { await noteThrottle(env, 'sending', errText(e)); summary.note = 'Upwork asked to slow down; sending again next round.'; return summary; }
       await holdRetries(env);
-      if (kind === 'rate_limit') await patchState(env, { paused: true, pausedReason: `Upwork rate limit or warning while sending: ${errText(e)}` });
+      if (kind === 'warning') await patchState(env, { paused: true, pausedReason: `Upwork account warning while sending: ${errText(e)}` });
       else await countError(env, s, errText(e));
       summary.note = `Preview failed: ${errText(e)}`; return summary;
     }
@@ -257,11 +259,17 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         summary.note = `Upwork refused a proposal: ${errText(e)}`;
         return summary;
       }
-      if (kind === 'rate_limit') {
-        // A 429 or account warning is Upwork turning the request away: not sent. Pause everything until Siv resumes.
+      if (kind === 'throttle') {
+        // Upwork's per-minute limit turned the confirm away: not sent. It stays approved for the next run (Celia, Oct 29).
         await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
-        await patchState(env, { paused: true, pausedReason: `Upwork rate limit or warning while sending: ${errText(e)}` });
-        summary.note = 'Paused: Upwork rate limit or warning.'; return summary;
+        await noteThrottle(env, 'sending', errText(e));
+        summary.note = 'Upwork asked to slow down; sending again next round.'; return summary;
+      }
+      if (kind === 'warning') {
+        // An account warning: not sent. Pause everything until Siv resumes.
+        await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
+        await patchState(env, { paused: true, pausedReason: `Upwork account warning while sending: ${errText(e)}` });
+        summary.note = 'Paused: Upwork account warning.'; return summary;
       }
       // Timeout, dropped connection, 5xx: it may have gone through. Never resend; verify on the next runs.
       await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, boost_connects: boost, error: `Unclear answer from Upwork (${errText(e)}); checking, not resending` });
@@ -279,15 +287,21 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         await patchState(env, { mode: 'review', paused: true, pausedReason: 'Upwork asked for a person to confirm proposals. Nothing is sent until you resume.', switchedToReviewReason: `Upwork asked for a person to confirm: ${out.message}` });
         summary.note = 'Switched to Review: Upwork asked for a person to confirm.'; return summary;
       }
-      if (kind !== 'rate_limit' && boost && isBoostRefusal(out.message)) return await boostRefused(out.message);
+      if (kind === 'throttle') {
+        await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
+        await noteThrottle(env, 'sending', out.message);
+        summary.note = 'Upwork asked to slow down; sending again next round.'; return summary;
+      }
+      if (kind !== 'warning' && boost && isBoostRefusal(out.message)) return await boostRefused(out.message);
       await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${out.message}` });
       summary.note = `Upwork refused a proposal: ${out.message}`;
-      if (kind === 'rate_limit') await patchState(env, { paused: true, pausedReason: `Upwork rate limit or warning while sending: ${out.message}` });
+      if (kind === 'warning') await patchState(env, { paused: true, pausedReason: `Upwork account warning while sending: ${out.message}` });
       else await countError(env, s, out.message);
       return summary;
     }
     await setProposal(env, row.id, { status: 'submitted', submitted_at: attemptAt, upwork_proposal_id: out.proposalId, connects: d.connectsCost, boost_connects: boost, error: null });
     if (boostRefusals) await delKv(env, boostKey);
+    await clearThrottle(env);
     summary.sent = 1; summary.note = `last proposal sent at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: s.caps.timezone })}${boost ? ` (boosted, bid ${boost} Connects)` : ''}`;
     const after = await readBalance(client, state).catch(() => null) ?? (balance !== null && d.connectsCost !== null ? balance - d.connectsCost : null);
     await patchState(env, { lastSendAt: new Date().toISOString(), consecutiveErrors: 0, ...(after !== null ? { connectsBalance: after } : {}) });
@@ -298,7 +312,11 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
     summary.note = `Sender: ${errText(e)}`;
     console.error('sender failed', summary.note);
     // Before the confirm it is safe to retry later; after it, never: the proposal may already be on Upwork.
-    if (row && !confirmAttempted) await holdRetries(env).catch(() => undefined);
+    // Upwork's per-minute limit (e.g. on the job check) is retried next run; anything else waits 5 minutes.
+    if (row && !confirmAttempted) {
+      if (isThrottle(e)) await noteThrottle(env, 'sending', errText(e)).catch(() => false);
+      else await holdRetries(env).catch(() => undefined);
+    }
     if (row) {
       await env.DB.prepare(confirmAttempted
         ? "UPDATE proposals SET status = 'unknown', error = 'Error after sending; checking on Upwork, not resending' WHERE id = ? AND status = 'submitting'"

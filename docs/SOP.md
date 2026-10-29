@@ -127,6 +127,8 @@ Upwork doesn't share what people type into its search, so this tab reads open jo
 
 ## If something looks wrong
 
+- **"Upwork asked to slow down"** in the status line is normal now and then: Upwork limits how many requests a minute an account makes. The tool waits and tries again by itself. It only pauses if it happens 3 rounds in a row; then press **Resume bidding**. A real Upwork account warning still pauses everything at once.
+
 | You see | What to do |
 |---|---|
 | Red bar "Paused: …" | Read the reason. If it's an Upwork limit, wait an hour and press **Resume bidding** |

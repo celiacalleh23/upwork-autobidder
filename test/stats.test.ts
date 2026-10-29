@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseLedgerPage, parseWhen, readBoosters, readProposalPages, resolveRange, spendKind, summarizeLedger } from '../src/pipeline/stats';
-import { throttleWait } from '../src/upworkPace';
+import { throttleWait } from '../src/mcp';
 
 describe('parseWhen', () => {
   const t = Date.parse('2026-05-01T10:00:00Z');
@@ -131,6 +131,7 @@ describe('throttleWait (Upwork asks to slow down)', () => {
     expect(throttleWait(new Error('429 Too Many Requests'))).toBe(11000);
     expect(throttleWait(new Error('Rate limit exceeded, wait about 300 seconds'))).toBe(31000); // capped
     expect(throttleWait(new Error('Job is closed'))).toBeNull();
+    expect(throttleWait(new Error('Too many requests: account restricted'))).toBeNull(); // a warning is never a wait
   });
 });
 

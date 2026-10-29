@@ -1,6 +1,6 @@
 import { answerQuestions, ClaudeConfigError, ClaudeDeclined, scoreJob, writeOpening, type JobForClaude } from '../claude';
 import { acquireLease, delKv, getKv, putKv, releaseLease } from '../kv';
-import { McpError, type McpClient } from '../mcp';
+import { isAccountWarning, McpError, type McpClient } from '../mcp';
 import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
@@ -8,6 +8,7 @@ import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from '.
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
+import { isThrottle, noteThrottle } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
@@ -195,12 +196,19 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
       } catch (e) {
         await delKv(env, tryKey); // it finished, with an error: not a run that was cut short
         if (e instanceof ClaudeConfigError) { summary.note = e.message; break; } // the job stays 'matched' for the next run
-        summary.errors++;
         const msg = errText(e);
         console.error('writer: job failed', job.id, msg);
+        // Upwork's per-minute limit, still there after waiting once (mcp.ts): the job stays matched for the next run;
+        // only 3 rounds in a row pause bidding (Celia, Oct 29). Claude's own 429s are not this (the SDK retries them).
+        if (e instanceof McpError && isThrottle(e)) {
+          summary.note = 'Upwork asked to slow down; writing again next round.';
+          await noteThrottle(env, 'writing proposals', msg);
+          break;
+        }
+        summary.errors++;
         await setJob(env, job.id, 'error', e instanceof ClaudeDeclined ? msg : `Could not prepare: ${msg}`);
-        if (e instanceof McpError && /\b429\b|rate.?limit|too many requests/i.test(msg)) {
-          await patchState(env, { paused: true, pausedReason: `Upwork rate limit while preparing proposals: ${msg.slice(0, 200)}` });
+        if (e instanceof McpError && isAccountWarning(msg)) {
+          await patchState(env, { paused: true, pausedReason: `Upwork account warning while preparing proposals: ${msg.slice(0, 200)}` });
           break;
         }
       }

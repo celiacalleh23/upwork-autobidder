@@ -14,6 +14,19 @@ interface RpcMessage {
   error?: { code: number; message: string };
 }
 
+// Upwork's per-minute limit (Oct 29: "Wait about 5 seconds before retrying (~12 requests/min sustained for find_jobs,
+// find_freelancers, get_profile, and write tools). There is no daily cap"). Returns how long Upwork asked to wait, in ms
+// (its own figure plus a second, at most 31 s), or null when the error is not that limit. An account warning is never
+// a wait: it pauses bidding (BUILD_PLAN §2).
+export const isAccountWarning = (msg: string) => /account (warning|restricted|suspended)|unusual activity/i.test(msg);
+export function throttleWait(e: unknown): number | null {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (isAccountWarning(msg) || !/rate.?limit|too many requests|\b429\b/i.test(msg)) return null;
+  const m = /wait about (\d+) seconds?|retry_after\D{0,6}(\d+)/i.exec(msg);
+  return Math.min(30, Number(m?.[1] ?? m?.[2] ?? 10)) * 1000 + 1000;
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export interface ToolResult {
   content?: { type: string; text?: string }[];
   structuredContent?: unknown;
@@ -89,8 +102,21 @@ export class McpClient {
     return names;
   }
 
-  // Returns the tool's structured content, or its text parsed as JSON when possible (else the raw text).
+  // Returns the tool's structured content, or its text parsed as JSON when possible (else the raw text). When Upwork's
+  // per-minute limit turns a call away, it waits as long as Upwork asks and tries once more (Celia, Oct 29). Never for
+  // confirm_preview: a confirm is sent at most once per run, and a refused one waits for the next run (send.ts).
   async callTool(name: string, args: object): Promise<unknown> {
+    try {
+      return await this.callOnce(name, args);
+    } catch (e) {
+      const wait = /confirm_preview$/.test(name) ? null : throttleWait(e);
+      if (wait === null) throw e;
+      await sleep(wait);
+      return await this.callOnce(name, args);
+    }
+  }
+
+  private async callOnce(name: string, args: object): Promise<unknown> {
     const r = (await this.request('tools/call', { name, arguments: args })) as ToolResult;
     const text = (r.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n');
     if (r.isError) throw new McpToolError(`Upwork ${name.replace(/^.*__/, '')}: ${text.slice(0, 300) || 'error'}`);
