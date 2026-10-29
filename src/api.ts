@@ -81,9 +81,42 @@ export function isActiveNow(start: string, end: string, timeZone: string, now = 
 export async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   const method = req.method;
 
-  if (method !== 'GET' && req.headers.get('x-dashboard') !== '1') return fail('Missing dashboard header', 403);
-
   try {
+    // ==========================================
+    // APIFY WEBHOOK RECEIVER
+    // ==========================================
+    if (path === '/api/apify-webhook' && method === 'POST') {
+      try {
+        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123') {
+           return fail('Unauthorized', 401);
+        }
+
+        const payload = await req.json();
+        const jobs = Array.isArray(payload) ? payload : [payload];
+
+        let addedCount = 0;
+        for (const job of jobs) {
+          const jobUrl = job.url || job.link || job.jobUrl;
+          const jobDesc = job.description || job.jobDescription;
+          const jobTitle = job.title || job.jobTitle;
+
+          if (!jobUrl || !jobTitle || !jobDesc) continue; 
+
+          // Pass the correctly mapped fields to addJob
+          const r = await addJob(env, { jobUrl: jobUrl });
+          if (r.ok) addedCount++;
+        }
+
+        return json({ success: true, count: addedCount });
+      } catch (error: any) {
+        console.error('Apify Webhook Error:', error);
+        return fail(error.message, 500);
+      }
+    }
+
+    // Dashboard mutations require this header to prevent CSRF
+    if (method !== 'GET' && req.headers.get('x-dashboard') !== '1') return fail('Missing dashboard header', 403);
+
     if (path === '/api/state' && method === 'GET') return json(await getState(env));
 
     if (path === '/api/settings' && method === 'GET') return json(await loadSettings(env));
