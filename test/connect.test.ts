@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseSse } from '../src/mcp';
 import { PASTE_REDIRECT_URI, paramsFromPasted, redirectUriFor, resolveToolNames } from '../src/oauth';
-import { scanDue } from '../src/pipeline/scan';
 
 describe('MCP and Upwork connection helpers', () => {
   it('parses SSE events, skipping non-JSON ones', () => {
@@ -25,10 +24,4 @@ describe('MCP and Upwork connection helpers', () => {
     expect(() => paramsFromPasted('http://127.0.0.1:53682/upwork-callback')).toThrow(/no sign-in code/);
   });
 
-  it('decides when a scan is due', () => {
-    const now = Date.parse('2026-10-21T15:00:00Z');
-    expect(scanDue(null, 5, now)).toBe(true);
-    expect(scanDue('2026-10-21T14:55:20Z', 5, now)).toBe(true);  // 4m40s ago: within the 30 s slack
-    expect(scanDue('2026-10-21T14:57:00Z', 5, now)).toBe(false);
-  });
 });

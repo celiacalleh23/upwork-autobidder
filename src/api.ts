@@ -4,16 +4,12 @@ import {
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
 import { connectLoom, disconnectLoom, LoomError } from './loom';
-import { recheckMatched, runScan } from './pipeline/scan';
+import { addJob, recheckMatched } from './pipeline/jobs';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
-import { scanEveryMinutes } from './pipeline/pace';
-import { exploreKeywords, loadSkillTrends, lookupHistory, parseKeywords, type KeywordInsight, type Mode as TrendMode } from './pipeline/trends';
-import { ClaudeConfigError, keywordIdeas } from './claude';
-import { UpworkBusy } from './upworkPace';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -161,34 +157,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork profile', 502);
       }
     }
-    // Keyword trends (Celia, Oct 29): earlier lookups and the skills trending in scanned jobs; explore; Claude's ideas.
-    if (path === '/api/trends' && method === 'GET') return json({ history: await lookupHistory(env), skills: await loadSkillTrends(env) });
-    if (path === '/api/trends/explore' && method === 'POST') {
-      const body = await readJson(req);
-      const mode: TrendMode = body.mode === 'anywhere' ? 'anywhere' : 'title';
-      let keywords: string[];
-      try { keywords = parseKeywords(body.keywords, mode); } catch (e) { return fail(e instanceof Error ? e.message : 'Check the keywords'); }
-      // One keyword per request: each takes up to 3 slow Upwork reads (about 30 s); the dashboard sends them in turn.
-      if (keywords.length > 1) return fail('Send one keyword per request');
-      try { return json({ insights: await exploreKeywords(env, keywords, mode) }); } catch (e) {
-        console.error('keyword trends failed', e instanceof Error ? e.message : e);
-        return fail(e instanceof Error ? e.message : 'Could not read Upwork', e instanceof UpworkBusy ? 503 : 502);
-      }
-    }
-    if (path === '/api/trends/ideas' && method === 'POST') {
-      const [s, record, skills] = await Promise.all([loadSettings(env), loadTrackRecord(env), loadSkillTrends(env)]);
-      const { results } = await env.DB.prepare('SELECT data FROM keyword_lookups ORDER BY id DESC LIMIT 30').all<{ data: string }>();
-      const latest = new Map<string, KeywordInsight>();
-      for (const r of results) {
-        try { const k = JSON.parse(r.data) as KeywordInsight; const key = `${k.keyword.toLowerCase()}|${k.mode}`; if (!latest.has(key)) latest.set(key, k); } catch { /* skip */ }
-      }
-      const explored = [...latest.values()].slice(0, 10).map((k) => `- "${k.keyword}" (${k.mode === 'title' ? 'in the title' : 'anywhere'}): ~${k.perDay ?? '?'} new jobs a day from the newest ${k.sample}; ${k.competition.under10}% under 10 proposals; fixed median $${k.fixedMedian ?? '?'}; hourly top median $${k.hourlyMedianTop ?? '?'}/hr; skills: ${k.skills.slice(0, 10).map(([n, c]) => `${n} (${c})`).join(', ')}`).join('\n');
-      const trending = skills.trends.slice(0, 20).map((t) => `${t.skill}: ${t.thisWeek} this week, ${t.lastWeek} last week`).join('\n');
-      try { return json(await keywordIdeas(env, { current: s.keywords, profile: profileForClaude(record, s), explored, trending })); } catch (e) {
-        console.error('keyword ideas failed', e instanceof Error ? e.message : e);
-        return fail(e instanceof Error ? e.message : 'Claude could not answer', e instanceof ClaudeConfigError ? 409 : 502);
-      }
-    }
     if (path === '/api/account-stats' && method === 'GET') return json({ stats: await loadAccountStats(env) });
     if (path === '/api/account-stats' && method === 'POST') {
       const state = await loadState(env);
@@ -271,13 +239,11 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       return json({ rows: results.slice(0, limit).map((r) => ({ ...r, analysis: parseAnalysis(r.analysis as string | null) })), hasMore: results.length > limit });
     }
 
-    if (path === '/api/scan' && method === 'POST') {
-      const state = await loadState(env);
-      if (!state.upwork.connected) return fail('Connect Upwork first', 409);
-      if (state.paused) return fail('Bidding is paused. Resume it to scan.', 409);
-      const summary = await runScan(env, { force: true });
-      if (!summary) return fail('A scan is already running. Try again in a minute.', 409);
-      return json(summary);
+    // Add a job by its link (Oct 30: no Upwork search; the writer reads the job and drafts the proposal within a minute).
+    if (path === '/api/jobs' && method === 'POST') {
+      const body = await readJson(req);
+      const r = await addJob(env, { jobUrl: body.jobUrl });
+      return r.ok ? json(r) : fail(r.reason);
     }
 
     const m = path.match(/^\/api\/proposals\/(\d+)(?:\/(approve|skip|unapprove))?$/);
@@ -380,7 +346,6 @@ async function getState(env: Env) {
   return {
     ...state,
     lastScanAt: state.lastScanAt,
-    scanEveryMinutes: scanEveryMinutes(state.mode, settings),
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
     sendingEnabled: settings.sendingEnabled,
     connectsAlertBelow: settings.connectsAlertBelow,

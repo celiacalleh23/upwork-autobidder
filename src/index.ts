@@ -1,14 +1,14 @@
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
 import { handleApi } from './api';
-import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie } from './auth';
+import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie, timingSafeEqual } from './auth';
 import { MissingKey } from './crypto';
 import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
-import { runScan } from './pipeline/scan';
 import { runWriter } from './pipeline/write';
 import { syncDue, syncTrackRecord } from './pipeline/profile';
 import { refreshConnects, runSender } from './pipeline/send';
-import { sendAndScanDue, writeDue } from './pipeline/pace';
+import { sendDue } from './pipeline/pace';
+import { addJob } from './pipeline/jobs';
 import { sendDailyReport } from './pipeline/report';
 import { accountUpkeep } from './pipeline/stats';
 import { heldByUpwork } from './upworkPace';
@@ -115,8 +115,25 @@ async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Res
   return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': await sessionCookie(env, secure) } });
 }
 
-// Must match wrangler.toml [triggers]. Separate runs so each gets its own Workers CPU and subrequest limits; which
-// minutes do work depends on the mode (pace.ts).
+// Jobs from outside the dashboard (Oct 30): POST /api/jobs/intake with `authorization: Bearer <INTAKE_SECRET>` and
+// {"jobUrl": "https://www.upwork.com/jobs/~02…", "title"?: "…"}. It never searches Upwork: the job waits as 'matched'
+// and the writer reads that one job and drafts the proposal within a minute. Any other field (e.g. a description) is
+// ignored; the writer uses the job's own page. Off until the INTAKE_SECRET secret (32+ characters) is set.
+async function handleIntake(req: Request, env: Env): Promise<Response> {
+  const reply = (data: unknown, status: number) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+  if (req.method !== 'POST') return reply({ error: 'Method not allowed' }, 405);
+  const secret = env.INTAKE_SECRET ?? '';
+  if (secret.length < 32) return reply({ error: 'Job intake is off. Set the INTAKE_SECRET secret (32+ characters) in Cloudflare.' }, 503);
+  if (!timingSafeEqual(req.headers.get('authorization') ?? '', `Bearer ${secret}`)) return reply({ error: 'Unauthorized' }, 401);
+  if (Number(req.headers.get('content-length') || 0) > 64_000) return reply({ error: 'Request is too large' }, 413);
+  const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return reply({ error: 'Expected JSON: {"jobUrl": "https://www.upwork.com/jobs/~02…"}' }, 400);
+  await ensureSchema(env);
+  const r = await addJob(env, { jobUrl: body.jobUrl, title: body.title });
+  return reply(r, r.ok ? 202 : 400);
+}
+
+// Must match wrangler.toml [triggers]. Separate runs so each gets its own Workers CPU and subrequest limits.
 const SEND_CRON = '* * * * *';
 const WRITE_CRON = '1-59 * * * *';
 const UPKEEP_CRON = '3,8,13,18,23,28,33,38,43,48,53,58 * * * *';
@@ -130,6 +147,8 @@ export default {
     // No session check here: the cookie is SameSite=Strict, so it is not sent on the redirect back from Upwork. The single-use
     // OAuth state (created by a signed-in /oauth/upwork/start) is what ties this request to the dashboard.
     if (url.pathname === '/oauth/upwork/callback' && req.method === 'GET') return withHeaders(await handleUpworkCallback(req, env));
+    // Its own secret, not the dashboard session: called by other services.
+    if (url.pathname === '/api/jobs/intake') return withHeaders(await handleIntake(req, env));
     if (url.pathname === '/logout') {
       return withHeaders(new Response(null, { status: 303, headers: { location: '/login', 'set-cookie': clearCookie(secure) } }));
     }
@@ -156,18 +175,18 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
 
-  // Pipeline: scan → filter (M3) → score → letter → preview (M4) → Loom copy (M5) → submit (M6) → report (M7).
+  // Pipeline: job added by link → read and filter → score → letter → preview (M4) → Loom copy (M5) → submit (M6) →
+  // report (M7). No Upwork search (Oct 30).
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
     const log = (what: string) => (e: unknown) => console.error(`${what} failed`, e instanceof Error ? e.message : e);
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     if (event.cron === SEND_CRON) {
-      if (!sendAndScanDue(minute, (await loadState(env)).mode)) return;
-      // Sending first: approved proposals must not wait on the scan.
+      // Sending only: the job scan was removed (Oct 30, Upwork restricted search on Rafa's account).
+      if (!sendDue(minute, (await loadState(env)).mode)) return;
       await runSender(env).catch(log('sender'));
-      await runScan(env).catch(log('scan'));
     } else if (event.cron === WRITE_CRON) {
-      if (!writeDue(minute, (await loadState(env)).mode)) return;
+      // Every minute: drafts jobs added by link; with none waiting it makes no Upwork call.
       await runWriter(env).catch(log('writer'));
     } else if (event.cron === UPKEEP_CRON) {
       await refreshConnects(env).catch(log('connects refresh'));

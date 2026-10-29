@@ -5,6 +5,7 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_BASE_URL?: string; // local testing only (a stand-in API); unset in production
   RESEND_API_KEY?: string;
+  INTAKE_SECRET?: string; // POST /api/jobs/intake (index.ts); 32+ characters
   REPORT_FROM?: string; // e.g. "Upwork Auto-Bidder <reports@ltv-labs.com>" on a Resend-verified domain
   CLAUDE_MODEL: string;
   UPWORK_MCP_URL: string;

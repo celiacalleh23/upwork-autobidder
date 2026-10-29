@@ -136,17 +136,6 @@ textarea{resize:vertical; line-height:1.5; font-size:14px}
 .tools select{width:auto; min-width:170px}
 .tools input[type=date]{width:auto}
 .tablewrap{overflow-x:auto}
-.kw-card{border:1px solid var(--line); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-width:0}
-.kw-card h3{margin:0; font-size:16px}
-.kw-facts{display:flex; flex-wrap:wrap; gap:6px 18px; font-size:14px}
-.kw-facts b{font-variant-numeric:tabular-nums}
-.chip-btn{font:inherit; font-size:12.5px; padding:4px 10px; border-radius:999px; border:1px solid var(--line); background:var(--sunken); color:var(--fg); cursor:pointer; min-height:30px}
-.chip-btn:hover{border-color:var(--accent); color:var(--accent)}
-.kw-ex{margin:0; padding-left:18px; font-size:14px; display:flex; flex-direction:column; gap:4px}
-.kw-ex a{color:var(--accent)}
-.idea{display:flex; flex-direction:column; gap:2px; padding:8px 0; border-bottom:1px solid var(--line-soft)}
-.idea:last-child{border-bottom:0}
-table.compact{min-width:520px}
 table{width:100%; min-width:760px; border-collapse:collapse; font-size:14px}
 th{text-align:left; font-size:12.5px; font-weight:500; color:var(--muted); padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap}
 td{padding:11px 12px; border-bottom:1px solid var(--line-soft); vertical-align:top}
@@ -219,7 +208,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <a href="#dashboard" id="tabDash" aria-current="page">Proposals</a>
     <a href="#activity" id="tabLog">Activity log</a>
     <a href="#account" id="tabAcct">Rafa's account</a>
-    <a href="#trends" id="tabTrends">Keyword trends</a>
     <a href="#settings" id="tabSettings">Settings</a>
     <a href="/logout" style="margin-left:auto">Sign out</a>
   </nav>
@@ -234,7 +222,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <section class="confirm" id="autoConfirm" hidden aria-labelledby="autoH">
     <h2 id="autoH">Turn on Auto-submit?</h2>
     <p>Proposals will be sent without your approval, inside your caps: <b id="capLine">15 a day, 3 an hour, 10 minutes apart</b>, during active hours only. We recommend switching after about two weeks in Review with no warnings from Upwork.</p>
-    <p>Auto-submit also runs faster: Upwork is scanned every 2 minutes, each proposal goes out as soon as it is written, and the newest job goes first. <span id="boostLine"></span></p>
+    <p>Auto-submit also runs faster: each proposal goes out as soon as it is written, newest job first. <span id="boostLine"></span></p>
     <p class="small muted">If Upwork ever stops allowing automatic confirmation, the tool switches itself back to Review and tells you.</p>
     <div class="actions"><button type="button" class="btn" id="autoCancel">Keep Review first</button><button type="button" class="btn primary" id="autoOk">Turn on Auto-submit</button></div>
   </section>
@@ -243,16 +231,15 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <div id="viewDash" style="display:flex; flex-direction:column; gap:22px">
     <section class="status" aria-label="Pipeline status">
       <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
-      <span>Last scan: <strong id="lastScan">–</strong></span>
-      <span>Scans every <strong id="scanEveryText">5</strong> min</span>
-      <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day. Searching runs either way, every 5 minutes (every 2 in Auto-submit).">i</button></span>
-      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically and the tool runs faster: it scans every 2 minutes, sends each proposal as soon as it is written and sends the newest job first. Only Siv switches to Auto-submit.">i</button></span>
+      <span>Jobs: <strong>added by link</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Upwork restricted job search on Rafa's account (Oct 30), so the tool no longer searches Upwork. Add a job by pasting its link under Jobs found; the tool writes the proposal within a minute.">i</button></span>
+      <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day.">i</button></span>
+      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically and each one is sent as soon as it is written, newest job first. Only Siv switches to Auto-submit.">i</button></span>
       <span>Sending: <strong id="sendState">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
       <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
 
     <section class="stats" aria-label="Today">
-      <div class="stat"><span class="label">Jobs scanned today<button class="info-btn" type="button" aria-label="What this means" data-tip="New Upwork jobs the tool looked at today. Matched means the job passed your filters (keyword, client country) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
+      <div class="stat"><span class="label">Jobs added today<button class="info-btn" type="button" aria-label="What this means" data-tip="Jobs added by link today. Matched means the job passed your filters (client country, budget, rate) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
       <div class="stat"><span class="label">Proposals sent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
       <div class="stat"><span class="label">Waiting for review<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
       <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today, and what they cost at $0.15 each. The last line shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub money" id="sConnectsUsd">$0.00</span><span class="sub" id="sFloor">Stops below 20</span></div>
@@ -267,7 +254,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <aside class="side" aria-labelledby="pH">
         <h3 id="pH">What happens to each job</h3>
         <ol>
-          <li><b>Find.</b> Upwork is searched for your keywords every few minutes.</li>
+          <li><b>Add.</b> Paste a job's link under Jobs found (the tool doesn't search Upwork).</li>
           <li><b>Filter.</b> Country, budget, rate, proposal count, then an AI match score.</li>
           <li><b>Write.</b> Claude writes the opening for this job; the rest of your template stays as is.</li>
           <li><b>Loom.</b> Your video is copied and renamed to the job title.</li>
@@ -292,16 +279,16 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
             <option value="proposed">Proposal written</option>
             <option value="error">Error</option>
           </select>
-          <button type="button" class="btn outline" id="scanNow">Scan now</button>
         </div>
       </div>
+      <div class="addrow"><input type="url" id="jobLink" maxlength="300" placeholder="Paste an Upwork job link" aria-label="Upwork job link"><button type="button" class="btn primary" id="jobAdd">Add job</button></div>
       <div class="tablewrap">
         <table>
           <thead><tr><th>Found</th><th style="min-width:240px">Job</th><th>Client</th><th>Budget</th><th>Result</th></tr></thead>
           <tbody id="jobBody"></tbody>
         </table>
       </div>
-      <p class="small muted" id="jobEmpty" hidden>No jobs yet. They appear here after the first scan.</p>
+      <p class="small muted" id="jobEmpty" hidden>No jobs yet. Paste a job link above to add one.</p>
       <div><button type="button" class="btn" id="jobMore" hidden>Load more</button></div>
     </section>
 
@@ -353,37 +340,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   </div>
 
   <!-- SETTINGS -->
-  <!-- KEYWORD TRENDS -->
-  <div id="viewTrends" hidden style="flex-direction:column; gap:22px">
-    <section class="panel" aria-labelledby="kwH">
-      <h2 id="kwH">Explore keywords</h2>
-      <p class="small muted">Upwork doesn't share what people type into its search. These figures come from open job posts instead: how often clients post them, how many proposals they get, what they pay and which skills they ask for. Each keyword reads the 30 newest open jobs (read-only), slowly so bidding is never held up: about 30 seconds a keyword. A keyword looked up in the last 30 minutes is shown again without asking Upwork. Nothing here runs on its own.</p>
-      <div class="tools">
-        <input type="text" id="trInput" maxlength="320" placeholder="e.g. Klaviyo, SMS marketing, email copywriting" aria-label="Keywords, separated by commas (up to 5)" style="flex:1 1 300px; width:auto">
-        <select id="trMode" aria-label="Where the keyword must appear"><option value="title">In the job title</option><option value="anywhere">Anywhere in the post</option></select>
-        <button type="button" class="btn primary" id="trGo">Explore</button>
-      </div>
-      <div id="trResults" style="display:flex; flex-direction:column; gap:14px"></div>
-    </section>
-    <section class="panel" aria-labelledby="ideaH">
-      <div class="row-head"><h2 id="ideaH">Keyword ideas</h2><button type="button" class="btn outline" id="ideaGo">Suggest keywords</button></div>
-      <p class="small muted">Claude reads the figures on this page (your keywords, Rafa's profile, the keywords explored and the trending skills) and suggests keywords: for Rafa's core work, close to it, and different markets worth watching. Explore a few keywords first for better ideas.</p>
-      <div id="ideaList"></div>
-    </section>
-    <section class="panel" aria-labelledby="skH">
-      <h2 id="skH">Trending skills <span class="small muted" id="skWhen"></span></h2>
-      <p class="small muted">Skills clients tagged on every job the scanner's searches returned (matched or not), this week against the week before. Click one to explore it.</p>
-      <div id="skBody"><p class="small muted">Loading…</p></div>
-    </section>
-    <section class="panel" aria-labelledby="khH">
-      <h2 id="khH">Earlier lookups</h2>
-      <div id="khBody"><p class="small muted">None yet.</p></div>
-    </section>
-  </div>
-
   <form id="viewSettings" class="settings" hidden novalidate>
     <section class="section" aria-labelledby="s1">
-      <header><h2 id="s1">Which jobs to bid on</h2><p>A job must match at least one keyword and none of the exclusions.</p></header>
+      <header><h2 id="s1">Which jobs to bid on</h2><p>Upwork search is off (Oct 30: Upwork restricted it on Rafa's account), so jobs are added by link on the Proposals tab. Exclusions, client countries, budget and rate below still apply to them; keywords are kept for later.</p></header>
       <div class="field">
         <span class="lbl" id="kwLbl">Keywords</span>
         <div class="tags" id="kwTags" aria-labelledby="kwLbl"></div>
@@ -472,7 +431,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <section class="section" aria-labelledby="s5">
       <header><h2 id="s5">Caps and guardrails</h2><p>0 means no limit. Proposals always go out one at a time, a few minutes apart, and any Upwork warning pauses everything.</p></header>
       <div class="grid">
-        <div class="field"><label for="scanEvery">Scan Upwork every (in Review first; Auto-submit scans every 2 minutes)</label><select id="scanEvery"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
         <div class="field"><label for="capDaily">Proposals per day (0 = no limit)</label><input type="number" id="capDaily" min="0" max="500"></div>
         <div class="field"><label for="capHourly">Proposals per hour (0 = no limit)</label><input type="number" id="capHourly" min="0" max="60"></div>
         <div class="field"><label for="capGap">Minutes between proposals</label><input type="number" id="capGap" min="5" max="120"></div>
@@ -606,7 +564,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     pb.textContent = s.paused ? 'Resume bidding' : 'Pause all';
     pb.classList.toggle('resume', s.paused);
     $('pausedBanner').hidden = !s.paused;
-    $('pausedText').textContent = s.paused ? `Bidding is paused. ${s.pausedReason || ''} Nothing is scanned or sent until you resume.` : '';
+    $('pausedText').textContent = s.paused ? `Bidding is paused. ${s.pausedReason || ''} Nothing is written or sent until you resume.` : '';
     $('reviewBanner').hidden = !s.switchedToReviewReason;
     $('reviewText').textContent = s.switchedToReviewReason ? `Switched back to Review first. ${s.switchedToReviewReason} Approve proposals here; Auto-submit can be turned on again once this is sorted out.` : '';
     const low = s.connectsAlertSentAt && s.connectsAlertBelow && s.connectsBalance !== null && s.connectsBalance < s.connectsAlertBelow;
@@ -623,13 +581,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     else if (!s.activeNow) { label = 'Outside active hours'; color = 'var(--muted)'; }
     $('statusText').textContent = label;
     $('statusDot').style.background = color;
-    $('lastScan').textContent = ago(s.lastScanAt);
     const lr = s.lastRun;
     // Problems in red; waiting notes (e.g. a missing secret) in plain text.
     $('lastRunNote').textContent = lr && lr.errors ? `Last run problem: ${lr.note || 'see the Worker logs'}` : (lr && lr.note) || '';
     $('lastRunNote').className = 'msg' + (lr && lr.errors ? ' bad' : '');
     $('lastRunNote').hidden = !(lr && (lr.errors || lr.note));
-    $('scanEveryText').textContent = s.scanEveryMinutes;
     $('activeHours').textContent = s.activeHours.start === s.activeHours.end ? '24/7' : `${s.activeHours.start}–${s.activeHours.end} (${tzName(s.activeHours.timezone)})`;
 
     const t = s.today, c = s.caps;
@@ -702,7 +658,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (!rows.length) {
       list.append(h('div', { class: 'empty' },
         h('b', { text: 'Nothing waiting for review' }),
-        h('span', { text: state && state.upwork.connected ? 'New matching jobs appear here as they are found.' : 'Proposals appear here once Upwork is connected and the first scan runs.' })));
+        h('span', { text: state && state.upwork.connected ? 'Proposals for the jobs you add appear here, usually within a minute or two.' : 'Proposals appear here once Upwork is connected and a job is added by link.' })));
       return;
     }
     for (const p of rows) list.append(card(p));
@@ -868,14 +824,21 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   }
   $('jobFilter').addEventListener('change', () => loadJobs());
   $('jobMore').addEventListener('click', () => loadJobs(true));
-  $('scanNow').addEventListener('click', async (ev) => {
-    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Scanning…';
+  // Add a job by its link (Oct 30: Upwork restricted search, so the tool no longer searches; the writer drafts it next).
+  async function addJobLink() {
+    const b = $('jobAdd'), link = $('jobLink').value.trim();
+    if (!link) { toast('Paste an Upwork job link first', true); return; }
+    b.disabled = true;
     try {
-      const r = await api('/api/scan', { method: 'POST' });
-      toast(r.errors ? `Scan finished with a problem: ${r.note}` : `Scan done: ${r.scanned} jobs seen, ${r.new} new, ${r.matched} matched.`, Boolean(r.errors));
+      const r = await api('/api/jobs', { method: 'POST', body: { jobUrl: link } });
+      $('jobLink').value = '';
+      toast(r.status === 'requeued' ? 'Job added again. The proposal is written within a minute or two.' : 'Job added. The proposal is written within a minute or two.');
+      loadJobs();
     } catch (e) { toast(e.message, true); }
-    b.disabled = false; b.textContent = 'Scan now'; refresh();
-  });
+    b.disabled = false;
+  }
+  $('jobAdd').addEventListener('click', addJobLink);
+  $('jobLink').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addJobLink(); } });
 
   // ---------- "i" explanations: click to open, click elsewhere or Esc to close ----------
   function infoBtn(tip) { return tip ? h('button', { class: 'info-btn', type: 'button', 'aria-label': 'What this means', 'data-tip': tip, text: 'i' }) : null; }
@@ -1004,105 +967,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   });
   loadAccount();
 
-  // ---------- Keyword trends ----------
-  let trendsLoaded = false, kwHistory = [];
-  const money = (n, suffix = '') => (n === null || n === undefined ? '–' : `$${fmtNum(n)}${suffix}`);
-  const pace = (k) => (k.perDay === null ? '–' : k.perDay >= 10 ? fmtNum(Math.round(k.perDay)) : String(k.perDay));
-  function exploreThis(kw) {
-    $('trInput').value = kw; $('trInput').scrollIntoView({ block: 'center' }); $('trGo').click();
-  }
-  // The keyword's previous lookup, to show whether its pace went up or down.
-  function before(k) {
-    const prev = kwHistory.find((r) => r.keyword === k.keyword.toLowerCase() && r.mode === k.mode && r.at < k.at && r.perDay !== null);
-    return prev ? `${prev.perDay}/day on ${when(prev.at)}` : 'first lookup';
-  }
-  function kwCard(k) {
-    const c = k.competition;
-    return h('div', { class: 'kw-card' },
-      h('h3', {}, `"${k.keyword}"`, h('span', { class: 'small muted', style: 'font-weight:400', text: ` · ${k.mode === 'title' ? 'in the title' : 'anywhere in the post'}` })),
-      k.sample ? h('div', { class: 'kw-facts' },
-        h('span', {}, h('b', { text: pace(k) }), ' new jobs a day', infoBtn(`Estimated from the posting times of the ${k.sample} newest open jobs${k.more ? '' : ' (all the open jobs Upwork found)'}. Previous lookup: ${before(k)}.`)),
-        h('span', {}, h('b', { text: c.known ? `${c.under10}%` : '–' }), ' under 10 proposals', infoBtn(`Competition: of the jobs that show it, ${c.under5}% have fewer than 5 proposals, ${c.under10}% fewer than 10, and ${c.over20}% 20 or more.`)),
-        h('span', {}, 'Fixed price median ', h('b', { text: money(k.fixedMedian) })),
-        h('span', {}, 'Hourly, top of range median ', h('b', { text: money(k.hourlyMedianTop, '/hr') })),
-        h('span', {}, h('b', { text: `${k.hourlyShare}%` }), ' hourly'),
-        h('span', {}, h('b', { text: `${k.verifiedShare}%` }), ' payment verified'),
-        k.countries.length ? h('span', {}, 'Clients: ', k.countries.map(([n, x]) => `${n} ${x}`).join(', ')) : null)
-        : h('p', { class: 'small muted', text: 'No open jobs found for this keyword.' }),
-      k.skills.length ? h('div', {}, h('div', { class: 'small muted', style: 'margin-bottom:6px', text: 'Skills clients ask for in these jobs (related keywords to try):' }),
-        h('div', { class: 'chips' }, ...k.skills.map(([n, x]) => h('button', { type: 'button', class: 'chip-btn', title: `In ${x} of ${k.sample} jobs. Click to explore`, text: `${n} · ${x}`, onclick: () => exploreThis(n) })))) : null,
-      k.examples.length ? h('details', {}, h('summary', { class: 'small', style: 'cursor:pointer; color:var(--accent)', text: 'Newest jobs' }),
-        h('ul', { class: 'kw-ex' }, ...k.examples.map((e) => h('li', {}, e.url ? h('a', { href: e.url, target: '_blank', rel: 'noopener noreferrer', text: e.title }) : e.title,
-          h('span', { class: 'small muted', text: ` · ${[e.posted ? when(e.posted) : null, e.budget ? `$${e.budget}` : null, e.tier ? `${e.tier} proposals` : null].filter(Boolean).join(' · ')}` }))))) : null);
-  }
-  function kwCompare(list) {
-    if (list.length < 2) return null;
-    return h('div', { class: 'tablewrap' }, h('table', {},
-      h('thead', {}, h('tr', {}, ...['Keyword', 'New jobs a day', 'Under 10 proposals', 'Fixed median', 'Hourly top median', 'Previous lookup'].map((t) => h('th', { text: t })))),
-      h('tbody', {}, ...[...list].sort((a, b) => (b.perDay ?? -1) - (a.perDay ?? -1)).map((k) => h('tr', {},
-        h('td', { text: k.keyword }), h('td', { class: 'mono', text: pace(k) }), h('td', { class: 'mono', text: k.competition.known ? `${k.competition.under10}%` : '–' }),
-        h('td', { class: 'mono', text: money(k.fixedMedian) }), h('td', { class: 'mono', text: money(k.hourlyMedianTop, '/hr') }), h('td', { class: 'small muted', text: before(k) }))))));
-  }
-  // One keyword per request: Upwork is read slowly (about 30 s a keyword) so bidding keeps its share of the limit.
-  $('trGo').addEventListener('click', async () => {
-    const b = $('trGo');
-    const words = $('trInput').value.split(',').map((k) => k.replace(/\s+/g, ' ').trim()).filter(Boolean)
-      .filter((k, i, all) => all.findIndex((x) => x.toLowerCase() === k.toLowerCase()) === i);
-    if (!words.length) { toast('Type at least one keyword', true); return; }
-    if (words.length > 5) { toast('Up to 5 keywords at a time', true); return; }
-    b.disabled = true;
-    const done = [];
-    $('trResults').replaceChildren();
-    try {
-      for (const [i, kw] of words.entries()) {
-        b.textContent = words.length > 1 ? `Reading Upwork… ${i + 1} of ${words.length}` : 'Reading Upwork…';
-        const r = await api('/api/trends/explore', { method: 'POST', body: { keywords: [kw], mode: $('trMode').value } });
-        done.push(...r.insights);
-        $('trResults').replaceChildren(...done.map(kwCard));
-      }
-      await loadHistory();
-      $('trResults').replaceChildren(...[kwCompare(done), ...done.map(kwCard)].filter(Boolean));
-    } catch (e) { toast(e.message, true); }
-    b.disabled = false; b.textContent = 'Explore';
-  });
-  $('trInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('trGo').click(); } });
-  $('ideaGo').addEventListener('click', async () => {
-    const b = $('ideaGo'); b.disabled = true; b.textContent = 'Thinking…';
-    try {
-      const r = await api('/api/trends/ideas', { method: 'POST', body: {} });
-      const label = { core: 'Rafa\'s core work', adjacent: 'Close to it', new: 'Different market' };
-      const tone = { core: 'good', adjacent: 'info', new: 'warn' };
-      $('ideaList').replaceChildren(...[r.summary ? h('p', { style: 'margin:0', text: r.summary }) : null,
-        ...r.ideas.map((i) => h('div', { class: 'idea' },
-          h('div', { class: 'chips', style: 'align-items:center' }, h('button', { type: 'button', class: 'chip-btn', title: 'Explore this keyword', text: i.keyword, onclick: () => exploreThis(i.keyword) }), h('span', { class: `chip ${tone[i.kind]}`, text: label[i.kind] })),
-          h('span', { class: 'small muted', text: i.why })))].filter(Boolean));
-    } catch (e) { toast(e.message, true); }
-    b.disabled = false; b.textContent = 'Suggest keywords';
-  });
-  async function loadHistory() {
-    const r = await api('/api/trends');
-    kwHistory = r.history;
-    renderSkills(r.skills);
-    $('khBody').replaceChildren(kwHistory.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
-      h('thead', {}, h('tr', {}, ...['When', 'Keyword', 'Where', 'New jobs a day'].map((t) => h('th', { text: t })))),
-      h('tbody', {}, ...kwHistory.map((x) => h('tr', {}, h('td', { class: 'when', text: when(x.at) }),
-        h('td', {}, h('button', { type: 'button', class: 'chip-btn', text: x.keyword, onclick: () => { $('trMode').value = x.mode; exploreThis(x.keyword); } })),
-        h('td', { class: 'small', text: x.mode === 'title' ? 'title' : 'anywhere' }), h('td', { class: 'mono', text: x.perDay ?? '–' })))))) : h('p', { class: 'small muted', text: 'None yet.' }));
-  }
-  function renderSkills(s) {
-    $('skWhen').textContent = s.jobs ? `· ${fmtNum(s.jobs)} jobs seen this week` : '';
-    if (!s.trends.length) { $('skBody').replaceChildren(h('p', { class: 'small muted', text: 'No data yet: the scanner started saving skills on Oct 29, so this fills in over the next days.' })); return; }
-    $('skBody').replaceChildren(h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
-      h('thead', {}, h('tr', {}, ...['Skill', 'Jobs this week', 'Week before', 'Change'].map((t) => h('th', { text: t })))),
-      h('tbody', {}, ...s.trends.map((t) => {
-        const diff = t.thisWeek - t.lastWeek;
-        return h('tr', {}, h('td', {}, h('button', { type: 'button', class: 'chip-btn', text: t.skill, onclick: () => exploreThis(t.skill) })),
-          h('td', { class: 'mono', text: fmtNum(t.thisWeek) }), h('td', { class: 'mono', text: fmtNum(t.lastWeek) }),
-          h('td', { class: 'mono', style: diff > 0 ? 'color:var(--accent)' : diff < 0 ? 'color:var(--bad-fg)' : '', text: t.lastWeek ? `${diff > 0 ? '+' : ''}${Math.round((diff / t.lastWeek) * 100)}%` : diff ? 'new' : '–' }));
-      })))));
-  }
-  async function loadTrends() { try { await loadHistory(); } catch (e) { toast(e.message, true); } }
-
   // ---------- Settings ----------
   let kw = [], ex = [], ct = [];
   function renderTags(boxId, items, cls, onRemove) {
@@ -1140,7 +1004,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   async function loadTrack() {
     try {
       const { record } = await api('/api/profile');
-      if (!record) { $('trackSummary').textContent = 'Not read yet. It is read on the next scan once Upwork is connected, or press Sync now.'; return; }
+      if (!record) { $('trackSummary').textContent = 'Not read yet. Press Sync now once Upwork is connected.'; return; }
       const wins = record.wins.length;
       $('trackSummary').replaceChildren(
         h('b', { text: record.title || 'No profile title' }), h('br'),
@@ -1170,7 +1034,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('wWins').value = s.scoreWeights.wins; $('wProfile').value = s.scoreWeights.profile;
     loadTrack();
     $('loomUrl').value = s.loom.sourceUrl; $('loomDelete').value = s.loom.deleteAfterDays;
-    $('scanEvery').value = String(s.scanEveryMinutes);
     $('capDaily').value = s.caps.daily; $('capHourly').value = s.caps.hourly; $('capGap').value = s.caps.gapMinutes;
     $('activeStart').value = s.caps.activeStart; $('activeEnd').value = s.caps.activeEnd;
     if (![...$('timezone').options].some((o) => o.value === s.caps.timezone)) $('timezone').append(h('option', { value: s.caps.timezone, text: s.caps.timezone }));
@@ -1207,7 +1070,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         boostInAuto: $('boostOn').checked, boostMinScore: Number($('boostScore').value), boostMaxConnects: Number($('boostMax').value),
         stopAfterErrors: Number($('stopErrors').value),
       },
-      scanEveryMinutes: Number($('scanEvery').value),
       maxNewJobsPerRun: settings ? settings.maxNewJobsPerRun : 3,
       connectsAlertBelow: Number($('connectsAlert').value),
       sendingEnabled: $('sendOn').checked,
@@ -1246,7 +1108,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     catch (e) { toast(e.message, true); }
   });
   async function togglePause() {
-    try { state = { ...state, ...(await api('/api/pause', { method: 'POST', body: { paused: !state.paused } })) }; renderState(); toast(state.paused ? 'Paused. Nothing is scanned or sent.' : 'Bidding resumed.'); }
+    try { state = { ...state, ...(await api('/api/pause', { method: 'POST', body: { paused: !state.paused } })) }; renderState(); toast(state.paused ? 'Paused. Nothing is written or sent.' : 'Bidding resumed.'); }
     catch (e) { toast(e.message, true); }
   }
   $('pauseBtn').addEventListener('click', togglePause);
@@ -1272,7 +1134,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     b.disabled = false; b.textContent = 'Check now'; loadState();
   });
   $('upworkDisconnect').addEventListener('click', async () => {
-    if (!confirm('Disconnect Upwork? Nothing is scanned or sent until Rafa signs in again.')) return;
+    if (!confirm('Disconnect Upwork? Nothing is written or sent until Rafa signs in again.')) return;
     try { await api('/api/upwork/disconnect', { method: 'POST' }); toast('Upwork disconnected.'); } catch (e) { toast(e.message, true); }
     loadState();
   });
@@ -1301,7 +1163,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 
   // ---------- Routing + refresh ----------
   // One tab per view: proposals (queue + jobs found), activity log, Rafa's account, settings.
-  const VIEWS = { '#dashboard': ['viewDash', 'tabDash'], '#activity': ['viewLog', 'tabLog'], '#account': ['viewAcct', 'tabAcct'], '#trends': ['viewTrends', 'tabTrends'], '#settings': ['viewSettings', 'tabSettings'] };
+  const VIEWS = { '#dashboard': ['viewDash', 'tabDash'], '#activity': ['viewLog', 'tabLog'], '#account': ['viewAcct', 'tabAcct'], '#settings': ['viewSettings', 'tabSettings'] };
   async function route() {
     const hash = VIEWS[location.hash] ? location.hash : '#dashboard';
     for (const [key, [view, tab]] of Object.entries(VIEWS)) {
@@ -1310,7 +1172,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       if (view !== 'viewSettings') $(view).style.display = on ? 'flex' : 'none';
       if (on) $(tab).setAttribute('aria-current', 'page'); else $(tab).removeAttribute('aria-current');
     }
-    if (hash === '#trends' && !trendsLoaded) { trendsLoaded = true; loadTrends(); }
     const onSettings = hash === '#settings';
     if (onSettings && !settings) {
       try { settings = await api('/api/settings'); fillForm(settings); } catch (e) { toast(e.message, true); }

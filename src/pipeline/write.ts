@@ -4,7 +4,8 @@ import { isAccountWarning, McpError, type McpClient } from '../mcp';
 import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
-import { cannotApply, CLOSED_REASON, connectsOverLimit, stripUntrusted } from './filters';
+import { cannotApply, CLOSED_REASON, connectsOverLimit, recheckStored, stripUntrusted } from './filters';
+import { ADDED_REASON } from './jobs';
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
@@ -45,7 +46,34 @@ export async function invitedJobIds(client: McpClient, state: State): Promise<Se
   return ids;
 }
 
-interface Details { description: string; connectsCost: number | null; connectsBalance: number | null; canApply: boolean | null; applied: boolean }
+// What a job's own page says (find_jobs get: one job by id, not a search). Title, type, budget and country let the
+// writer handle jobs added by link (jobs.ts). Shape seen Oct 30: data.marketplaceJobPosting.{content{title,
+// description}, contractTerms{contractType, fixedPriceContractTerms.amount.rawValue, hourlyContractTerms},
+// clientCompanyPublic.country.name}. Budget text matches the search results': "500.00", "20.00–45.00/hr".
+interface Details {
+  description: string; connectsCost: number | null; connectsBalance: number | null; canApply: boolean | null; applied: boolean;
+  title: string | null; jobType: 'fixed' | 'hourly' | null; budget: string | null; country: string | null;
+}
+const money = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n.toFixed(2) : null; };
+export function readJobPosting(r: unknown): Pick<Details, 'title' | 'jobType' | 'budget' | 'country'> {
+  const posting = findKey(r, 'marketplaceJobPosting');
+  const terms = findKey(posting, 'contractTerms');
+  const type = String(findKey(terms, 'contractType') ?? '').toUpperCase();
+  const jobType = type === 'FIXED' ? 'fixed' : type === 'HOURLY' ? 'hourly' : null;
+  let budget: string | null = null;
+  if (jobType === 'fixed') budget = money(findKey(findKey(findKey(terms, 'fixedPriceContractTerms'), 'amount'), 'rawValue'));
+  if (jobType === 'hourly') {
+    const h = findKey(terms, 'hourlyContractTerms');
+    const min = money(findKey(h, 'hourlyBudgetMin')), max = money(findKey(h, 'hourlyBudgetMax'));
+    budget = min && max ? `${min}–${max}/hr` : max ? `up to ${max}/hr` : min ? `${min}+/hr` : null;
+  }
+  const title = findKey(findKey(posting, 'content'), 'title');
+  const country = findKey(findKey(findKey(posting, 'clientCompanyPublic'), 'country'), 'name');
+  return {
+    title: typeof title === 'string' ? stripUntrusted(title).slice(0, 300) || null : null, jobType, budget,
+    country: typeof country === 'string' ? country.slice(0, 60) : null,
+  };
+}
 export async function jobDetails(client: McpClient, state: State, id: string): Promise<Details> {
   const r = await client.callTool(state.upwork.toolNames.find_jobs, { action: 'get', org_uid: state.upwork.orgUid, params: { id } }) as Record<string, unknown>;
   const posting = findKey(r, 'marketplaceJobPosting') as { content?: { description?: string } } | undefined;
@@ -55,7 +83,7 @@ export async function jobDetails(client: McpClient, state: State, id: string): P
   const can = findKey(r, 'can_apply');
   return {
     description, connectsCost: Number.isFinite(cost) ? cost : null, connectsBalance: Number.isFinite(balance) ? balance : null,
-    canApply: typeof can === 'boolean' ? can : null, applied: findKey(r, 'applied') === true,
+    canApply: typeof can === 'boolean' ? can : null, applied: findKey(r, 'applied') === true, ...readJobPosting(r),
   };
 }
 
@@ -71,6 +99,14 @@ type Outcome = 'queued' | 'lowScore' | 'filtered' | 'errors';
 async function processJob(env: Env, client: McpClient, state: State, s: Settings, who: Who, job: JobRow, invited: Set<string>): Promise<Outcome> {
   if (invited.has(job.id)) { await setJob(env, job.id, 'filtered', 'Invited: answer the invitation on Upwork'); return 'filtered'; }
   const d = await jobDetails(client, state, job.id);
+  if (job.reason === ADDED_REASON) {
+    // Added by link (jobs.ts): what the job is comes from its own page; then the same filters as Settings.
+    job = { ...job, title: d.title ?? job.title, job_type: d.jobType ?? job.job_type, budget: d.budget ?? job.budget, client_country: d.country ?? job.client_country };
+    await env.DB.prepare('UPDATE jobs SET title = ?, job_type = ?, budget = ?, client_country = ? WHERE id = ?')
+      .bind(job.title, job.job_type, job.budget, job.client_country, job.id).run();
+    const dropped = recheckStored(job, s);
+    if (dropped) { await setJob(env, job.id, 'filtered', dropped); return 'filtered'; }
+  }
   if (d.applied) { await setJob(env, job.id, 'filtered', 'Already applied'); return 'filtered'; }
   const blocked = cannotApply(d.canApply, d.connectsCost, d.connectsBalance);
   if (blocked === 'closed') { await setJob(env, job.id, 'filtered', CLOSED_REASON); return 'filtered'; }

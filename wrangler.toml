@@ -5,11 +5,10 @@ compatibility_date = "2025-09-01"
 # them (Oct 28: RESEND_API_KEY added as a plain "Text" variable vanished and the report stopped). Secrets are kept either way.
 keep_vars = true
 
-# Three separate runs, so each gets its own Workers limits (Oct 26: one run doing everything was cut short on the free
-# plan and new jobs waited in "Matched"). The code decides which minutes do work (src/pipeline/pace.ts):
-#   every minute       send one approved proposal, then scan Upwork. Review: minute 0, 5, 10…; Auto: every minute
-#                      (scan every 2 minutes)
-#   minutes 1–59       score and write proposals for matched jobs. Review: minute 1, 6, 11…; Auto: every minute
+# Three separate runs, so each gets its own Workers limits. None of them searches Upwork (Oct 30: search restricted on
+# Rafa's account; jobs are added by link, src/pipeline/jobs.ts):
+#   every minute       send one approved proposal. Review: minute 0, 5, 10…; Auto: every minute (src/pipeline/pace.ts)
+#   minutes 1–59       score and write proposals for jobs added by link (nothing to do: no Upwork call)
 #   minute 3, 8, 13…   upkeep: Connects balance, Loom cleanup/keep-alive/alerts, daily report (3 pm Pacific)
 [triggers]
 crons = ["* * * * *", "1-59 * * * *", "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"]
@@ -38,4 +37,5 @@ UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
 #   TOKEN_KEY                  32+ random chars, encrypts stored Upwork/Loom sessions
 #   ANTHROPIC_API_KEY          cover letters + match scoring
 #   RESEND_API_KEY             daily report email and the low-Connects alert
+#   INTAKE_SECRET              32+ random chars; enables POST /api/jobs/intake (jobs added by link from other services)
 #   REPORT_FROM                sender address on a Resend-verified domain (optional until the domain is verified)

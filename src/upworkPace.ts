@@ -2,7 +2,7 @@ import { delKv, getKv, putKv } from './kv';
 import { isAccountWarning, throttleWait } from './mcp';
 import { loadState, patchState, type Env, type State } from './settings';
 
-// Rafa's account and Keyword trends read Upwork slowly (Celia, Oct 29), so bidding keeps most of Upwork's limit
+// Rafa's account reads Upwork slowly (Celia, Oct 29), so bidding keeps most of Upwork's limit
 // (Oct 29: "~12 requests/min sustained for find_jobs, find_freelancers, get_profile, and write tools", refilled
 // continuously). Each of their calls to those tools takes the next free 10-second slot, shared by every run through
 // D1, so together they use at most 6 a minute. Bidding itself (scan, writer, sender) does not wait for these slots.

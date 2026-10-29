@@ -4,9 +4,9 @@ Dashboard: **https://upwork-autobidder.siv-4c9.workers.dev** (sign in with the d
 
 ## What the tool does
 
-Every 5 minutes, all day (every 2 minutes in Auto-submit):
+Since Oct 30 the tool **does not search Upwork** (Upwork restricted job search on Rafa's account). For every job you add:
 
-1. **Finds** new Klaviyo jobs on Upwork from clients in the US, Canada and the UK.
+1. **You add the job:** paste its Upwork link in **Proposals → Jobs found → Add job**. The tool reads that one job and checks your filters (client countries, budget, rate).
 2. **Scores** each one out of 100 for how well it fits Rafa's profile (the weights are in Settings → Which jobs to bid on).
 3. **Writes** the proposal: your template word for word, plus a short personal intro (2–3 sentences) for each job.
 4. **Makes a Loom copy** of your video for each proposal, named after the job.
@@ -20,7 +20,6 @@ Every 5 minutes, all day (every 2 minutes in Auto-submit):
 | **Proposals** | Today's numbers, the **Review queue** (proposals waiting for you) and **Jobs found**: every job the tool looked at and why it was kept or skipped |
 | **Activity log** | Every proposal and what happened to it (waiting, approved, sent, failed, skipped). A pink **Boosted** label marks boosted proposals. **Export CSV** downloads it |
 | **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, and **Connects spent on proposals, proposal boosts, Profile Boost and Availability Badge**, with the total in dollars. Pick a period (today, yesterday, last 7 / 30 / 90 days, 12 months or a custom range with the calendar) and press **Refresh from Upwork** (about half a minute: it reads Upwork slowly so bidding isn't held up). It also refreshes by itself twice a day |
-| **Keyword trends** | Look up any keyword: how many new jobs a day, competition, budgets and the skills clients ask for; trending skills this week; keyword ideas from Claude |
 | **Settings** | All the rules. Press **Save changes** at the bottom after changing anything |
 
 Not sure what a number means? Click the small **i** next to it for a short explanation.
@@ -115,15 +114,13 @@ If Loom is disconnected, nothing stops: proposals go out with the original video
 - **Daily report** at 3 pm California: what was sent, what's waiting and what failed.
 - Emails need the **RESEND_API_KEY** in Cloudflare (Workers → upwork-autobidder → Settings → Variables and Secrets), added with type **Secret**.
 
-## Keyword trends
+## Adding jobs
 
-Upwork doesn't share what people type into its search, so this tab reads open job posts instead.
+1. Find a job on Upwork yourself (the website or app, saved searches, notifications).
+2. Copy its link and paste it in **Proposals → Jobs found → Add job** (or press Enter).
+3. Within a minute or two the proposal is written and waits in the **Review queue** (in Auto-submit it is approved and sent).
 
-- Nothing on this tab runs by itself, and it reads Upwork slowly (about 30 seconds a keyword) so bidding always keeps its share of Upwork's limit.
-- **Explore keywords:** type up to 5, separated by commas, and choose *In the job title* (like the bidder) or *Anywhere in the post*. For each one: about how many new jobs a day, the share with fewer than 10 proposals, the usual budget and rate, client countries, and the skills clients tag those jobs with. Click a skill to explore it.
-- **Keyword ideas:** Claude reads those figures and Rafa's profile and suggests keywords for her core work, close to it, and different markets.
-- **Trending skills:** the skills on every job the scanner saw this week against last week.
-- To bid on a new keyword, add it in **Settings → Which jobs to bid on**.
+If the job doesn't pass your filters, Jobs found says why. A job already proposed can't be added twice.
 
 ## If something looks wrong
 
