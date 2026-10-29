@@ -239,7 +239,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     </section>
 
     <section class="stats" aria-label="Today">
-      <div class="stat"><span class="label">Jobs added today<button class="info-btn" type="button" aria-label="What this means" data-tip="Jobs added by link today. Matched means the job passed your filters (client country, budget, rate) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
+      <div class="stat"><span class="label">Jobs added today<button class="info-btn" type="button" aria-label="What this means" data-tip="Jobs: Auto-synced. Matched means the job passed your filters (client country, budget, rate) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
       <div class="stat"><span class="label">Proposals sent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
       <div class="stat"><span class="label">Waiting for review<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
       <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today, and what they cost at $0.15 each. The last line shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub money" id="sConnectsUsd">$0.00</span><span class="sub" id="sFloor">Stops below 20</span></div>
@@ -254,7 +254,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <aside class="side" aria-labelledby="pH">
         <h3 id="pH">What happens to each job</h3>
         <ol>
-          <li><b>Add.</b> Paste a job's link under Jobs found (the tool doesn't search Upwork).</li>
+          <li><b>Add.</b> PSync. Jobs are automatically pulled in from our external provider.</li>
           <li><b>Filter.</b> Country, budget, rate, proposal count, then an AI match score.</li>
           <li><b>Write.</b> Claude writes the opening for this job; the rest of your template stays as is.</li>
           <li><b>Loom.</b> Your video is copied and renamed to the job title.</li>
