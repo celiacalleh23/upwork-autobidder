@@ -64,9 +64,9 @@ The tool also pauses itself on any Upwork warning or limit. The reason shows in 
 
 ### Boosting strong matches
 
-**Settings → Caps and guardrails → "Boost strong matches".** Off until you switch it on.
+**Settings → Caps and guardrails → "Boost strong matches in Auto-submit".** On by default, and it only works in **Auto-submit**: proposals you approve in Review first are never boosted. Untick it to stop boosting.
 
-- When it's on, every proposal with a match score at or above your number (75 by default) is boosted: the tool bids the Connects Upwork recommends for a top spot on the client's list, usually just a few.
+- In Auto-submit, every proposal with a match score at or above your number (75 by default) is boosted: the tool bids the Connects Upwork recommends for a top spot on the client's list, usually just a few.
 - It never bids more than your **max per job** (20 by default). If a top spot needs more, the proposal goes out without a boost.
 - Upwork charges the boost only if the proposal lands in a paid spot (or the client opens it before the bidding closes).
 - If someone outbids you in the seconds before sending, Upwork sends nothing; the tool tries again with the new price, and after two tries sends without a boost.
@@ -84,7 +84,7 @@ The tool also pauses itself on any Upwork warning or limit. The reason shows in 
 | Daily/hourly limits, hours, Connects alert | **Caps and guardrails** |
 | Report email | **Reports and connections** |
 
-Current rules: Klaviyo in the title or description · US, Canada, UK · minimum score 35 · hourly bid = top of the client's range, or $30/hr when there's no range · fixed price = the client's budget · 24/7, 5 minutes apart (Auto-submit: scans every 2 minutes, newest job first) · no daily limit · alert below 250 Connects · boost: off until switched on (75+ score, max 20 Connects per job).
+Current rules: Klaviyo in the title or description · US, Canada, UK · minimum score 35 · hourly bid = top of the client's range, or $30/hr when there's no range · fixed price = the client's budget · 24/7, 5 minutes apart (Auto-submit: scans every 2 minutes, newest job first) · no daily limit · alert below 250 Connects · boost: in Auto-submit only (75+ score, max 20 Connects per job).
 
 ## Reconnecting
 

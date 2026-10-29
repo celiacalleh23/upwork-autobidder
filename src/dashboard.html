@@ -234,7 +234,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <section class="confirm" id="autoConfirm" hidden aria-labelledby="autoH">
     <h2 id="autoH">Turn on Auto-submit?</h2>
     <p>Proposals will be sent without your approval, inside your caps: <b id="capLine">15 a day, 3 an hour, 10 minutes apart</b>, during active hours only. We recommend switching after about two weeks in Review with no warnings from Upwork.</p>
-    <p>Auto-submit also runs faster: Upwork is scanned every 2 minutes, each proposal goes out as soon as it is written, and the newest job goes first.</p>
+    <p>Auto-submit also runs faster: Upwork is scanned every 2 minutes, each proposal goes out as soon as it is written, and the newest job goes first. <span id="boostLine"></span></p>
     <p class="small muted">If Upwork ever stops allowing automatic confirmation, the tool switches itself back to Review and tells you.</p>
     <div class="actions"><button type="button" class="btn" id="autoCancel">Keep Review first</button><button type="button" class="btn primary" id="autoOk">Turn on Auto-submit</button></div>
   </section>
@@ -492,8 +492,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
           <label class="check" for="maxConnectsOn"><input type="checkbox" id="maxConnectsOn"><span>Limit Connects per job</span></label>
           <input type="number" id="maxConnects" min="1" max="50" aria-describedby="maxConnectsHint"><span class="hint" id="maxConnectsHint">Off = apply to any job, whatever it costs.</span></div>
         <div class="field"><label for="boostScore">Boost proposals with a match score of at least</label>
-          <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches</span></label>
-          <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
+          <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches in Auto-submit</span></label>
+          <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Only in Auto-submit: proposals sent from Review first are never boosted. Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
         <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="100"><span class="hint">If a top slot needs more, the proposal goes out without a boost.</span></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
       </div>
@@ -650,6 +650,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', `${c.gapMinutes} min apart`];
     $('rulesLine').textContent = `Guardrails: ${pace.join(' · ')} ${c.connectsFloor ? `· stop below ${c.connectsFloor} Connects ` : ''}· one proposal per job · auto-pause on any Upwork warning.`;
     $('capLine').textContent = pace.join(', ');
+    $('boostLine').textContent = s.boost && s.boost.inAuto ? `Proposals scoring ${s.boost.minScore}+ are boosted, up to ${s.boost.maxConnects} Connects each (Settings → Caps and guardrails).` : 'Boosting is off (Settings → Caps and guardrails).';
 
     $('upworkChip').textContent = s.upwork.connected ? 'Connected' : 'Not connected';
     $('upworkChip').className = 'chip ' + (s.upwork.connected ? 'good' : 'warn');
@@ -1164,8 +1165,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('floorOn').checked = s.caps.connectsFloorEnabled; $('floor').disabled = !s.caps.connectsFloorEnabled;
     $('connectsAlert').value = s.connectsAlertBelow;
     $('sendOn').checked = s.sendingEnabled; $('fixedAck').checked = s.fixedPriceTermsAcknowledged;
-    $('boostOn').checked = s.caps.boostEnabled; $('boostScore').value = s.caps.boostMinScore; $('boostMax').value = s.caps.boostMaxConnects;
-    $('boostScore').disabled = $('boostMax').disabled = !s.caps.boostEnabled;
+    $('boostOn').checked = s.caps.boostInAuto; $('boostScore').value = s.caps.boostMinScore; $('boostMax').value = s.caps.boostMaxConnects;
+    $('boostScore').disabled = $('boostMax').disabled = !s.caps.boostInAuto;
     $('stopErrors').value = s.caps.stopAfterErrors;
     $('reportEmail').value = s.report.email;
     if (!$('reportHour').options.length) for (let hr = 0; hr < 24; hr++) $('reportHour').append(h('option', { value: String(hr), text: `${hr % 12 || 12}:00 ${hr < 12 ? 'AM' : 'PM'}` }));
@@ -1188,7 +1189,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),
         activeStart: $('activeStart').value, activeEnd: $('activeEnd').value, timezone: $('timezone').value,
         connectsFloorEnabled: $('floorOn').checked, connectsFloor: Number($('floor').value), maxConnectsEnabled: $('maxConnectsOn').checked, maxConnectsPerJob: Number($('maxConnects').value),
-        boostEnabled: $('boostOn').checked, boostMinScore: Number($('boostScore').value), boostMaxConnects: Number($('boostMax').value),
+        boostInAuto: $('boostOn').checked, boostMinScore: Number($('boostScore').value), boostMaxConnects: Number($('boostMax').value),
         stopAfterErrors: Number($('stopErrors').value),
       },
       scanEveryMinutes: Number($('scanEvery').value),

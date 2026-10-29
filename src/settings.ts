@@ -39,7 +39,7 @@ export interface Settings {
     connectsFloor: number;
     maxConnectsEnabled: boolean; // off = apply to jobs whatever they cost in Connects (Siv, Oct 21)
     maxConnectsPerJob: number;
-    boostEnabled: boolean;    // boost strong matches (Siv, Oct 27); off until Siv switches it on
+    boostInAuto: boolean;     // boost strong matches, in Auto-submit only (Celia, Oct 29: on as soon as Auto is on)
     boostMinScore: number;    // only proposals with at least this match score
     boostMaxConnects: number; // never bid more than this per job
     stopAfterErrors: number;
@@ -114,7 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
     connectsFloor: 20,
     maxConnectsEnabled: false,
     maxConnectsPerJob: 16,
-    boostEnabled: false,
+    boostInAuto: true,
     boostMinScore: 75,
     boostMaxConnects: 20,
     stopAfterErrors: 3,
@@ -279,7 +279,7 @@ export function validateSettings(input: unknown): Settings {
       connectsFloor: num(caps.connectsFloor, 0, 1000, 'Connects floor'),
       maxConnectsEnabled: bool(caps.maxConnectsEnabled),
       maxConnectsPerJob: num(caps.maxConnectsPerJob, 1, 50, 'Max Connects per job'),
-      boostEnabled: bool(caps.boostEnabled),
+      boostInAuto: bool(caps.boostInAuto),
       boostMinScore: num(caps.boostMinScore, 0, 100, 'Boost: minimum match score'),
       boostMaxConnects: num(caps.boostMaxConnects, 1, 100, 'Boost: max Connects per job'),
       stopAfterErrors: num(caps.stopAfterErrors, 1, 10, 'Stop after errors'),

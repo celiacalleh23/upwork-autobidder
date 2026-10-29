@@ -383,6 +383,7 @@ async function getState(env: Env) {
     connectsAlertBelow: settings.connectsAlertBelow,
     activeHours: { start: settings.caps.activeStart, end: settings.caps.activeEnd, timezone: settings.caps.timezone },
     caps: { daily: settings.caps.daily, hourly: settings.caps.hourly, gapMinutes: settings.caps.gapMinutes, connectsFloor: settings.caps.connectsFloorEnabled ? settings.caps.connectsFloor : 0 },
+    boost: { inAuto: settings.caps.boostInAuto, minScore: settings.caps.boostMinScore, maxConnects: settings.caps.boostMaxConnects },
     today: {
       scanned: j.scanned ?? 0,
       matched: j.matched ?? 0,

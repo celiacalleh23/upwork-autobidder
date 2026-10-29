@@ -208,9 +208,10 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
         await holdRetries(env); return summary;
       }
-      // Boost strong matches (Siv, Oct 27): a second preview carries the bid. After two refused bids, no boost.
+      // Boost strong matches in Auto-submit (Siv, Oct 27; Celia, Oct 29): a second preview carries the bid. After two
+      // refused bids, no boost.
       const left = balance !== null && p.connectsCost !== null ? balance - p.connectsCost : null;
-      boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left) : null;
+      boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left, state.mode) : null;
       previewId = boost
         ? (await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra: p.extra, answers, boostConnects: boost })).previewId
         : p.previewId;
