@@ -16,6 +16,7 @@ export interface UpworkJob {
   description?: string;
   published_date?: string;
   created_date?: string;
+  skills?: unknown; // Upwork skill names (keyword trends)
 }
 
 export type Verdict = { status: 'matched'; keywords: string[] } | { status: 'filtered'; reason: string; keywords: string[] };

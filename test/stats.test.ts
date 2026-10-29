@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newConnectsRun, parseWhen, readBoosters, readConnectsPages, readProposalPages, spendKind } from '../src/pipeline/stats';
+import { newConnectsRun, parseWhen, readBoosters, readConnectsPages, readProposalPages, resolveRange, spendKind } from '../src/pipeline/stats';
 
 describe('parseWhen', () => {
   const t = Date.parse('2026-05-01T10:00:00Z');
@@ -125,5 +125,48 @@ describe('readConnectsPages', () => {
     expect(run.done).toBe(true);
     expect(run.pages).toBe(2);
     expect(run.byKind.applications.n + run.byKind.proposalBoosts.n + run.byKind.badge.n).toBe(13); // hours 0–14 are 15 transactions, minus a refund and a purchase
+  });
+});
+
+describe('resolveRange (Rafa\'s account period)', () => {
+  const tz = 'America/Los_Angeles';
+  const now = Date.parse('2026-10-29T18:30:00Z'); // 11:30 am Oct 29 in Los Angeles (PDT, UTC-7)
+  it('reads today and yesterday as calendar days in the Settings time zone', () => {
+    expect(resolveRange({ range: 'today' }, tz, now)).toMatchObject({ from: Date.parse('2026-10-29T07:00:00Z'), to: now, label: 'Today' });
+    expect(resolveRange({ range: 'yesterday' }, tz, now)).toMatchObject({ from: Date.parse('2026-10-28T07:00:00Z'), to: Date.parse('2026-10-29T07:00:00Z') });
+  });
+  it('keeps rolling windows and the old days field', () => {
+    expect(resolveRange({ range: '7' }, tz, now)).toMatchObject({ from: now - 7 * 86400_000, to: now, label: 'Last 7 days' });
+    expect(resolveRange({ days: 90 }, tz, now)).toMatchObject({ key: '90', label: 'Last 90 days' });
+    expect(resolveRange({}, tz, now).key).toBe('30');
+  });
+  it('reads a custom range from whole calendar days, across a DST change', () => {
+    const r = resolveRange({ range: 'custom', from: '2026-10-31', to: '2026-11-02' }, tz, Date.parse('2026-11-10T00:00:00Z'));
+    expect(r.from).toBe(Date.parse('2026-10-31T07:00:00Z')); // PDT
+    expect(r.to).toBe(Date.parse('2026-11-03T08:00:00Z'));   // PST, end of Nov 2
+    expect(r.label).toBe('Oct 31, 2026 – Nov 2, 2026');
+    expect(resolveRange({ range: 'custom', from: '2026-10-20', to: '2026-10-29' }, tz, now).to).toBe(now); // up to today: now
+  });
+  it('refuses a bad custom range', () => {
+    expect(() => resolveRange({ range: 'custom', from: '2026-10-20' }, tz, now)).toThrow('Pick a start and an end date');
+    expect(() => resolveRange({ range: 'custom', from: '2026-10-25', to: '2026-10-20' }, tz, now)).toThrow('after the end');
+    expect(() => resolveRange({ range: 'custom', from: '2026-11-01', to: '2026-11-02' }, tz, now)).toThrow('future');
+    expect(() => resolveRange({ range: 'custom', from: '2024-01-01', to: '2026-10-01' }, tz, now)).toThrow('at most');
+    expect(() => resolveRange({ range: 'week' }, tz, now)).toThrow('Unknown period');
+  });
+});
+
+describe('period end (yesterday read today)', () => {
+  it('skips proposals and Connects newer than the period', async () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const rows = Array.from({ length: 10 }, (_, i) => ({ node: { createdDateTime: new Date(now - i * 6 * 3600_000).toISOString() } }));
+    const client = { async callTool() { return { edges: rows, pageInfo: { hasNextPage: false } }; } };
+    // Hours 0, 6, 12, 18 ago are newer than `until` (19 h ago); 24…54 h ago fall inside.
+    const r = await readProposalPages(client as never, 'list', 'org', 'Accepted', now - 60 * 3600_000, null, 5, now - 19 * 3600_000);
+    expect(r.n).toBe(6);
+    const tx = { async callTool() { return { hasMore: false, usage_history: { transactions: rows.map((x) => ({ createdDateTime: x.node.createdDateTime, transactionType: 'Connects spent', reason: 'Job application', jobPost: { jobId: 'j' }, amount: { rawValue: '-8' } })) } }; } };
+    const run = newConnectsRun();
+    await readConnectsPages(tx as never, 'p', 'org', now - 60 * 3600_000, run, 5, now - 19 * 3600_000);
+    expect(run.byKind.applications).toEqual({ n: 6, spent: 48, refunded: 0 });
   });
 });

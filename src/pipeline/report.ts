@@ -127,7 +127,7 @@ export async function sendDailyReport(env: Env, opts: { force?: boolean; now?: D
   const s = await loadSettings(env);
   const to = reportEmails(s);
   if (!opts.force && !reportDue(s, await getKv(env, LAST_KEY), now)) return { sent: false, to };
-  if (!emailConfigured(env)) { if (opts.force) throw new Error('Add the RESEND_API_KEY secret in Cloudflare first.'); return { sent: false, to }; }
+  if (!emailConfigured(env)) { if (opts.force) throw new Error('RESEND_API_KEY is missing in Cloudflare. Add it again under Workers → upwork-autobidder → Settings → Variables and Secrets, with type "Secret".'); return { sent: false, to }; }
   if (!to.length) { if (opts.force) throw new Error('Add a report email in Settings → Reports and connections, then save.'); return { sent: false, to }; }
   const r = buildReport(await collectReport(env, s, now));
   await sendEmail(env, to, opts.force ? `[Test] ${r.subject}` : r.subject, r.text, r.html);

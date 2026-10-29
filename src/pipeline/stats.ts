@@ -1,3 +1,4 @@
+import { dayStartUtc } from '../api';
 import { delKv, getKv, putKv } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
@@ -8,7 +9,41 @@ import { loadState, type Env } from '../settings';
 // Availability Badge; Siv, Oct 27). Read-only, small pages, capped so one refresh stays well under the Workers
 // subrequest limit; capped counts are shown as "N+".
 
-export const WINDOWS = [30, 90, 365] as const;
+// The period to read (Celia, Oct 29: today, yesterday, last 7 days and a custom range besides 30 / 90 / 365 days).
+// Calendar days follow the Settings time zone. `to` is exclusive.
+export const RANGES = ['today', 'yesterday', '7', '30', '90', '365', 'custom'] as const;
+export type RangeKey = (typeof RANGES)[number];
+export interface Range { key: RangeKey; id: string; from: number; to: number; label: string }
+export const MAX_CUSTOM_DAYS = 400;
+
+const sqlMs = (s: string) => Date.parse(`${s.replace(' ', 'T')}Z`);
+// Local midnight of a YYYY-MM-DD date (noon UTC falls on that date in every zone from -12 h to +11 h).
+const midnight = (tz: string, ymd: string) => sqlMs(dayStartUtc(tz, new Date(`${ymd}T12:00:00Z`)));
+const ymdIn = (tz: string, ms: number) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(ms);
+const nextYmd = (ymd: string) => new Date(Date.parse(`${ymd}T12:00:00Z`) + 86400_000).toISOString().slice(0, 10);
+
+export function resolveRange(input: { range?: unknown; days?: unknown; from?: unknown; to?: unknown }, tz: string, now = Date.now()): Range {
+  const key = String(input.range ?? input.days ?? '30') as RangeKey;
+  if (!(RANGES as readonly string[]).includes(key)) throw new RangeError('Unknown period');
+  const today = ymdIn(tz, now);
+  const startToday = midnight(tz, today);
+  if (key === 'today') return { key, id: key, from: startToday, to: now, label: 'Today' };
+  if (key === 'yesterday') return { key, id: key, from: midnight(tz, ymdIn(tz, startToday - 12 * 3600_000)), to: startToday, label: 'Yesterday' };
+  if (key !== 'custom') {
+    const days = Number(key);
+    return { key, id: key, from: now - days * 86400_000, to: now, label: days === 365 ? 'Last 12 months' : `Last ${days} days` };
+  }
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const from = String(input.from ?? ''), to = String(input.to ?? '');
+  if (!ymd.test(from) || !ymd.test(to) || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to))) throw new RangeError('Pick a start and an end date');
+  if (from > to) throw new RangeError('The start date is after the end date');
+  if (from > today) throw new RangeError('The start date is in the future');
+  const end = to >= today ? now : midnight(tz, nextYmd(to));
+  const start = midnight(tz, from);
+  if (end - start > MAX_CUSTOM_DAYS * 86400_000) throw new RangeError(`Pick at most ${MAX_CUSTOM_DAYS} days`);
+  const fmt = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  return { key, id: `custom:${from}:${to}`, from: start, to: end, label: from === to ? fmt(from) : `${fmt(from)} – ${fmt(to)}` };
+}
 // Proposal pages read per request: Workers allow 50 outside calls per request on the free plan, and the profile,
 // contracts and Connects history use about 12. The dashboard keeps asking until every status is counted.
 const PAGE_BUDGET = 25;
@@ -19,7 +54,8 @@ const STATUSES = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'O
 export interface Count { n: number; capped: boolean }
 export interface AccountStats {
   at: string;
-  windowDays: number;
+  windowDays: number; // the period in days, rounded up
+  range?: { key: RangeKey; label: string; from: string; to: string }; // absent in figures read before Oct 29
   profile: { title: string; totalJobs: number | null; fixedJobs: number | null; hourlyJobs: number | null; feedbackCount: number | null };
   proposals: Record<(typeof STATUSES)[number], Count & { viewed: number }>;
   contracts: { active: Count; closed: Count };
@@ -95,7 +131,7 @@ const unreadable = { n: 0 };
 // Reads one status a page at a time, from `cursor`, for at most `budget` pages. Upwork returns 10 per page, so a full
 // count can take several requests; the caller keeps the cursor between them.
 interface PageRun { n: number; viewed: number; pages: number; done: boolean; cursor: string | null }
-export async function readProposalPages(client: McpClient, tool: string, org: string, status: string, cutoff: number, cursor: string | null, budget: number): Promise<PageRun> {
+export async function readProposalPages(client: McpClient, tool: string, org: string, status: string, cutoff: number, cursor: string | null, budget: number, until = Infinity): Promise<PageRun> {
   let n = 0, viewed = 0, pages = 0;
   while (pages < budget) {
     const r = await client.callTool(tool, { action: 'list', org_uid: org, params: { status, limit: 10, sort_field: 'CREATEDDATETIME', sort_order: 'DESC', ...(cursor ? { cursor } : {}) } });
@@ -108,6 +144,7 @@ export async function readProposalPages(client: McpClient, tool: string, org: st
     for (const row of rows) {
       const created = findKey(row, 'createdDateTime') ?? findKey(row, 'created');
       if (before(created, cutoff)) { older = true; break; }
+      if (parseWhen(created) >= until) continue; // newer than the period (e.g. yesterday's figures read today)
       if (!Number.isFinite(parseWhen(created))) unreadable.n++;
       n++;
       if (findKey(row, 'viewedByClient') === true) viewed++;
@@ -142,7 +179,7 @@ export const newConnectsRun = (): ConnectsRun => ({
   byKind: Object.fromEntries(SPEND_KINDS.map((k) => [k, { n: 0, spent: 0, refunded: 0 }])) as Record<SpendKind, Spend>,
 });
 
-export async function readConnectsPages(client: McpClient, tool: string, org: string, cutoff: number, run: ConnectsRun, budget: number): Promise<number> {
+export async function readConnectsPages(client: McpClient, tool: string, org: string, cutoff: number, run: ConnectsRun, budget: number, until = Infinity): Promise<number> {
   let used = 0;
   while (!run.done && used < budget) {
     const r = await client.callTool(tool, { action: 'connects_balance', org_uid: org, params: { limit: 10, ...(run.cursor ? { cursor: run.cursor } : {}) } });
@@ -159,6 +196,7 @@ export async function readConnectsPages(client: McpClient, tool: string, org: st
     let older = false;
     for (const t of Array.isArray(tx) ? tx : []) {
       if (before(findKey(t, 'createdDateTime'), cutoff)) { older = true; break; }
+      if (parseWhen(findKey(t, 'createdDateTime')) >= until) continue;
       const amount = Math.abs(num(findKey(findKey(t, 'amount'), 'rawValue')) ?? 0);
       const type = String(findKey(t, 'transactionType') ?? '');
       const job = findKey(t, 'jobPost');
@@ -191,7 +229,7 @@ function connectsSummary(run: ConnectsRun, fallbackBalance: number | null): Acco
 
 type Head = Omit<AccountStats, 'proposals' | 'unreadableDates' | 'connects'>;
 interface Progress {
-  days: number; cutoff: number; startedAt: number; head: Head; balance: number | null;
+  rangeId: string; cutoff: number; until: number; startedAt: number; head: Head; balance: number | null;
   connectsTool: string | null; cx: ConnectsRun;
   idx: number; cursor: string | null; statusPages: number; cur: { n: number; viewed: number };
   proposals: Partial<AccountStats['proposals']>; unreadable: number;
@@ -202,8 +240,7 @@ const ZERO = { n: 0, viewed: 0, capped: false };
 
 // Counts Rafa's proposals exactly, over as many requests as it takes: each call reads up to PAGE_BUDGET pages and
 // returns done:false with the figures so far until every status is counted. `resume` continues an unfinished count.
-export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS[0], resume = false): Promise<{ stats: AccountStats; done: boolean }> {
-  const days = (WINDOWS as readonly number[]).includes(windowDays) ? windowDays : WINDOWS[0];
+export async function refreshAccountStats(env: Env, range: Range, resume = false): Promise<{ stats: AccountStats; done: boolean }> {
   const state = await loadState(env);
   const org = state.upwork.orgUid;
   const tools = state.upwork.toolNames;
@@ -213,14 +250,13 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
   let prog: Progress | null = null;
   if (resume) {
     try { prog = JSON.parse((await getKv(env, PROGRESS_KEY)) ?? 'null'); } catch { prog = null; }
-    if (prog && (prog.days !== days || !prog.cx || Date.now() - prog.startedAt > PROGRESS_TTL_MS)) prog = null;
+    if (prog && (prog.rangeId !== range.id || !prog.cx || Date.now() - prog.startedAt > PROGRESS_TTL_MS)) prog = null;
   }
   if (!prog) {
     const names = await client.listTools();
     const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
     const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
     const boostTool = names.find((n) => n === 'boost_profile' || n.endsWith('__boost_profile'));
-    const cutoff = Date.now() - days * 86400_000;
     const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
     const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
     const contracts = contractsTool
@@ -230,10 +266,11 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
     // get_status only reads the badge and the ad; this tool's other actions are never called.
     const boosters = boostTool ? await client.callTool(boostTool, { action: 'get_status', org_uid: org }).then(readBoosters, () => null) : null;
     prog = {
-      days, cutoff, startedAt: Date.now(), idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0,
+      rangeId: range.id, cutoff: range.from, until: range.to, startedAt: Date.now(), idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0,
       balance: state.connectsBalance, connectsTool: profileTool ?? null, cx: newConnectsRun(),
       head: {
-        at: '', windowDays: days,
+        at: '', windowDays: Math.max(1, Math.ceil((range.to - range.from) / 86400_000)),
+        range: { key: range.key, label: range.label, from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString() },
         profile: {
           title: String(findKey(findKey(profile, 'personalData'), 'title') ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim(),
           totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
@@ -251,13 +288,13 @@ export async function refreshAccountStats(env: Env, windowDays: number = WINDOWS
     if (!prog.connectsTool) prog.cx.done = true;
     else {
       const startPages = prog.cx.pages;
-      budget -= await readConnectsPages(client, prog.connectsTool, org, prog.cutoff, prog.cx, budget)
+      budget -= await readConnectsPages(client, prog.connectsTool, org, prog.cutoff, prog.cx, budget, prog.until)
         .catch(() => { prog!.cx.done = true; prog!.cx.capped = true; return prog!.cx.pages - startPages + 1; });
     }
   }
   while (prog.idx < STATUSES.length && budget > 0) {
     const status = STATUSES[prog.idx];
-    const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages))
+    const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages), prog.until)
       .catch(() => ({ n: 0, viewed: 0, pages: 1, done: true, cursor: null } as PageRun));
     budget -= run.pages;
     prog.statusPages += run.pages;

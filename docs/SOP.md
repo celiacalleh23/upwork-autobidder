@@ -18,8 +18,9 @@ Every 5 minutes, all day (every 2 minutes in Auto-submit):
 | Tab | What's there |
 |---|---|
 | **Proposals** | Today's numbers, the **Review queue** (proposals waiting for you) and **Jobs found**: every job the tool looked at and why it was kept or skipped |
-| **Activity log** | Every proposal and what happened to it (waiting, approved, sent, failed, skipped). **Export CSV** downloads it |
-| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, and **Connects spent on proposals, proposal boosts, Profile Boost and Availability Badge**, with the total in dollars. Press **Refresh from Upwork** to update (it reads every record, 10 at a time, so it can take a few seconds) |
+| **Activity log** | Every proposal and what happened to it (waiting, approved, sent, failed, skipped). A pink **Boosted** label marks boosted proposals. **Export CSV** downloads it |
+| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, and **Connects spent on proposals, proposal boosts, Profile Boost and Availability Badge**, with the total in dollars. Pick a period (today, yesterday, last 7 / 30 / 90 days, 12 months or a custom range with the calendar) and press **Refresh from Upwork** (it reads every record, 10 at a time, so it can take a few seconds) |
+| **Keyword trends** | Look up any keyword: how many new jobs a day, competition, budgets and the skills clients ask for; trending skills this week; keyword ideas from Claude |
 | **Settings** | All the rules. Press **Save changes** at the bottom after changing anything |
 
 Not sure what a number means? Click the small **i** next to it for a short explanation.
@@ -111,7 +112,17 @@ If Loom is disconnected, nothing stops: proposals go out with the original video
 
 - **Connects low** (below 250).
 - **Loom expires in 7 days** / **Loom disconnected**.
-- **Daily report** (coming soon): what was sent, what's waiting and what failed.
+- **Daily report** at 3 pm California: what was sent, what's waiting and what failed.
+- Emails need the **RESEND_API_KEY** in Cloudflare (Workers → upwork-autobidder → Settings → Variables and Secrets), added with type **Secret**.
+
+## Keyword trends
+
+Upwork doesn't share what people type into its search, so this tab reads open job posts instead.
+
+- **Explore keywords:** type up to 5, separated by commas, and choose *In the job title* (like the bidder) or *Anywhere in the post*. For each one: about how many new jobs a day, the share with fewer than 10 proposals, the usual budget and rate, client countries, and the skills clients tag those jobs with. Click a skill to explore it.
+- **Keyword ideas:** Claude reads those figures and Rafa's profile and suggests keywords for her core work, close to it, and different markets.
+- **Trending skills:** the skills on every job the scanner saw this week against last week.
+- To bid on a new keyword, add it in **Settings → Which jobs to bid on**.
 
 ## If something looks wrong
 

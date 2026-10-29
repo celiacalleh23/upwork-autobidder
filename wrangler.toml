@@ -1,6 +1,9 @@
 name = "upwork-autobidder"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
+# Keep variables added in the Cloudflare dashboard when Workers Builds deploys. Without this, every deploy deleted
+# them (Oct 28: RESEND_API_KEY added as a plain "Text" variable vanished and the report stopped). Secrets are kept either way.
+keep_vars = true
 
 # Three separate runs, so each gets its own Workers limits (Oct 26: one run doing everything was cut short on the free
 # plan and new jobs waited in "Matched"). The code decides which minutes do work (src/pipeline/pace.ts):

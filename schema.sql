@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   win_score INTEGER,                 -- sub-score: similarity to jobs Rafa won (0-100, null = no past wins)
   profile_score INTEGER,             -- sub-score: fit with Rafa's profile (0-100)
   proposals_tier TEXT,               -- e.g. "5 to 10", from the search result
-  analysis TEXT                      -- JSON {pros, cons}: why this job is good or bad (dashboard)
+  analysis TEXT,                     -- JSON {pros, cons}: why this job is good or bad (dashboard)
+  skills TEXT                        -- JSON array of the Upwork skills on the post (keyword trends)
 );
 CREATE INDEX IF NOT EXISTS jobs_seen ON jobs(seen_at);
 
@@ -60,6 +61,17 @@ CREATE TABLE IF NOT EXISTS proposals (
 CREATE INDEX IF NOT EXISTS proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS proposals_created ON proposals(created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS proposals_job ON proposals(job_id);
+
+-- Keyword trends: one row per keyword looked up from the dashboard (data = the KeywordInsight JSON)
+CREATE TABLE IF NOT EXISTS keyword_lookups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  keyword TEXT NOT NULL,             -- lower case
+  mode TEXT NOT NULL,                -- title | anywhere
+  at TEXT NOT NULL,                  -- ISO time
+  per_day REAL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyword_lookups_kw ON keyword_lookups(keyword, mode, at);
 
 -- One row per cron pass
 CREATE TABLE IF NOT EXISTS runs (

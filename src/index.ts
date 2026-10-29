@@ -46,6 +46,7 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['proposals', 'loom_deleted_at', 'TEXT'],
   ['proposals', 'approved_at', 'TEXT'], ['proposals', 'approved_via', 'TEXT'],
   ['proposals', 'boost_connects', 'INTEGER'],
+  ['jobs', 'skills', 'TEXT'],
 ];
 
 // Creates the tables on first use (every statement is CREATE ... IF NOT EXISTS), so a fresh D1 needs no manual step.

@@ -8,9 +8,11 @@ import { recheckMatched, runScan } from './pipeline/scan';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
-import { loadAccountStats, refreshAccountStats } from './pipeline/stats';
+import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
 import { scanEveryMinutes } from './pipeline/pace';
+import { exploreKeywords, loadSkillTrends, lookupHistory, parseKeywords, type KeywordInsight, type Mode as TrendMode } from './pipeline/trends';
+import { ClaudeConfigError, keywordIdeas } from './claude';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -158,13 +160,41 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork profile', 502);
       }
     }
+    // Keyword trends (Celia, Oct 29): earlier lookups and the skills trending in scanned jobs; explore; Claude's ideas.
+    if (path === '/api/trends' && method === 'GET') return json({ history: await lookupHistory(env), skills: await loadSkillTrends(env) });
+    if (path === '/api/trends/explore' && method === 'POST') {
+      const body = await readJson(req);
+      const mode: TrendMode = body.mode === 'anywhere' ? 'anywhere' : 'title';
+      let keywords: string[];
+      try { keywords = parseKeywords(body.keywords, mode); } catch (e) { return fail(e instanceof Error ? e.message : 'Check the keywords'); }
+      try { return json({ insights: await exploreKeywords(env, keywords, mode) }); } catch (e) {
+        console.error('keyword trends failed', e instanceof Error ? e.message : e);
+        return fail(e instanceof Error ? e.message : 'Could not read Upwork', 502);
+      }
+    }
+    if (path === '/api/trends/ideas' && method === 'POST') {
+      const [s, record, skills] = await Promise.all([loadSettings(env), loadTrackRecord(env), loadSkillTrends(env)]);
+      const { results } = await env.DB.prepare('SELECT data FROM keyword_lookups ORDER BY id DESC LIMIT 30').all<{ data: string }>();
+      const latest = new Map<string, KeywordInsight>();
+      for (const r of results) {
+        try { const k = JSON.parse(r.data) as KeywordInsight; const key = `${k.keyword.toLowerCase()}|${k.mode}`; if (!latest.has(key)) latest.set(key, k); } catch { /* skip */ }
+      }
+      const explored = [...latest.values()].slice(0, 10).map((k) => `- "${k.keyword}" (${k.mode === 'title' ? 'in the title' : 'anywhere'}): ~${k.perDay ?? '?'} new jobs a day from the newest ${k.sample}; ${k.competition.under10}% under 10 proposals; fixed median $${k.fixedMedian ?? '?'}; hourly top median $${k.hourlyMedianTop ?? '?'}/hr; skills: ${k.skills.slice(0, 10).map(([n, c]) => `${n} (${c})`).join(', ')}`).join('\n');
+      const trending = skills.trends.slice(0, 20).map((t) => `${t.skill}: ${t.thisWeek} this week, ${t.lastWeek} last week`).join('\n');
+      try { return json(await keywordIdeas(env, { current: s.keywords, profile: profileForClaude(record, s), explored, trending })); } catch (e) {
+        console.error('keyword ideas failed', e instanceof Error ? e.message : e);
+        return fail(e instanceof Error ? e.message : 'Claude could not answer', e instanceof ClaudeConfigError ? 409 : 502);
+      }
+    }
     if (path === '/api/account-stats' && method === 'GET') return json({ stats: await loadAccountStats(env) });
     if (path === '/api/account-stats' && method === 'POST') {
       const state = await loadState(env);
       if (!state.upwork.connected) return fail('Connect Upwork first', 409);
       try {
         const body = await readJson(req).catch(() => ({} as Record<string, unknown>));
-        return json(await refreshAccountStats(env, Number(body.days) || 30, body.resume === true));
+        let range;
+        try { range = resolveRange(body, (await loadSettings(env)).caps.timezone); } catch (e) { return fail(e instanceof Error ? e.message : 'Unknown period'); }
+        return json(await refreshAccountStats(env, range, body.resume === true));
       } catch (e) {
         console.error('account stats failed', e instanceof Error ? e.message : e);
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);
