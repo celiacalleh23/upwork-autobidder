@@ -1,6 +1,6 @@
 # Upwork Auto-Bidder: guide for Siv
 
-Dashboard: **https://upwork-autobidder.siv-4c9.workers.dev** (sign in with the dashboard password)
+Dashboard: **https://rafadataapp.siv-4c9.workers.dev** (sign in with the dashboard password)
 
 ## What the tool does
 
@@ -112,7 +112,7 @@ If Loom is disconnected, nothing stops: proposals go out with the original video
 - **Connects low** (below 250).
 - **Loom expires in 7 days** / **Loom disconnected**.
 - **Daily report** at 3 pm California: what was sent, what's waiting and what failed.
-- Emails need the **RESEND_API_KEY** in Cloudflare (Workers → upwork-autobidder → Settings → Variables and Secrets), added with type **Secret**.
+- Emails need the **RESEND_API_KEY** in Cloudflare (Workers → rafadataapp → Settings → Variables and Secrets), added with type **Secret**.
 
 ## Adding jobs
 

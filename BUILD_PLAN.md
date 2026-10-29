@@ -5,7 +5,7 @@ The dashboard milestone is already built and deployed; everything below plugs in
 
 - **Client:** Siv (LTV Labs). Bidding account: **Rafa's Upwork freelancer account**.
 - **Builder:** Celia. Approved scope and price: proposal v. Oct 2026, $1,450, Option C (Loom copies).
-- **Live:** `https://upwork-autobidder.siv-4c9.workers.dev` (Cloudflare account Siv@ltv-labs.com).
+- **Live:** `https://rafadataapp.siv-4c9.workers.dev` (Cloudflare account Siv@ltv-labs.com).
 - **Repo:** `celiacalleh23/upwork-autobidder`. Every push to `main` deploys through Workers Builds.
 
 ---

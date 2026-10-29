@@ -1,4 +1,4 @@
-name = "upwork-autobidder"
+name = "rafadataapp" # renamed from upwork-autobidder (Celia, Oct 30); must match the Worker's name in Cloudflare
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 # Keep variables added in the Cloudflare dashboard when Workers Builds deploys. Without this, every deploy deleted
@@ -24,7 +24,7 @@ binding = "DB"
 database_name = "autobidder"
 database_id = "77c7e7e7-0532-4a58-b61e-36161370a136"
 
-# Worker logs (Cloudflare → Workers → upwork-autobidder → Observability). Kept on by every deploy (BUILD_PLAN §10).
+# Worker logs (Cloudflare → Workers → rafadataapp → Observability). Kept on by every deploy (BUILD_PLAN §10).
 [observability]
 enabled = true
 
