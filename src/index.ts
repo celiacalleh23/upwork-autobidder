@@ -149,6 +149,47 @@ export default {
     if (url.pathname === '/oauth/upwork/callback' && req.method === 'GET') return withHeaders(await handleUpworkCallback(req, env));
     // Its own secret, not the dashboard session: called by other services.
     if (url.pathname === '/api/jobs/intake') return withHeaders(await handleIntake(req, env));
+        // ==========================================
+    // APIFY WEBHOOK RECEIVER
+    // ==========================================
+    if (url.pathname === '/api/apify-webhook' && req.method === 'POST') {
+      try {
+        // Optional: Add a simple secret check so random people can't spam your endpoint
+        // You will set this same secret in Apify later.
+        if (req.headers.get('Authorization') !== 'Bearer YOUR_SECRET_HERE') {
+           return new Response('Unauthorized', { status: 401 });
+        }
+
+        const payload = await req.json();
+        
+        // Apify sometimes sends data as an array. We handle both array and single object.
+        const jobs = Array.isArray(payload) ? payload : [payload];
+
+        // 
+        //
+//
+        for (const job of jobs) {
+          if (!job.title || !job.description) continue; // Skip bad data
+
+          // 1. Save the job to your D1 database
+          await addJob(env, {
+            title: job.title,
+            description: job.description,
+            url: job.url || job.link || '', // Depending on Apify's output
+            budget: job.budget || '',
+            // Add any other fields your dashboard expects
+          });
+        }
+
+        return new Response(JSON.stringify({ success: true, count: jobs.length }), { 
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (error: any) {
+        console.error('Apify Webhook Error:', error);
+        return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+      }
+    }
     if (url.pathname === '/logout') {
       return withHeaders(new Response(null, { status: 303, headers: { location: '/login', 'set-cookie': clearCookie(secure) } }));
     }
@@ -174,7 +215,6 @@ export default {
     if (url.pathname === '/' || url.pathname === '/index.html') return withHeaders(html(dashboardHtml));
     return withHeaders(new Response('Not found', { status: 404 }));
   },
-
   // Pipeline: job added by link → read and filter → score → letter → preview (M4) → Loom copy (M5) → submit (M6) →
   // report (M7). No Upwork search (Oct 30).
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
