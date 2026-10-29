@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { newConnectsRun, parseWhen, readBoosters, readConnectsPages, readProposalPages, resolveRange, spendKind } from '../src/pipeline/stats';
+import { parseLedgerPage, parseWhen, readBoosters, readProposalPages, resolveRange, spendKind, summarizeLedger } from '../src/pipeline/stats';
+import { throttleWait } from '../src/upworkPace';
 
 describe('parseWhen', () => {
   const t = Date.parse('2026-05-01T10:00:00Z');
@@ -83,48 +84,53 @@ describe('readBoosters', () => {
   });
 });
 
-describe('readConnectsPages', () => {
-  const now = Date.parse('2026-10-27T12:00:00Z');
-  // Shaped like get_profile connects_balance on a real account: usage_history.transactions, pageInfo, hasMore.
-  const tx = (i: number) => {
-    const at = new Date(now - i * 3600_000).toISOString();
-    if (i % 10 === 9) return { amount: { rawValue: '-14' }, createdDateTime: at, jobPost: null, reason: 'Availability badge', transactionType: 'Connects spent' };
-    if (i % 10 === 5) return { amount: { rawValue: '-3' }, createdDateTime: at, jobPost: { jobId: '~02x' }, reason: 'Boosted proposal', transactionType: 'Connects spent' };
-    if (i % 10 === 7) return { amount: { rawValue: '8' }, createdDateTime: at, jobPost: { jobId: '~02y' }, reason: 'Refund job cancellation', transactionType: 'Connects refunded' };
-    if (i % 10 === 8) return { amount: { rawValue: '100' }, createdDateTime: at, jobPost: null, reason: 'Purchased', transactionType: 'Connects received' };
-    return { amount: { rawValue: '-8' }, createdDateTime: at, jobPost: { jobId: '~02z' }, reason: 'Job application', transactionType: 'Connects spent' };
+describe('parseLedgerPage (Connects history, stored in D1)', () => {
+  // A page as get_profile connects_balance returned it on a real account (Oct 27).
+  const page = {
+    balance: { connectsBalance: 40 }, hasMore: true, product_credits: { profile_ads: { balance: 50 } },
+    usage_history: { pageInfo: { endCursor: 'MCw0NTk4', hasNextPage: true }, transactions: [
+      { amount: { rawValue: '10' }, createdDateTime: '2026-10-16T10:05:53Z', jobPost: null, reason: 'Behavioral based subsidy', transactionType: 'Connects received' },
+      { amount: { rawValue: '14' }, createdDateTime: '2026-10-16T07:37:55Z', jobPost: { jobId: '~0221', jobTitle: '<untrusted_participant_content>Recreate Klaviyo flows</untrusted_participant_content>' }, reason: 'Refund job cancellation', transactionType: 'Connects refunded' },
+      { amount: { rawValue: '-14' }, createdDateTime: '2026-10-15T23:24:44Z', jobPost: { jobId: '~0221', jobTitle: 'Recreate Klaviyo flows' }, reason: 'Job application', transactionType: 'Connects spent' },
+      { amount: { rawValue: '-3' }, createdDateTime: 'not a date', jobPost: null, reason: 'Job application', transactionType: 'Connects spent' },
+    ] },
   };
-  const fake = (total: number) => ({
-    async callTool(_t: string, args: { params: { cursor?: string } }) {
-      const start = Number(args.params.cursor ?? 0);
-      const more = start + 10 < total;
-      return { balance: { connectsBalance: 600 }, hasMore: more, product_credits: { profile_ads: { balance: 50 } },
-        usage_history: { pageInfo: { endCursor: String(start + 10), hasNextPage: more }, transactions: Array.from({ length: Math.min(10, total - start) }, (_, i) => tx(start + i)) } };
-    },
+  it('reads each transaction with a stable key, its kind and a positive amount', () => {
+    const p = parseLedgerPage(page);
+    expect(p.next).toBe('MCw0NTk4');
+    expect(p.credits).toEqual({ profile_ads: 50 });
+    expect(p.rows).toHaveLength(3); // the unreadable date is skipped, never guessed
+    expect(p.rows[1]).toMatchObject({ type: 'refunded', amount: 14, kind: 'applications', jobId: '~0221', jobTitle: 'Recreate Klaviyo flows' });
+    expect(p.rows[2]).toMatchObject({ type: 'spent', amount: 14, kind: 'applications' });
+    expect(p.rows[2].key).toBe('2026-10-15T23:24:44.000Z|spent|14|~0221|Job application');
+    expect(parseLedgerPage(page).rows.map((r) => r.key)).toEqual(p.rows.map((r) => r.key)); // same page, same keys
   });
+  it('ends at the last page', () => {
+    expect(parseLedgerPage({ ...page, hasMore: false }).next).toBeNull();
+    expect(parseLedgerPage({ hasMore: true, usage_history: { pageInfo: { hasNextPage: true, endCursor: 'x' }, transactions: [] } }).next).toBeNull();
+  });
+});
 
-  it('splits Connects by kind and resumes across requests', async () => {
-    const run = newConnectsRun();
-    const far = now - 365 * 86400_000;
-    expect(await readConnectsPages(fake(30) as never, 'p', 'org', far, run, 2)).toBe(2);
-    expect(run).toMatchObject({ done: false, cursor: '20' });
-    expect(await readConnectsPages(fake(30) as never, 'p', 'org', far, run, 25)).toBe(1);
-    expect(run.done).toBe(true);
-    // 30 transactions: per 10, six applications (8), one boost (3), one refund (8), one purchase (100), one badge (14).
-    expect(run.byKind.applications).toEqual({ n: 18, spent: 144, refunded: 24 });
-    expect(run.byKind.proposalBoosts).toEqual({ n: 3, spent: 9, refunded: 0 });
-    expect(run.byKind.badge).toEqual({ n: 3, spent: 42, refunded: 0 });
-    expect(run.byKind.profileBoost.n + run.byKind.other.n).toBe(0);
-    expect(run.received).toBe(300);
-    expect(run.balance).toBe(600);
-    expect(run.adCredits).toEqual({ profile_ads: 50 });
+describe('summarizeLedger', () => {
+  it('adds up a period by kind', () => {
+    const s = summarizeLedger([
+      { kind: 'applications', type: 'spent', n: 18, amt: 144 }, { kind: 'applications', type: 'refunded', n: 3, amt: 24 },
+      { kind: 'proposalBoosts', type: 'spent', n: 3, amt: 9 }, { kind: 'badge', type: 'spent', n: 2, amt: 28 },
+      { kind: 'other', type: 'received', n: 3, amt: 300 }, { kind: 'mystery', type: 'spent', n: 1, amt: 5 },
+    ]);
+    expect(s.byKind.applications).toEqual({ n: 18, spent: 144, refunded: 24 });
+    expect(s.byKind.other).toEqual({ n: 1, spent: 5, refunded: 0 }); // an unknown kind is counted, never dropped
+    expect(s).toMatchObject({ spent: 186, refunded: 24, received: 300 });
   });
-  it('stops at the first transaction older than the period', async () => {
-    const run = newConnectsRun();
-    await readConnectsPages(fake(200) as never, 'p', 'org', now - 14.5 * 3600_000, run, 25);
-    expect(run.done).toBe(true);
-    expect(run.pages).toBe(2);
-    expect(run.byKind.applications.n + run.byKind.proposalBoosts.n + run.byKind.badge.n).toBe(13); // hours 0–14 are 15 transactions, minus a refund and a purchase
+});
+
+describe('throttleWait (Upwork asks to slow down)', () => {
+  it('reads how long Upwork asked to wait', () => {
+    const real = 'Upwork find_jobs: {"error_code":"SENSITIVE_RATE_LIMIT_EXCEEDED","reason":"Rate limit exceeded for this tool. Wait about 5 seconds before retrying (~12 requests/min sustained for find_jobs, find_freelancers, get_profile, and write tools). There is no daily cap — limits refill continuously."}';
+    expect(throttleWait(new Error(real))).toBe(6000);
+    expect(throttleWait(new Error('429 Too Many Requests'))).toBe(11000);
+    expect(throttleWait(new Error('Rate limit exceeded, wait about 300 seconds'))).toBe(31000); // capped
+    expect(throttleWait(new Error('Job is closed'))).toBeNull();
   });
 });
 
@@ -157,16 +163,12 @@ describe('resolveRange (Rafa\'s account period)', () => {
 });
 
 describe('period end (yesterday read today)', () => {
-  it('skips proposals and Connects newer than the period', async () => {
+  it('skips proposals newer than the period', async () => {
     const now = Date.parse('2026-10-29T12:00:00Z');
     const rows = Array.from({ length: 10 }, (_, i) => ({ node: { createdDateTime: new Date(now - i * 6 * 3600_000).toISOString() } }));
     const client = { async callTool() { return { edges: rows, pageInfo: { hasNextPage: false } }; } };
     // Hours 0, 6, 12, 18 ago are newer than `until` (19 h ago); 24…54 h ago fall inside.
     const r = await readProposalPages(client as never, 'list', 'org', 'Accepted', now - 60 * 3600_000, null, 5, now - 19 * 3600_000);
     expect(r.n).toBe(6);
-    const tx = { async callTool() { return { hasMore: false, usage_history: { transactions: rows.map((x) => ({ createdDateTime: x.node.createdDateTime, transactionType: 'Connects spent', reason: 'Job application', jobPost: { jobId: 'j' }, amount: { rawValue: '-8' } })) } }; } };
-    const run = newConnectsRun();
-    await readConnectsPages(tx as never, 'p', 'org', now - 60 * 3600_000, run, 5, now - 19 * 3600_000);
-    expect(run.byKind.applications).toEqual({ n: 6, spent: 48, refunded: 0 });
   });
 });

@@ -19,7 +19,7 @@ Every 5 minutes, all day (every 2 minutes in Auto-submit):
 |---|---|
 | **Proposals** | Today's numbers, the **Review queue** (proposals waiting for you) and **Jobs found**: every job the tool looked at and why it was kept or skipped |
 | **Activity log** | Every proposal and what happened to it (waiting, approved, sent, failed, skipped). A pink **Boosted** label marks boosted proposals. **Export CSV** downloads it |
-| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, and **Connects spent on proposals, proposal boosts, Profile Boost and Availability Badge**, with the total in dollars. Pick a period (today, yesterday, last 7 / 30 / 90 days, 12 months or a custom range with the calendar) and press **Refresh from Upwork** (it reads every record, 10 at a time, so it can take a few seconds) |
+| **Rafa's account** | Rafa's Upwork numbers: proposals sent, viewed, hires, and **Connects spent on proposals, proposal boosts, Profile Boost and Availability Badge**, with the total in dollars. Pick a period (today, yesterday, last 7 / 30 / 90 days, 12 months or a custom range with the calendar) and press **Refresh from Upwork** (about half a minute: it reads Upwork slowly so bidding isn't held up). It also refreshes by itself twice a day |
 | **Keyword trends** | Look up any keyword: how many new jobs a day, competition, budgets and the skills clients ask for; trending skills this week; keyword ideas from Claude |
 | **Settings** | All the rules. Press **Save changes** at the bottom after changing anything |
 
@@ -119,6 +119,7 @@ If Loom is disconnected, nothing stops: proposals go out with the original video
 
 Upwork doesn't share what people type into its search, so this tab reads open job posts instead.
 
+- Nothing on this tab runs by itself, and it reads Upwork slowly (about 30 seconds a keyword) so bidding always keeps its share of Upwork's limit.
 - **Explore keywords:** type up to 5, separated by commas, and choose *In the job title* (like the bidder) or *Anywhere in the post*. For each one: about how many new jobs a day, the share with fewer than 10 proposals, the usual budget and rate, client countries, and the skills clients tag those jobs with. Click a skill to explore it.
 - **Keyword ideas:** Claude reads those figures and Rafa's profile and suggests keywords for her core work, close to it, and different markets.
 - **Trending skills:** the skills on every job the scanner saw this week against last week.

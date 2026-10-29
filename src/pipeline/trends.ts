@@ -1,11 +1,13 @@
 import { McpError } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
+import { paced } from '../upworkPace';
 import { stripUntrusted } from './filters';
 
 // Keyword trends (Celia, Oct 29): what clients are posting, to find keywords worth bidding on. Upwork does not share
 // search volumes, so the figures come from open job posts: how many are posted a day, the competition, budgets,
-// countries and the skills clients tag them with. A lookup is on demand, at most 3 small pages per keyword
+// countries and the skills clients tag them with. A lookup is on demand only (never on a schedule), at most 3 small
+// pages per keyword, each at the slow shared pace (upworkPace.ts) so bidding keeps Upwork's limit
 // (BUILD_PLAN §2: modest pace, limit ≤ 10), and the same keyword is not looked up again within 30 minutes.
 
 export const MAX_KEYWORDS = 5;
@@ -104,9 +106,9 @@ async function searchJobs(env: Env, keyword: string, mode: Mode): Promise<{ jobs
   const jobs: TrendJob[] = [];
   let cursor: string | undefined, more = false;
   for (let page = 0; page < PAGES; page++) {
-    const r = await client.callTool(tool, { action: 'search', org_uid: state.upwork.orgUid, params: {
+    const r = await paced(env, () => client.callTool(tool, { action: 'search', org_uid: state.upwork.orgUid, params: {
       ...(mode === 'title' ? { title: keyword } : { query: keyword }), sort: 'recency', limit: 10, ...(cursor ? { cursor } : {}),
-    } });
+    } }));
     const rows = findKey(r, 'jobs');
     if (Array.isArray(rows)) jobs.push(...(rows as TrendJob[]));
     const info = findKey(r, 'pageInfo') as { hasNextPage?: boolean; endCursor?: string } | undefined;

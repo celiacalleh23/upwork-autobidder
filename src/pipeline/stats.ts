@@ -1,13 +1,14 @@
 import { dayStartUtc } from '../api';
-import { delKv, getKv, putKv } from '../kv';
+import { acquireLease, delKv, getKv, putKv, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
+import { paced } from '../upworkPace';
 
-// Rafa's Upwork account at a glance (on demand from the dashboard): proposals by status over the last 30 days, how many
-// clients viewed them, contracts, completed jobs, and Connects spent by kind (proposals, proposal boosts, Profile Boost,
-// Availability Badge; Siv, Oct 27). Read-only, small pages, capped so one refresh stays well under the Workers
-// subrequest limit; capped counts are shown as "N+".
+// Rafa's Upwork account at a glance: proposals by status for a period, how many clients viewed them, contracts,
+// completed jobs, and Connects spent by kind (proposals, proposal boosts, Profile Boost, Availability Badge; Siv, Oct 27).
+// Read on demand from the dashboard and by itself twice a day (Celia, Oct 29), read-only, in small steps; capped counts
+// are shown as "N+".
 
 // The period to read (Celia, Oct 29: today, yesterday, last 7 days and a custom range besides 30 / 90 / 365 days).
 // Calendar days follow the Settings time zone. `to` is exclusive.
@@ -44,11 +45,10 @@ export function resolveRange(input: { range?: unknown; days?: unknown; from?: un
   const fmt = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   return { key, id: `custom:${from}:${to}`, from: start, to: end, label: from === to ? fmt(from) : `${fmt(from)} – ${fmt(to)}` };
 }
-// Proposal pages read per request: Workers allow 50 outside calls per request on the free plan, and the profile,
-// contracts and Connects history use about 12. The dashboard keeps asking until every status is counted.
+// Proposal pages read per step: Workers allow 50 outside calls per request on the free plan, and a proposals step makes
+// no other Upwork calls. The dashboard keeps asking until every status is counted.
 const PAGE_BUDGET = 25;
 const MAX_PAGES_PER_STATUS = 100; // 1,000 proposals per status; beyond that the count shows "+"
-const MAX_CONNECTS_PAGES = 300;  // 3,000 Connects transactions (about 3 months of daily bidding); beyond that "read in part"
 const STATUSES = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired', 'Activated'] as const;
 
 export interface Count { n: number; capped: boolean }
@@ -63,6 +63,8 @@ export interface AccountStats {
     balance: number | null; applications: Count; spent: number; refunded: number; received: number;
     byKind: Record<SpendKind, Spend>; // what the Connects were spent on (refunds subtracted per kind)
     adCredits: Record<string, number>; // Upwork product credits (ads), kept apart from the Connects balance
+    readSince?: string | null; // the stored history does not reach back to the period's start yet: read back to here
+    syncedAt?: string | null;  // when the Connects history was last brought up to date
   };
   boosters: Boosters | null; // Availability Badge and Profile Boost as they stand now
   unreadableDates: number; // proposals whose date could not be read (counted as inside the period)
@@ -168,156 +170,246 @@ async function countContracts(client: McpClient, tool: string, org: string, stat
   return { n, capped: true };
 }
 
-// Rafa's Connects history, a page (10 transactions) at a time from `run.cursor`, for at most `budget` pages, newest first;
-// stops at the first transaction older than the period. The caller keeps `run` between requests.
-export interface ConnectsRun {
-  cursor: string | null; pages: number; done: boolean; capped: boolean;
-  balance: number | null; received: number; byKind: Record<SpendKind, Spend>; adCredits: Record<string, number>;
-}
-export const newConnectsRun = (): ConnectsRun => ({
-  cursor: null, pages: 0, done: false, capped: false, balance: null, received: 0, adCredits: {},
-  byKind: Object.fromEntries(SPEND_KINDS.map((k) => [k, { n: 0, spent: 0, refunded: 0 }])) as Record<SpendKind, Spend>,
-});
+// Rafa's Connects history, kept in D1 (connects_ledger) so a refresh only reads what is new (Celia, Oct 29: the old
+// full re-read was up to 25 get_profile calls a round and helped trip Upwork's limit). Newest first: the first walk reads
+// the whole history (up to MAX_HISTORY_DAYS) a few slow pages per run; later walks stop at the first page holding a
+// record already stored. Upwork transactions have no id, so a record is keyed by its time, type, amount, job and reason.
+const MAX_HISTORY_DAYS = 400;
+const LEDGER_STATE = 'ledger:sync';
+export interface LedgerRow { key: string; at: string; type: 'spent' | 'refunded' | 'received' | 'other'; reason: string; jobId: string | null; jobTitle: string | null; amount: number; kind: SpendKind }
+export interface LedgerSync { cursor: string | null; complete: boolean; syncedAt: string | null }
 
-export async function readConnectsPages(client: McpClient, tool: string, org: string, cutoff: number, run: ConnectsRun, budget: number, until = Infinity): Promise<number> {
-  let used = 0;
-  while (!run.done && used < budget) {
-    const r = await client.callTool(tool, { action: 'connects_balance', org_uid: org, params: { limit: 10, ...(run.cursor ? { cursor: run.cursor } : {}) } });
-    used++; run.pages++;
-    if (run.balance === null) run.balance = num(findKey(findKey(r, 'balance'), 'connectsBalance'));
-    const credits = findKey(r, 'product_credits');
-    if (run.pages === 1 && credits && typeof credits === 'object') {
-      for (const [k, v] of Object.entries(credits)) {
-        const c = num(typeof v === 'object' && v ? findKey(v, 'balance') ?? findKey(v, 'rawValue') ?? findKey(v, 'amount') : v);
-        if (c !== null) run.adCredits[k] = c;
-      }
-    }
-    const tx = findKey(r, 'transactions');
-    let older = false;
-    for (const t of Array.isArray(tx) ? tx : []) {
-      if (before(findKey(t, 'createdDateTime'), cutoff)) { older = true; break; }
-      if (parseWhen(findKey(t, 'createdDateTime')) >= until) continue;
-      const amount = Math.abs(num(findKey(findKey(t, 'amount'), 'rawValue')) ?? 0);
-      const type = String(findKey(t, 'transactionType') ?? '');
-      const job = findKey(t, 'jobPost');
-      const kind = spendKind(String(findKey(t, 'reason') ?? ''), !!job && typeof job === 'object');
-      if (/spent/i.test(type)) { run.byKind[kind].spent += amount; run.byKind[kind].n++; }
-      else if (/refund/i.test(type)) run.byKind[kind].refunded += amount;
-      else if (/receiv|purchas|bought/i.test(type)) run.received += amount;
-    }
-    const info = findKey(r, 'pageInfo') as { hasNextPage?: boolean; endCursor?: string } | undefined;
-    const next = findKey(r, 'next_cursor') ?? (info?.hasNextPage ? info.endCursor : undefined);
-    if (older || findKey(r, 'hasMore') === false || typeof next !== 'string' || !next) { run.done = true; run.cursor = null; }
-    else if (run.pages >= MAX_CONNECTS_PAGES) { run.done = true; run.capped = true; run.cursor = null; }
-    else run.cursor = next;
+export function parseLedgerPage(r: unknown): { rows: LedgerRow[]; next: string | null; credits: Record<string, number> | null } {
+  const rows: LedgerRow[] = [];
+  const tx = findKey(r, 'transactions');
+  for (const t of Array.isArray(tx) ? tx : []) {
+    const ms = parseWhen(findKey(t, 'createdDateTime'));
+    if (!Number.isFinite(ms)) continue;
+    const at = new Date(ms).toISOString();
+    const raw = String(findKey(t, 'transactionType') ?? '');
+    const type = /spent/i.test(raw) ? 'spent' : /refund/i.test(raw) ? 'refunded' : /receiv|purchas|bought/i.test(raw) ? 'received' : 'other';
+    const job = findKey(t, 'jobPost') as { jobId?: unknown; jobTitle?: unknown } | null | undefined;
+    const jobId = job && typeof job === 'object' && job.jobId !== undefined ? String(job.jobId).slice(0, 60) : null;
+    const reason = String(findKey(t, 'reason') ?? '').slice(0, 120);
+    const amount = Math.abs(num(findKey(findKey(t, 'amount'), 'rawValue')) ?? 0);
+    rows.push({
+      key: `${at}|${type}|${amount}|${jobId ?? ''}|${reason}`, at, type, reason, jobId, amount,
+      jobTitle: job && typeof job === 'object' && job.jobTitle !== undefined ? String(job.jobTitle).replace(/<\/?untrusted_participant_content>/g, '').trim().slice(0, 200) : null,
+      kind: spendKind(reason, !!(job && typeof job === 'object')),
+    });
   }
-  return used;
+  const info = findKey(r, 'pageInfo') as { hasNextPage?: boolean; endCursor?: string } | undefined;
+  const next = findKey(r, 'next_cursor') ?? (info?.hasNextPage ? info.endCursor : undefined);
+  const more = findKey(r, 'hasMore') !== false && typeof next === 'string' && !!next && rows.length > 0;
+  let credits: Record<string, number> | null = null;
+  const pc = findKey(r, 'product_credits');
+  if (pc && typeof pc === 'object') {
+    credits = {};
+    for (const [k, v] of Object.entries(pc)) {
+      const c = num(typeof v === 'object' && v ? findKey(v, 'balance') ?? findKey(v, 'rawValue') ?? findKey(v, 'amount') : v);
+      if (c !== null) credits[k] = c;
+    }
+  }
+  return { rows, next: more ? (next as string) : null, credits };
 }
 
-function connectsSummary(run: ConnectsRun, fallbackBalance: number | null): AccountStats['connects'] {
-  const kinds = Object.values(run.byKind);
+export async function loadLedgerSync(env: Env): Promise<LedgerSync> {
+  try { return { cursor: null, complete: false, syncedAt: null, ...JSON.parse((await getKv(env, LEDGER_STATE)) ?? '{}') }; } catch { return { cursor: null, complete: false, syncedAt: null }; }
+}
+
+// Reads up to `maxPages` pages at the slow pace. Returns caughtUp when the walk reached stored records or the end.
+export async function syncLedger(env: Env, client: McpClient, tool: string, org: string, maxPages: number, now = Date.now()): Promise<{ pages: number; caughtUp: boolean; sync: LedgerSync }> {
+  const st = await loadLedgerSync(env);
+  let pages = 0;
+  try {
+    while (pages < maxPages) {
+      const fromTop = st.cursor === null;
+      const r = await paced(env, () => client.callTool(tool, { action: 'connects_balance', org_uid: org, params: { limit: 10, ...(st.cursor ? { cursor: st.cursor } : {}) } }));
+      pages++;
+      const page = parseLedgerPage(r);
+      if (fromTop && page.credits) await putKv(env, 'ledger:adCredits', JSON.stringify(page.credits));
+      let added = 0;
+      if (page.rows.length) {
+        const res = await env.DB.batch(page.rows.map((x) => env.DB.prepare(
+          'INSERT OR IGNORE INTO connects_ledger (key, at, type, reason, job_id, job_title, amount, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ).bind(x.key, x.at, x.type, x.reason, x.jobId, x.jobTitle, x.amount, x.kind)));
+        added = res.reduce((t, q) => t + (q.meta.changes ?? 0), 0);
+      }
+      const tooOld = page.rows.some((x) => Date.parse(x.at) < now - MAX_HISTORY_DAYS * 86400_000);
+      const end = page.next === null || tooOld;
+      // Once the whole history was read, a page with a stored record means the rest is stored too.
+      if (end || (st.complete && added < page.rows.length)) {
+        if (end) st.complete = true;
+        st.cursor = null; st.syncedAt = new Date(now).toISOString();
+        return { pages, caughtUp: true, sync: st };
+      }
+      st.cursor = page.next;
+    }
+    return { pages, caughtUp: false, sync: st };
+  } finally {
+    await putKv(env, LEDGER_STATE, JSON.stringify(st));
+  }
+}
+
+// Connects in a period, from the stored history. Totals per kind; refunds are subtracted per kind on the dashboard.
+export function summarizeLedger(rows: { kind: string; type: string; n: number; amt: number }[]) {
+  const byKind = Object.fromEntries(SPEND_KINDS.map((k) => [k, { n: 0, spent: 0, refunded: 0 }])) as Record<SpendKind, Spend>;
+  let received = 0;
+  for (const r of rows) {
+    const k = (SPEND_KINDS as readonly string[]).includes(r.kind) ? (r.kind as SpendKind) : 'other';
+    if (r.type === 'spent') { byKind[k].n += r.n; byKind[k].spent += r.amt; }
+    else if (r.type === 'refunded') byKind[k].refunded += r.amt;
+    else if (r.type === 'received') received += r.amt;
+  }
+  const kinds = Object.values(byKind);
+  return { byKind, received, spent: kinds.reduce((t, k) => t + k.spent, 0), refunded: kinds.reduce((t, k) => t + k.refunded, 0) };
+}
+
+async function ledgerConnects(env: Env, from: number, to: number, balance: number | null): Promise<AccountStats['connects']> {
+  const { results } = await env.DB.prepare(
+    'SELECT kind, type, COUNT(*) AS n, SUM(amount) AS amt FROM connects_ledger WHERE at >= ? AND at < ? GROUP BY kind, type',
+  ).bind(new Date(from).toISOString(), new Date(to).toISOString()).all<{ kind: string; type: string; n: number; amt: number }>();
+  const sum = summarizeLedger(results);
+  const sync = await loadLedgerSync(env);
+  const oldest = (await env.DB.prepare('SELECT MIN(at) AS at FROM connects_ledger').first<{ at: string | null }>())?.at ?? null;
+  // Still reading older history: the period may reach further back than what is stored.
+  const partial = !sync.complete && (oldest === null || Date.parse(oldest) > from);
+  let adCredits: Record<string, number> = {};
+  try { adCredits = JSON.parse((await getKv(env, 'ledger:adCredits')) ?? '{}'); } catch { /* none */ }
   return {
-    balance: run.balance ?? fallbackBalance,
-    applications: { n: run.byKind.applications.n, capped: run.capped || !run.done },
-    spent: kinds.reduce((t, k) => t + k.spent, 0),
-    refunded: kinds.reduce((t, k) => t + k.refunded, 0),
-    received: run.received,
-    byKind: run.byKind,
-    adCredits: run.adCredits,
+    balance, applications: { n: sum.byKind.applications.n, capped: partial }, spent: sum.spent, refunded: sum.refunded, received: sum.received,
+    byKind: sum.byKind, adCredits, readSince: partial ? oldest : null, syncedAt: sync.syncedAt,
   };
 }
 
-type Head = Omit<AccountStats, 'proposals' | 'unreadableDates' | 'connects'>;
+type Head = Omit<AccountStats, 'proposals' | 'unreadableDates' | 'connects' | 'at'>;
+type Phase = 'head' | 'ledger' | 'statuses';
 interface Progress {
-  rangeId: string; cutoff: number; until: number; startedAt: number; head: Head; balance: number | null;
-  connectsTool: string | null; cx: ConnectsRun;
+  rangeId: string; cutoff: number; until: number; startedAt: number; phase: Phase; head: Head | null; ledgerPages: number;
   idx: number; cursor: string | null; statusPages: number; cur: { n: number; viewed: number };
   proposals: Partial<AccountStats['proposals']>; unreadable: number;
 }
-const PROGRESS_KEY = 'account_stats_progress';
-const PROGRESS_TTL_MS = 15 * 60_000;
 const ZERO = { n: 0, viewed: 0, capped: false };
+// Manual refreshes (dashboard) and the twice-a-day refresh (upkeep cron) keep separate progress.
+const PROGRESS = { manual: { key: 'account_stats_progress', ttl: 15 * 60_000 }, auto: { key: 'account_stats_progress:auto', ttl: 3 * 3600_000 } };
+const MANUAL_LEDGER_PAGES = 6; // a manual refresh waits for at most this much new history; older history fills in by itself
 
-// Counts Rafa's proposals exactly, over as many requests as it takes: each call reads up to PAGE_BUDGET pages and
-// returns done:false with the figures so far until every status is counted. `resume` continues an unfinished count.
-export async function refreshAccountStats(env: Env, range: Range, resume = false): Promise<{ stats: AccountStats; done: boolean }> {
+const emptyHead = (range: Range): Head => ({
+  windowDays: Math.max(1, Math.ceil((range.to - range.from) / 86400_000)),
+  range: { key: range.key, label: range.label, from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString() },
+  profile: { title: '', totalJobs: null, fixedJobs: null, hourlyJobs: null, feedbackCount: null },
+  contracts: { active: { n: 0, capped: false }, closed: { n: 0, capped: false } },
+  boosters: null,
+});
+
+// One step of a refresh; the caller repeats it (resume) until done. Steps: the profile, contracts and boosters; new
+// Connects history; then proposals by status (list_freelancer_proposals, not one of Upwork's slow tools, PAGE_BUDGET
+// pages a step). Calls to get_profile and boost_profile take the slow shared pace (upworkPace.ts).
+export async function refreshAccountStats(env: Env, range: Range, resume = false, slot: 'manual' | 'auto' = 'manual'): Promise<{ stats: AccountStats; done: boolean; phase: Phase }> {
   const state = await loadState(env);
   const org = state.upwork.orgUid;
   const tools = state.upwork.toolNames;
   if (!org || !tools.list_freelancer_proposals) throw new Error('Upwork is not connected.');
   const client = await upworkClient(env);
+  const { key, ttl } = PROGRESS[slot];
 
   let prog: Progress | null = null;
   if (resume) {
-    try { prog = JSON.parse((await getKv(env, PROGRESS_KEY)) ?? 'null'); } catch { prog = null; }
-    if (prog && (prog.rangeId !== range.id || !prog.cx || Date.now() - prog.startedAt > PROGRESS_TTL_MS)) prog = null;
+    try { prog = JSON.parse((await getKv(env, key)) ?? 'null'); } catch { prog = null; }
+    if (prog && (prog.rangeId !== range.id || !prog.phase || Date.now() - prog.startedAt > ttl)) prog = null;
   }
-  if (!prog) {
-    const names = await client.listTools();
-    const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
-    const contractsTool = names.find((n) => n === 'list_contracts' || n.endsWith('__list_contracts'));
-    const boostTool = names.find((n) => n === 'boost_profile' || n.endsWith('__boost_profile'));
-    const profile = profileTool ? await client.callTool(profileTool, { action: 'get', org_uid: org }).catch(() => null) : null;
+  prog ??= { rangeId: range.id, cutoff: range.from, until: range.to, startedAt: Date.now(), phase: 'head', head: null, ledgerPages: 0, idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0 };
+  const names = prog.phase !== 'statuses' ? await client.listTools() : [];
+  const tool = (base: string) => names.find((n) => n === base || n.endsWith(`__${base}`));
+
+  if (prog.phase === 'head') {
+    const profileTool = tool('get_profile'), contractsTool = tool('list_contracts'), boostTool = tool('boost_profile');
+    const profile = profileTool ? await paced(env, () => client.callTool(profileTool, { action: 'get', org_uid: org })).catch(() => null) : null;
     const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
     const contracts = contractsTool
       ? { active: await countContracts(client, contractsTool, org, 'ACTIVE').catch(() => ({ n: 0, capped: false })),
           closed: await countContracts(client, contractsTool, org, 'CLOSED').catch(() => ({ n: 0, capped: false })) }
       : { active: { n: 0, capped: false }, closed: { n: 0, capped: false } };
     // get_status only reads the badge and the ad; this tool's other actions are never called.
-    const boosters = boostTool ? await client.callTool(boostTool, { action: 'get_status', org_uid: org }).then(readBoosters, () => null) : null;
-    prog = {
-      rangeId: range.id, cutoff: range.from, until: range.to, startedAt: Date.now(), idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0,
-      balance: state.connectsBalance, connectsTool: profileTool ?? null, cx: newConnectsRun(),
-      head: {
-        at: '', windowDays: Math.max(1, Math.ceil((range.to - range.from) / 86400_000)),
-        range: { key: range.key, label: range.label, from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString() },
-        profile: {
-          title: String(findKey(findKey(profile, 'personalData'), 'title') ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim(),
-          totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
-        },
-        contracts,
-        boosters,
+    const boosters = boostTool ? await paced(env, () => client.callTool(boostTool, { action: 'get_status', org_uid: org })).then(readBoosters, () => null) : null;
+    prog.head = {
+      ...emptyHead(range),
+      profile: {
+        title: String(findKey(findKey(profile, 'personalData'), 'title') ?? '').replace(/<\/?untrusted_participant_content>/g, '').trim(),
+        totalJobs: num(agg?.totalJobs), fixedJobs: num(agg?.totalFixedJobs), hourlyJobs: num(agg?.totalHourlyJobs), feedbackCount: num(agg?.totalFeedback),
       },
+      contracts, boosters,
     };
-  }
-
-  unreadable.n = prog.unreadable;
-  let budget = PAGE_BUDGET;
-  // The Connects history first, then the proposals by status; both resume where the last request stopped.
-  if (!prog.cx.done) {
-    if (!prog.connectsTool) prog.cx.done = true;
-    else {
-      const startPages = prog.cx.pages;
-      budget -= await readConnectsPages(client, prog.connectsTool, org, prog.cutoff, prog.cx, budget, prog.until)
-        .catch(() => { prog!.cx.done = true; prog!.cx.capped = true; return prog!.cx.pages - startPages + 1; });
+    prog.phase = 'ledger';
+  } else if (prog.phase === 'ledger') {
+    const profileTool = tool('get_profile');
+    let next = true;
+    // Another run (the background catch-up) holding the history lease is reading it already.
+    if (profileTool && await acquireLease(env, 'ledger', 5 * 60_000)) {
+      try {
+        const r = await syncLedger(env, client, profileTool, org, 3);
+        prog.ledgerPages += r.pages;
+        next = r.caughtUp || !r.sync.complete || prog.ledgerPages >= MANUAL_LEDGER_PAGES;
+      } catch { next = true; } finally { await releaseLease(env, 'ledger'); }
     }
+    if (next) prog.phase = 'statuses';
+  } else {
+    unreadable.n = prog.unreadable;
+    let budget = PAGE_BUDGET;
+    while (prog.idx < STATUSES.length && budget > 0) {
+      const status = STATUSES[prog.idx];
+      const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages), prog.until)
+        .catch(() => ({ n: 0, viewed: 0, pages: 1, done: true, cursor: null } as PageRun));
+      budget -= run.pages;
+      prog.statusPages += run.pages;
+      prog.cur = { n: prog.cur.n + run.n, viewed: prog.cur.viewed + run.viewed };
+      const capped = !run.done && prog.statusPages >= MAX_PAGES_PER_STATUS;
+      if (run.done || capped) {
+        prog.proposals[status] = { ...prog.cur, capped };
+        Object.assign(prog, { idx: prog.idx + 1, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 } });
+      } else prog.cursor = run.cursor;
+    }
+    prog.unreadable = unreadable.n;
   }
-  while (prog.idx < STATUSES.length && budget > 0) {
-    const status = STATUSES[prog.idx];
-    const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages), prog.until)
-      .catch(() => ({ n: 0, viewed: 0, pages: 1, done: true, cursor: null } as PageRun));
-    budget -= run.pages;
-    prog.statusPages += run.pages;
-    prog.cur = { n: prog.cur.n + run.n, viewed: prog.cur.viewed + run.viewed };
-    const capped = !run.done && prog.statusPages >= MAX_PAGES_PER_STATUS;
-    if (run.done || capped) {
-      prog.proposals[status] = { ...prog.cur, capped };
-      Object.assign(prog, { idx: prog.idx + 1, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 } });
-    } else prog.cursor = run.cursor;
-  }
-  prog.unreadable = unreadable.n;
 
-  const done = prog.idx >= STATUSES.length && prog.cx.done;
+  const done = prog.phase === 'statuses' && prog.idx >= STATUSES.length;
   const proposals = Object.fromEntries(STATUSES.map((s, k) => [s,
     prog!.proposals[s] ?? (k === prog!.idx ? { ...prog!.cur, capped: false } : ZERO)])) as AccountStats['proposals'];
-  const stats: AccountStats = { ...prog.head, connects: connectsSummary(prog.cx, prog.balance), at: new Date().toISOString(), proposals, unreadableDates: prog.unreadable };
+  const stats: AccountStats = {
+    ...(prog.head ?? emptyHead(range)), at: new Date().toISOString(), proposals, unreadableDates: prog.unreadable,
+    connects: await ledgerConnects(env, prog.cutoff, prog.until, state.connectsBalance),
+  };
   if (done) {
     await putKv(env, 'account_stats', JSON.stringify(stats));
-    await delKv(env, PROGRESS_KEY);
+    await delKv(env, key);
   } else {
-    await putKv(env, PROGRESS_KEY, JSON.stringify(prog));
+    await putKv(env, key, JSON.stringify(prog));
   }
-  return { stats, done };
+  return { stats, done, phase: prog.phase };
+}
+
+// Upkeep cron (every 5 minutes): Rafa's account refreshes by itself twice a day (Celia, Oct 29), one step per run, and
+// the Connects history catches up on its first read, two slow pages per run. Nothing here touches bidding.
+const AUTO_EVERY_MS = 12 * 3600_000;
+export async function accountUpkeep(env: Env, tz: string, now = Date.now()): Promise<void> {
+  const state = await loadState(env);
+  if (!state.upwork.connected || !state.upwork.orgUid || !state.upwork.toolNames.list_freelancer_proposals) return;
+  const sync = await loadLedgerSync(env);
+  if (!sync.complete || sync.cursor !== null) {
+    if (await acquireLease(env, 'ledger', 5 * 60_000)) {
+      try {
+        const client = await upworkClient(env);
+        const names = await client.listTools();
+        const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
+        if (profileTool) await syncLedger(env, client, profileTool, state.upwork.orgUid, 2, now);
+      } finally { await releaseLease(env, 'ledger'); }
+    }
+    return; // one Upwork task per upkeep run
+  }
+  const last = Number(await getKv(env, 'account_stats:autoAt')) || 0;
+  if (now - last < AUTO_EVERY_MS) return;
+  const r = await refreshAccountStats(env, resolveRange({ range: '30' }, tz, now), true, 'auto');
+  if (r.done) await putKv(env, 'account_stats:autoAt', String(now));
 }
 
 export async function loadAccountStats(env: Env): Promise<AccountStats | null> {

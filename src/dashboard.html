@@ -357,7 +357,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <div id="viewTrends" hidden style="flex-direction:column; gap:22px">
     <section class="panel" aria-labelledby="kwH">
       <h2 id="kwH">Explore keywords</h2>
-      <p class="small muted">Upwork doesn't share what people type into its search. These figures come from open job posts instead: how often clients post them, how many proposals they get, what they pay and which skills they ask for. Each keyword reads the 30 newest open jobs (read-only); a keyword looked up in the last 30 minutes is shown again without asking Upwork.</p>
+      <p class="small muted">Upwork doesn't share what people type into its search. These figures come from open job posts instead: how often clients post them, how many proposals they get, what they pay and which skills they ask for. Each keyword reads the 30 newest open jobs (read-only), slowly so bidding is never held up: about 30 seconds a keyword. A keyword looked up in the last 30 minutes is shown again without asking Upwork. Nothing here runs on its own.</p>
       <div class="tools">
         <input type="text" id="kwInput" maxlength="320" placeholder="e.g. Klaviyo, SMS marketing, email copywriting" aria-label="Keywords, separated by commas (up to 5)" style="flex:1 1 300px; width:auto">
         <select id="kwMode" aria-label="Where the keyword must appear"><option value="title">In the job title</option><option value="anywhere">Anywhere in the post</option></select>
@@ -902,7 +902,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   function renderAccount(st, partial) {
     if (!st) return;
     const period = st.range ? st.range.label.toLowerCase() : `last ${st.windowDays} days`;
-    $('acctWhen').textContent = partial ? `· ${period} · counting…` : `· ${period} · read ${ago(st.at)}`;
+    $('acctWhen').textContent = partial ? `· ${period} · counting…` : `· ${period} · read ${ago(st.at)} · refreshes by itself twice a day`;
     if (!partial) {
       $('acctDays').value = st.range ? st.range.key : String(st.windowDays);
       showCustom();
@@ -956,12 +956,13 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const net = (k) => by[k].spent - by[k].refunded;
     const total = rows.reduce((t, [k]) => t + net(k), 0);
     const cell = (k) => h('td', { class: 'mono' }, fmtNum(net(k)), by[k].refunded ? h('span', { class: 'sub-time', text: `${fmtNum(by[k].refunded)} refunded` }) : null);
-    return h('div', { class: 'tablewrap' }, h('table', {},
+    const note = st.connects.readSince ? h('p', { class: 'small', style: 'color:var(--warn-fg); margin:0', text: `Still reading Rafa's older Connects history (back to ${when(st.connects.readSince)} so far); it fills in by itself over the next hours, slowly so bidding isn't held up.` }) : null;
+    return h('div', {}, note, h('div', { class: 'tablewrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Connects spent on', infoBtn('From Rafa\'s Connects history for this period, refunds subtracted.')), h('th', { text: 'Charges' }), h('th', { text: 'Connects' }), h('th', { text: 'Value' }))),
       h('tbody', {},
         ...rows.map(([k, label, tip]) => h('tr', {}, h('td', {}, label, infoBtn(tip)), h('td', { class: 'mono', text: fmtNum(by[k].n) }), cell(k), h('td', { class: 'mono', text: usd(net(k)) }))),
         h('tr', {}, h('td', {}, h('b', { text: 'Total' })), h('td', { class: 'mono', text: fmtNum(rows.reduce((t, [k]) => t + by[k].n, 0)) }),
-          h('td', { class: 'mono' }, h('b', { text: `${fmtNum(total)}${st.connects.applications.capped ? '+' : ''}` })), h('td', { class: 'mono' }, h('b', { text: usd(total) }))))));
+          h('td', { class: 'mono' }, h('b', { text: `${fmtNum(total)}${st.connects.applications.capped ? '+' : ''}` })), h('td', { class: 'mono' }, h('b', { text: usd(total) })))))));
   }
   function boostersLine(st) {
     const b = st.boosters, credits = Object.entries(st.connects.adCredits || {});
@@ -992,7 +993,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       for (let i = 0; !r.done && i < 40; i++) {
         renderAccount(r.stats, true);
         const so = Object.values(r.stats.proposals).reduce((t, c) => t + c.n, 0);
-        b.textContent = so ? `Reading Upwork… ${fmtNum(so)} so far` : 'Reading Upwork… Connects history';
+        // Profile and Connects history are read slowly so bidding keeps Upwork's limit: about 10 s a call.
+        b.textContent = r.phase === 'statuses' ? `Reading Upwork… ${fmtNum(so)} proposals so far` : r.phase === 'ledger' ? 'Reading Upwork… Connects history' : 'Reading Upwork… profile';
         r = await api('/api/account-stats', { method: 'POST', body: { ...period, resume: true } });
       }
       renderAccount(r.stats);
@@ -1041,12 +1043,25 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('td', { text: k.keyword }), h('td', { class: 'mono', text: pace(k) }), h('td', { class: 'mono', text: k.competition.known ? `${k.competition.under10}%` : '–' }),
         h('td', { class: 'mono', text: money(k.fixedMedian) }), h('td', { class: 'mono', text: money(k.hourlyMedianTop, '/hr') }), h('td', { class: 'small muted', text: before(k) }))))));
   }
+  // One keyword per request: Upwork is read slowly (about 30 s a keyword) so bidding keeps its share of the limit.
   $('kwGo').addEventListener('click', async () => {
-    const b = $('kwGo'); b.disabled = true; b.textContent = 'Reading Upwork…';
+    const b = $('kwGo');
+    const words = $('kwInput').value.split(',').map((k) => k.replace(/\s+/g, ' ').trim()).filter(Boolean)
+      .filter((k, i, all) => all.findIndex((x) => x.toLowerCase() === k.toLowerCase()) === i);
+    if (!words.length) { toast('Type at least one keyword', true); return; }
+    if (words.length > 5) { toast('Up to 5 keywords at a time', true); return; }
+    b.disabled = true;
+    const done = [];
+    $('kwResults').replaceChildren();
     try {
-      const r = await api('/api/trends/explore', { method: 'POST', body: { keywords: $('kwInput').value, mode: $('kwMode').value } });
+      for (const [i, kw] of words.entries()) {
+        b.textContent = words.length > 1 ? `Reading Upwork… ${i + 1} of ${words.length}` : 'Reading Upwork…';
+        const r = await api('/api/trends/explore', { method: 'POST', body: { keywords: [kw], mode: $('kwMode').value } });
+        done.push(...r.insights);
+        $('kwResults').replaceChildren(...done.map(kwCard));
+      }
       await loadHistory();
-      $('kwResults').replaceChildren(...[kwCompare(r.insights), ...r.insights.map(kwCard)].filter(Boolean));
+      $('kwResults').replaceChildren(...[kwCompare(done), ...done.map(kwCard)].filter(Boolean));
     } catch (e) { toast(e.message, true); }
     b.disabled = false; b.textContent = 'Explore';
   });

@@ -13,6 +13,7 @@ import { sendDailyReport } from './pipeline/report';
 import { scanEveryMinutes } from './pipeline/pace';
 import { exploreKeywords, loadSkillTrends, lookupHistory, parseKeywords, type KeywordInsight, type Mode as TrendMode } from './pipeline/trends';
 import { ClaudeConfigError, keywordIdeas } from './claude';
+import { UpworkBusy } from './upworkPace';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -167,9 +168,11 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const mode: TrendMode = body.mode === 'anywhere' ? 'anywhere' : 'title';
       let keywords: string[];
       try { keywords = parseKeywords(body.keywords, mode); } catch (e) { return fail(e instanceof Error ? e.message : 'Check the keywords'); }
+      // One keyword per request: each takes up to 3 slow Upwork reads (about 30 s); the dashboard sends them in turn.
+      if (keywords.length > 1) return fail('Send one keyword per request');
       try { return json({ insights: await exploreKeywords(env, keywords, mode) }); } catch (e) {
         console.error('keyword trends failed', e instanceof Error ? e.message : e);
-        return fail(e instanceof Error ? e.message : 'Could not read Upwork', 502);
+        return fail(e instanceof Error ? e.message : 'Could not read Upwork', e instanceof UpworkBusy ? 503 : 502);
       }
     }
     if (path === '/api/trends/ideas' && method === 'POST') {

@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS keyword_lookups (
 );
 CREATE INDEX IF NOT EXISTS keyword_lookups_kw ON keyword_lookups(keyword, mode, at);
 
+-- Rafa's Connects history (Rafa's account tab), kept so a refresh only reads what is new. Upwork gives no id: key is
+-- time|type|amount|job|reason
+CREATE TABLE IF NOT EXISTS connects_ledger (
+  key TEXT PRIMARY KEY,
+  at TEXT NOT NULL,                  -- ISO time
+  type TEXT NOT NULL,                -- spent | refunded | received | other
+  reason TEXT,
+  job_id TEXT,
+  job_title TEXT,
+  amount REAL NOT NULL,              -- Connects, always positive
+  kind TEXT NOT NULL                 -- applications | proposalBoosts | profileBoost | badge | other
+);
+CREATE INDEX IF NOT EXISTS connects_ledger_at ON connects_ledger(at);
+
 -- One row per cron pass
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

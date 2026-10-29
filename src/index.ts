@@ -10,6 +10,7 @@ import { syncDue, syncTrackRecord } from './pipeline/profile';
 import { refreshConnects, runSender } from './pipeline/send';
 import { sendAndScanDue, writeDue } from './pipeline/pace';
 import { sendDailyReport } from './pipeline/report';
+import { accountUpkeep } from './pipeline/stats';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
 import { loadSettings, loadState, type Env } from './settings';
 
@@ -177,6 +178,8 @@ export default {
       await keepLoomAlive(env, s.loom.sourceUrl).catch(log('loom keep-alive'));
       await checkLoomAlert(env).catch(log('loom alert'));
       await sendDailyReport(env).catch(log('daily report'));
+      // Rafa's account: twice a day, and the Connects history's first read, at Upwork's slow pace (last: it may wait).
+      await accountUpkeep(env, s.caps.timezone).catch(log('account upkeep'));
     }
   },
 };
