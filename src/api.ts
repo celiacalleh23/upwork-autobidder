@@ -346,6 +346,8 @@ async function getState(env: Env) {
   return {
     ...state,
     lastScanAt: state.lastScanAt,
+    // The scan's last result: stale since the scan was removed (Oct 30). Writer problems show under Jobs found.
+    lastRun: null,
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
     sendingEnabled: settings.sendingEnabled,
     connectsAlertBelow: settings.connectsAlertBelow,

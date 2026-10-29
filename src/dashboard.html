@@ -231,11 +231,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <div id="viewDash" style="display:flex; flex-direction:column; gap:22px">
     <section class="status" aria-label="Pipeline status">
       <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
-      <span>Jobs: <strong>added by link</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="External search sync paused">i</button></span>
       <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day.">i</button></span>
       <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically and each one is sent as soon as it is written, newest job first. Only Siv switches to Auto-submit.">i</button></span>
       <span>Sending: <strong id="sendState">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
-      <span class="msg bad" id="lastRunNote" hidden></span>
     </section>
 
     <section class="stats" aria-label="Today">
@@ -581,11 +579,6 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     else if (!s.activeNow) { label = 'Outside active hours'; color = 'var(--muted)'; }
     $('statusText').textContent = label;
     $('statusDot').style.background = color;
-    const lr = s.lastRun;
-    // Problems in red; waiting notes (e.g. a missing secret) in plain text.
-    $('lastRunNote').textContent = lr && lr.errors ? `Last run problem: ${lr.note || 'see the Worker logs'}` : (lr && lr.note) || '';
-    $('lastRunNote').className = 'msg' + (lr && lr.errors ? ' bad' : '');
-    $('lastRunNote').hidden = !(lr && (lr.errors || lr.note));
     $('activeHours').textContent = s.activeHours.start === s.activeHours.end ? '24/7' : `${s.activeHours.start}–${s.activeHours.end} (${tzName(s.activeHours.timezone)})`;
 
     const t = s.today, c = s.caps;
