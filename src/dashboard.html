@@ -359,11 +359,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <h2 id="kwH">Explore keywords</h2>
       <p class="small muted">Upwork doesn't share what people type into its search. These figures come from open job posts instead: how often clients post them, how many proposals they get, what they pay and which skills they ask for. Each keyword reads the 30 newest open jobs (read-only), slowly so bidding is never held up: about 30 seconds a keyword. A keyword looked up in the last 30 minutes is shown again without asking Upwork. Nothing here runs on its own.</p>
       <div class="tools">
-        <input type="text" id="kwInput" maxlength="320" placeholder="e.g. Klaviyo, SMS marketing, email copywriting" aria-label="Keywords, separated by commas (up to 5)" style="flex:1 1 300px; width:auto">
-        <select id="kwMode" aria-label="Where the keyword must appear"><option value="title">In the job title</option><option value="anywhere">Anywhere in the post</option></select>
-        <button type="button" class="btn primary" id="kwGo">Explore</button>
+        <input type="text" id="trInput" maxlength="320" placeholder="e.g. Klaviyo, SMS marketing, email copywriting" aria-label="Keywords, separated by commas (up to 5)" style="flex:1 1 300px; width:auto">
+        <select id="trMode" aria-label="Where the keyword must appear"><option value="title">In the job title</option><option value="anywhere">Anywhere in the post</option></select>
+        <button type="button" class="btn primary" id="trGo">Explore</button>
       </div>
-      <div id="kwResults" style="display:flex; flex-direction:column; gap:14px"></div>
+      <div id="trResults" style="display:flex; flex-direction:column; gap:14px"></div>
     </section>
     <section class="panel" aria-labelledby="ideaH">
       <div class="row-head"><h2 id="ideaH">Keyword ideas</h2><button type="button" class="btn outline" id="ideaGo">Suggest keywords</button></div>
@@ -1009,7 +1009,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   const money = (n, suffix = '') => (n === null || n === undefined ? '–' : `$${fmtNum(n)}${suffix}`);
   const pace = (k) => (k.perDay === null ? '–' : k.perDay >= 10 ? fmtNum(Math.round(k.perDay)) : String(k.perDay));
   function exploreThis(kw) {
-    $('kwInput').value = kw; $('kwInput').scrollIntoView({ block: 'center' }); $('kwGo').click();
+    $('trInput').value = kw; $('trInput').scrollIntoView({ block: 'center' }); $('trGo').click();
   }
   // The keyword's previous lookup, to show whether its pace went up or down.
   function before(k) {
@@ -1044,28 +1044,28 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('td', { class: 'mono', text: money(k.fixedMedian) }), h('td', { class: 'mono', text: money(k.hourlyMedianTop, '/hr') }), h('td', { class: 'small muted', text: before(k) }))))));
   }
   // One keyword per request: Upwork is read slowly (about 30 s a keyword) so bidding keeps its share of the limit.
-  $('kwGo').addEventListener('click', async () => {
-    const b = $('kwGo');
-    const words = $('kwInput').value.split(',').map((k) => k.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  $('trGo').addEventListener('click', async () => {
+    const b = $('trGo');
+    const words = $('trInput').value.split(',').map((k) => k.replace(/\s+/g, ' ').trim()).filter(Boolean)
       .filter((k, i, all) => all.findIndex((x) => x.toLowerCase() === k.toLowerCase()) === i);
     if (!words.length) { toast('Type at least one keyword', true); return; }
     if (words.length > 5) { toast('Up to 5 keywords at a time', true); return; }
     b.disabled = true;
     const done = [];
-    $('kwResults').replaceChildren();
+    $('trResults').replaceChildren();
     try {
       for (const [i, kw] of words.entries()) {
         b.textContent = words.length > 1 ? `Reading Upwork… ${i + 1} of ${words.length}` : 'Reading Upwork…';
-        const r = await api('/api/trends/explore', { method: 'POST', body: { keywords: [kw], mode: $('kwMode').value } });
+        const r = await api('/api/trends/explore', { method: 'POST', body: { keywords: [kw], mode: $('trMode').value } });
         done.push(...r.insights);
-        $('kwResults').replaceChildren(...done.map(kwCard));
+        $('trResults').replaceChildren(...done.map(kwCard));
       }
       await loadHistory();
-      $('kwResults').replaceChildren(...[kwCompare(done), ...done.map(kwCard)].filter(Boolean));
+      $('trResults').replaceChildren(...[kwCompare(done), ...done.map(kwCard)].filter(Boolean));
     } catch (e) { toast(e.message, true); }
     b.disabled = false; b.textContent = 'Explore';
   });
-  $('kwInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('kwGo').click(); } });
+  $('trInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('trGo').click(); } });
   $('ideaGo').addEventListener('click', async () => {
     const b = $('ideaGo'); b.disabled = true; b.textContent = 'Thinking…';
     try {
@@ -1086,7 +1086,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('khBody').replaceChildren(kwHistory.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'compact' },
       h('thead', {}, h('tr', {}, ...['When', 'Keyword', 'Where', 'New jobs a day'].map((t) => h('th', { text: t })))),
       h('tbody', {}, ...kwHistory.map((x) => h('tr', {}, h('td', { class: 'when', text: when(x.at) }),
-        h('td', {}, h('button', { type: 'button', class: 'chip-btn', text: x.keyword, onclick: () => { $('kwMode').value = x.mode; exploreThis(x.keyword); } })),
+        h('td', {}, h('button', { type: 'button', class: 'chip-btn', text: x.keyword, onclick: () => { $('trMode').value = x.mode; exploreThis(x.keyword); } })),
         h('td', { class: 'small', text: x.mode === 'title' ? 'title' : 'anywhere' }), h('td', { class: 'mono', text: x.perDay ?? '–' })))))) : h('p', { class: 'small muted', text: 'None yet.' }));
   }
   function renderSkills(s) {
