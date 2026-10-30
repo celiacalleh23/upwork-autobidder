@@ -1,3 +1,4 @@
+
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
 import { handleApi } from './api';
@@ -152,7 +153,6 @@ export default {
         // ==========================================
     // APIFY WEBHOOK RECEIVER
     // ==========================================
-    if (url.pathname === '/api/apify-webhook' && req.method === 'POST') {
       try {
         // Optional: Add a simple secret check so random people can't spam your endpoint
         // You will set this same secret in Apify later.
