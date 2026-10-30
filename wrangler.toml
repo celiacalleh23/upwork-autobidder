@@ -11,7 +11,7 @@ keep_vars = true
 #   minutes 1–59       score and write proposals for jobs added by link (nothing to do: no Upwork call)
 #   minute 3, 8, 13…   upkeep: Connects balance, Loom cleanup/keep-alive/alerts, daily report (3 pm Pacific)
 [triggers]
-crons = ["* * * * *", "1-59 * * * *", "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"]
+crons = ["3,8,13,18,23,28,33,38,43,48,53,58 * * * *"]
 
 # The dashboard HTML is bundled into the Worker as text.
 [[rules]]
