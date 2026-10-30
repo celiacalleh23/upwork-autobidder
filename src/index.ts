@@ -151,40 +151,35 @@ export default {
     // Its own secret, not the dashboard session: called by other services.
     if (url.pathname === '/api/jobs/intake') return withHeaders(await handleIntake(req, env));
         // ==========================================
+       // ==========================================
     // APIFY WEBHOOK RECEIVER
     // ==========================================
+    if (url.pathname === '/api/apify-webhook' && req.method === 'POST') {
       try {
-        // Optional: Add a simple secret check so random people can't spam your endpoint
-        // You will set this same secret in Apify later.
-        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123')
-           return new Response('Unauthorized', { status: 401 });
+        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123') {
+          return new Response('Unauthorized', { status: 401 });
         }
 
         const payload = await req.json();
-        
-        // Apify sometimes sends data as an array. We handle both array and single object.
         const jobs = Array.isArray(payload) ? payload : [payload];
 
-        // 
-        //
-//
+        let addedCount = 0;
         for (const job of jobs) {
-          if (!job.title || !job.description) continue; // Skip bad data
+          const jobUrl = job.url || job.link || job.jobUrl;
+          const jobDesc = job.description || job.jobDescription;
+          const jobTitle = job.title || job.jobTitle;
 
-          // 1. Save the job to your D1 database
-          await addJob(env, {
-            title: job.title,
-            description: job.description,
-            url: job.url || job.link || '', // Depending on Apify's output
-            budget: job.budget || '',
-            // Add any other fields your dashboard expects
-          });
+          if (!jobUrl || !jobTitle || !jobDesc) continue; 
+
+          const r = await addJob(env, { jobUrl: jobUrl });
+          if (r.ok) addedCount++;
         }
 
-        return new Response(JSON.stringify({ success: true, count: jobs.length }), { 
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
+        return new Response(JSON.stringify({ success: true, count: addedCount }), { 
+          status: 200, 
+          headers: { 'Content-Type': 'application/json' } 
         });
+
       } catch (error: any) {
         console.error('Apify Webhook Error:', error);
         return new Response(JSON.stringify({ error: error.message }), { status: 500 });
