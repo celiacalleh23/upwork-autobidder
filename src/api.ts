@@ -87,10 +87,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     // ==========================================
     if (path === '/api/apify-webhook' && method === 'POST') {
       try {
-        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123') {
-           return fail('Unauthorized', 401);
-        }
-
         const payload = await req.json();
         const jobs = Array.isArray(payload) ? payload : [payload];
 
