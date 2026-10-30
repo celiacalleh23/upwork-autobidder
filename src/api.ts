@@ -87,8 +87,13 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     // ==========================================
     if (path === '/api/apify-webhook' && method === 'POST') {
       try {
-        // Password check removed by request to ensure delivery
+        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123') {
+          return fail('Unauthorized', 401);
+        }
+
         const payload = await req.json();
+        if (!payload) return json({ success: true, count: 0 }); // Ignore empty Apify tests
+        
         const jobs = Array.isArray(payload) ? payload : [payload];
 
         let addedCount = 0;
@@ -125,11 +130,14 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       // --- START APIFY SYNC ---
       try {
         const apifyToken = env.APIFY_TOKEN; 
-        const actorId = env.APIFY_TASK_ID; // Using the Actor ID we got from your URL
+        const actorId = env.APIFY_TASK_ID; 
 
         if (apifyToken && actorId) {
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
+          
+          // Get the countries from the dashboard settings
+          const countries = s.allowedCountries || []; 
 
           const apifyResponse = await fetch(`https://api.apify.com/v2/acts/${actorId}`, {
             method: 'PUT',
@@ -139,7 +147,8 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
             },
             body: JSON.stringify({
               input: {
-                searchQuery: searchQuery
+                searchQuery: searchQuery,
+                country: countries // Sends the countries to Apify
               }
             })
           });
@@ -148,6 +157,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
              console.error('Failed to sync keywords to Apify:', await apifyResponse.text());
           } else {
              console.log('Successfully synced keywords to Apify:', searchQuery);
+             console.log('Successfully synced countries to Apify:', countries);
           }
         }
       } catch (err) {
