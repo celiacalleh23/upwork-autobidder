@@ -87,6 +87,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     // ==========================================
     if (path === '/api/apify-webhook' && method === 'POST') {
       try {
+        // Password check removed by request to ensure delivery
         const payload = await req.json();
         const jobs = Array.isArray(payload) ? payload : [payload];
 
@@ -120,6 +121,40 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const before = await loadSettings(env);
       const s = validateSettings(await readJson(req));
       await saveSettings(env, s);
+
+      // --- START APIFY SYNC ---
+      try {
+        const apifyToken = env.APIFY_TOKEN; 
+        const taskId = env.APIFY_TASK_ID; 
+
+        if (apifyToken && taskId) {
+          const keywords = s.keywords; 
+          const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
+
+          const apifyResponse = await fetch(`https://api.apify.com/v2/acts/neatrat~upwork-job-scraper/tasks/${taskId}`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${apifyToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              input: {
+                searchQuery: searchQuery
+              }
+            })
+          });
+
+          if (!apifyResponse.ok) {
+             console.error('Failed to sync keywords to Apify:', await apifyResponse.text());
+          } else {
+             console.log('Successfully synced keywords to Apify:', searchQuery);
+          }
+        }
+      } catch (err) {
+        console.error('Apify Sync Error:', err);
+      }
+      // --- END APIFY SYNC ---
+
       // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
