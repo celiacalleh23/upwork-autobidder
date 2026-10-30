@@ -131,7 +131,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
 
-          const apifyResponse = await fetch(`https://api.apify.com/v2/acts/neatrat~upwork-job-scraper/tasks/${taskId}`, {
+          const apifyResponse = await fetch(`https://api.apify.com/v2/acts/${taskId}`, {
             method: 'PUT',
             headers: {
               'Authorization': `Bearer ${apifyToken}`,
