@@ -125,13 +125,13 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       // --- START APIFY SYNC ---
       try {
         const apifyToken = env.APIFY_TOKEN; 
-        const taskId = env.APIFY_TASK_ID; 
+        const actorId = env.APIFY_TASK_ID; // Using the Actor ID we got from your URL
 
-        if (apifyToken && taskId) {
+        if (apifyToken && actorId) {
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
 
-          const apifyResponse = await fetch(`https://api.apify.com/v2/acts/${taskId}`, {
+          const apifyResponse = await fetch(`https://api.apify.com/v2/acts/${actorId}`, {
             method: 'PUT',
             headers: {
               'Authorization': `Bearer ${apifyToken}`,
