@@ -156,7 +156,7 @@ export default {
       try {
         // Optional: Add a simple secret check so random people can't spam your endpoint
         // You will set this same secret in Apify later.
-        if (req.headers.get('Authorization') !== 'Bearer YOUR_SECRET_HERE') {
+        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123')
            return new Response('Unauthorized', { status: 401 });
         }
 
