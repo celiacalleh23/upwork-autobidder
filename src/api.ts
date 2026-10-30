@@ -139,7 +139,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           // Get the countries from the dashboard settings
           const countries = s.allowedCountries || []; 
 
-          const apifyResponse = await fetch(`https://api.apify.com/v2/acts/${actorId}`, {
+          const apifyResponse = await fetch(`https://api.apify.com/v2/users/rw78pAF6WTqZH0vEQ/acts/${actorId}`, {
             method: 'PUT',
             headers: {
               'Authorization': `Bearer ${apifyToken}`,
