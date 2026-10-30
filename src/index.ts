@@ -161,18 +161,33 @@ export default {
         }
 
         const payload = await req.json();
-        const jobs = Array.isArray(payload) ? payload : [payload];
+        
+        // Log exactly what Apify sends so we can see it in Cloudflare logs
+        console.log('Apify Payload:', JSON.stringify(payload).substring(0, 500));
+
+        // Handle different Apify formats
+        const jobs = Array.isArray(payload) ? payload : (payload.items && Array.isArray(payload.items) ? payload.items : [payload]);
 
         let addedCount = 0;
         for (const job of jobs) {
-          const jobUrl = job.url || job.link || job.jobUrl;
-          const jobDesc = job.description || job.jobDescription;
-          const jobTitle = job.title || job.jobTitle;
+          try {
+            const jobUrl = job.url || job.link || job.jobUrl;
+            
+            if (!jobUrl) {
+                console.log('Skipping job: No URL found', job);
+                continue; 
+            }
 
-          if (!jobUrl || !jobTitle || !jobDesc) continue; 
+            const r = await addJob(env, { jobUrl: jobUrl });
+            if (r.ok) {
+              addedCount++;
+            } else {
+              console.log('addJob rejected:', r.reason, 'for URL:', jobUrl);
+            }
 
-          const r = await addJob(env, { jobUrl: jobUrl });
-          if (r.ok) addedCount++;
+          } catch (err) {
+             console.error('Error processing single job:', err);
+          }
         }
 
         return new Response(JSON.stringify({ success: true, count: addedCount }), { 
