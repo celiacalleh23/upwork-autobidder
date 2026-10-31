@@ -197,7 +197,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
         if (apifyToken && taskId) {
           const keywords = s.keywords; 
-          const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
+          // THE FIX: Wrap every keyword in quotes to force Apify to only find exact phrase matches
+          const searchQuery = Array.isArray(keywords) 
+            ? keywords.map(k => `"${k.trim()}"`).join(', ') 
+            : `"${String(keywords).trim()}"`;
           
           const countries = s.allowedCountries || [];
           const minFixedBudget = s.minFixedBudget || 0;
