@@ -137,14 +137,14 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
              jobUrl = jobUrl.href || jobUrl.url || String(jobUrl);
           }
           
-          const jobDesc = job.description || job.jobDescription || '';
-          const jobTitle = job.title || job.jobTitle || '';
+          const jobDesc = job.description || job.jobDescription;
+          const jobTitle = job.title || job.jobTitle;
 
           if (!jobUrl && !jobTitle) continue; 
 
           const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
 
-          // 1. Try to add the job (runs Claude's internal AI filter)
+          // 1. Try to add the job
           const r = await addJob(env, { jobUrl: safeUrl });
           
           // 2. Check if it passed the filter OR if it was rejected because it's already in the DB
@@ -159,17 +159,13 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           }
 
           if (isMatch) {
-            // 3. Trigger the writer ONLY IF we actually have a title and description
-            if (jobTitle && jobDesc) {
-              try {
-                 await runWriter(env, safeUrl);
-                 console.log('Successfully triggered AI writer for:', jobTitle);
-                 addedCount++;
-              } catch (writerErr) {
-                 console.error('Failed to trigger AI writer:', writerErr);
-              }
-            } else {
-              console.log('Skipping writer: Missing title or description for', safeUrl);
+            // 3. Trigger the writer
+            try {
+               await runWriter(env, safeUrl);
+               console.log('Successfully triggered AI writer for:', jobTitle);
+               addedCount++;
+            } catch (writerErr) {
+               console.error('Failed to trigger AI writer:', writerErr);
             }
           } else if (!r.ok) {
              console.log('Skipping job (failed internal filter):', r.reason);
@@ -237,10 +233,12 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       }
       // --- END APIFY SYNC ---
 
+      // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
       }
       await recheckMatched(env, s);
+      // A new source video also goes into letters that have not been sent yet.
       if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
       return json(s);
     }
