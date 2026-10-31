@@ -136,10 +136,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
           
-          const countries = s.allowedCountries || []; 
-          const minFixedBudget = s.caps.minBudget || 0;
-          const minHourlyRate = s.caps.minHourlyRate || 0;
-          const isVerified = s.caps.onlyVerified || false;
+          const countries = s.allowedCountries || [];
+          const minFixedBudget = s.minBudget || 0;
+          const minHourlyRate = s.minHourlyRate || 0;
+          const isVerified = s.onlyVerified || false;
 
           const apifyResponse = await fetch(`https://api.apify.com/v2/actor-tasks/${taskId}`, {
             method: 'PUT',
