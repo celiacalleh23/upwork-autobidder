@@ -142,21 +142,23 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           const jobDesc = job.description || job.jobDescription;
           const jobTitle = job.title || job.jobTitle;
 
-          if (!jobUrl || !jobTitle) continue; 
+          if (!jobUrl && !jobTitle) continue; 
 
-          // 1. Add the job to the database (and let Claude's filters check it)
-          const r = await addJob(env, { jobUrl: String(jobUrl) });
+          const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
+
+          // 1. Try to add the job to the database
+          await addJob(env, { jobUrl: safeUrl });
           
-          if (r.ok) {
-            addedCount++;
-            // 2. FORCE the AI to write the proposal immediately since it matched
+          // 2. FORCE the AI to write the proposal for EVERY job in the webhook
+          if (jobTitle) {
             try {
                await runWriter(env, { 
                  title: jobTitle, 
-                 description: jobDesc, 
-                 url: String(jobUrl) 
+                 description: jobDesc || '', 
+                 url: safeUrl 
                });
                console.log('Successfully triggered AI writer for:', jobTitle);
+               addedCount++;
             } catch (writerErr) {
                console.error('Failed to trigger AI writer:', writerErr);
             }
