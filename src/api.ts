@@ -161,11 +161,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           if (isMatch) {
             // 3. Trigger the writer
             try {
-               await runWriter(env, { 
-                 title: jobTitle || 'Upwork Job', 
-                 description: jobDesc || '', 
-                 url: safeUrl 
-               });
+               await runWriter(env, safeUrl);
                console.log('Successfully triggered AI writer for:', jobTitle);
                addedCount++;
             } catch (writerErr) {
