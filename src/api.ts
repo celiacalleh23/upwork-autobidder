@@ -144,14 +144,22 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
           const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
 
-          // 1. Try to add the job (runs Claude's internal AI filter)
+          // 1. Try to add the job
           const r = await addJob(env, { jobUrl: safeUrl });
           
-          // 2. Check if it passed the filter (r.ok) OR if it was rejected ONLY because it's already in the DB
-          const isMatch = r.ok || (!r.ok && r.reason && (r.reason.includes('already waiting') || r.reason.includes('already in the queue')));
+          // 2. Check if it passed the filter OR if it was rejected because it's already in the DB
+          let isMatch = false;
+          if (r.ok) {
+            isMatch = true;
+          } else if (r.reason) {
+             const reasonStr = String(r.reason).toLowerCase();
+             if (reasonStr.includes('already waiting') || reasonStr.includes('already in the queue')) {
+                isMatch = true;
+             }
+          }
 
           if (isMatch) {
-            // 3. Trigger the writer because we know it's a valid, matched job
+            // 3. Trigger the writer
             try {
                await runWriter(env, { 
                  title: jobTitle || 'Upwork Job', 
