@@ -3,7 +3,7 @@ import {
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
-import { connectLoom, disconnectLoom, LoomError } from './loom';
+import { connectLoom, disconnectLoom, LoomError, copyForJob } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
 import { runWriter } from './pipeline/write';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
@@ -243,10 +243,43 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       return json(s);
     }
 
-    if (path === '/api/proposals/relink-loom' && method === 'POST') {
+        if (path === '/api/proposals/relink-loom' && method === 'POST') {
       const s = await loadSettings(env);
       if (!s.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
-      return json({ updated: await relinkQueued(env, s.loom.sourceUrl) });
+
+      // Find ONE pending proposal missing a unique Loom video
+      const row = await env.DB.prepare(
+        "SELECT id, title, cover_letter FROM proposals WHERE status = 'pending' AND loom_video_id IS NULL LIMIT 1"
+      ).first<{ id: number; title: string; cover_letter: string }>();
+
+      if (!row) {
+        return json({ updated: 0, done: true, message: 'All pending proposals have unique Loom videos.' });
+      }
+
+      try {
+        // Tell Loom to duplicate the source video and rename it to the job title
+        const copy = await copyForJob(env, s.loom.sourceUrl, row.title);
+        if (!copy) throw new Error('Loom copy returned empty');
+
+        // Swap the generic source link in the text with the new unique Loom link
+        const next = row.cover_letter.replaceAll(s.loom.sourceUrl, copy.url);
+
+        // Save it to the database
+        await env.DB.prepare(
+          "UPDATE proposals SET cover_letter = ?, loom_video_id = ?, loom_url = ? WHERE id = ?"
+        ).bind(next, copy.id, copy.url, row.id).run();
+
+        // Check how many are left so the UI knows when to stop
+        const remaining = await env.DB.prepare(
+          "SELECT COUNT(*) as n FROM proposals WHERE status = 'pending' AND loom_video_id IS NULL"
+        ).first<{ n: number }>();
+
+        return json({ updated: 1, done: (remaining?.n ?? 0) === 0, title: row.title });
+
+      } catch (e) {
+        console.error('Loom copy failed for', row.title, e);
+        return fail(e instanceof Error ? e.message : 'Loom copy failed', 500);
+      }
     }
 
     if (path === '/api/mode' && method === 'POST') {
