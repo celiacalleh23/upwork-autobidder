@@ -149,7 +149,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
             },
               body: JSON.stringify({
               input: {
-                "query": searchQuery, // <--- Changed to 'query' based on tooltip
+                "query": searchQuery, 
                 "location": countries, 
                 "paymentVerified": isVerified,
                 "jobType": ["fixed", "hourly"],
