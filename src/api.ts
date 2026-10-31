@@ -5,7 +5,7 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
-import { runWriter } from './pipeline/write'; // <-- IMPORTED RUNWRITER
+import { runWriter } from './pipeline/write';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
@@ -125,7 +125,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
            } else if (payload.items && Array.isArray(payload.items)) {
                jobs = payload.items;
            } else {
-               // Fallback: treat the whole payload as one job
                jobs = [payload];
            }
         }
@@ -133,7 +132,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         let addedCount = 0;
         for (const job of jobs) {
           
-          // Aggressively extract the URL string
           let jobUrl = job.url || job.link || job.jobUrl;
           if (typeof jobUrl === 'object' && jobUrl !== null) {
              jobUrl = jobUrl.href || jobUrl.url || String(jobUrl);
@@ -146,14 +144,17 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
           const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
 
-          // 1. Try to add the job to the database
-          await addJob(env, { jobUrl: safeUrl });
+          // 1. Try to add the job
+          const r = await addJob(env, { jobUrl: safeUrl });
           
-          // 2. FORCE the AI to write the proposal for EVERY job in the webhook
-          if (jobTitle) {
+          // 2. Check if it was added OR if it was rejected because it's already in the DB
+          const alreadyExists = !r.ok && r.reason && (r.reason.includes('already waiting') || r.reason.includes('already in the queue'));
+
+          if (r.ok || alreadyExists) {
+            // 3. Force the AI to write the proposal
             try {
                await runWriter(env, { 
-                 title: jobTitle, 
+                 title: jobTitle || 'Upwork Job', 
                  description: jobDesc || '', 
                  url: safeUrl 
                });
@@ -162,6 +163,8 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
             } catch (writerErr) {
                console.error('Failed to trigger AI writer:', writerErr);
             }
+          } else if (!r.ok) {
+             console.log('Skipping job (failed filter):', r.reason);
           }
         }
 
