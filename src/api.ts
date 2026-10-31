@@ -139,7 +139,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           // Get the countries from the dashboard settings
           const countries = s.allowedCountries || []; 
 
-          // CHANGED: Using the /actor-tasks/ endpoint
           const apifyResponse = await fetch(`https://api.apify.com/v2/actor-tasks/${taskId}`, {
             method: 'PUT',
             headers: {
@@ -148,8 +147,8 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
             },
             body: JSON.stringify({
               input: {
-                searchQuery: searchQuery,
-                country: countries // Sends the countries to Apify
+                "searchQuery": searchQuery,
+                "country": countries 
               }
             })
           });
