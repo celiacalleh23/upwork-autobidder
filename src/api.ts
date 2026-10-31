@@ -233,17 +233,15 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       }
       // --- END APIFY SYNC ---
 
-      // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
       }
       await recheckMatched(env, s);
-      // A new source video also goes into letters that have not been sent yet.
       if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
       return json(s);
     }
 
-        if (path === '/api/proposals/relink-loom' && method === 'POST') {
+    if (path === '/api/proposals/relink-loom' && method === 'POST') {
       const s = await loadSettings(env);
       if (!s.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
 
@@ -379,9 +377,22 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     }
 
     if (path === '/api/queue' && method === 'GET') {
-      const { results } = await env.DB.prepare(
-        `SELECT ${PROPOSAL_COLS} FROM proposals WHERE status = 'pending' ORDER BY COALESCE(found_at, created_at) DESC, created_at DESC LIMIT 100`,
-      ).all<ProposalRow>();
+      const s = await loadSettings(env);
+      const keywords = s.keywords || [];
+      
+      let keywordFilter = '';
+      if (s.titleOnly && keywords.length > 0) {
+        const conditions = keywords.map(() => `LOWER(title) LIKE ?`).join(' OR ');
+        keywordFilter = `AND (${conditions})`;
+      }
+
+      const query = `SELECT ${PROPOSAL_COLS} FROM proposals WHERE status = 'pending' ${keywordFilter} ORDER BY COALESCE(found_at, created_at) DESC, created_at DESC LIMIT 100`;
+      
+      const stmt = env.DB.prepare(query);
+      const { results } = s.titleOnly && keywords.length > 0 
+        ? await stmt.bind(...keywords.map(k => `%${k.toLowerCase()}%`)).all<ProposalRow>()
+        : await stmt.all<ProposalRow>();
+
       return json(results.map(shape));
     }
 
@@ -442,7 +453,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         return json({ ok: true });
       }
-        if (method === 'POST' && action === 'approve') {
+      if (method === 'POST' && action === 'approve') {
         const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending'").bind(id).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         
