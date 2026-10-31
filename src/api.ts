@@ -147,13 +147,16 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
               'Authorization': `Bearer ${apifyToken}`,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
+              body: JSON.stringify({
               input: {
                 "searchQuery": searchQuery,
                 "country": countries,
                 "paymentVerified": isVerified,
+                // Try both naming conventions so Apify definitely picks it up
                 "fixedPriceRange": { "min": minFixedBudget },
-                "hourlyRateRange": { "min": minHourlyRate }
+                "hourlyRateRange": { "min": minHourlyRate },
+                "minFixedPrice": minFixedBudget,
+                "minHourlyRate": minHourlyRate
               }
             })
           });
