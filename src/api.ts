@@ -137,14 +137,14 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
              jobUrl = jobUrl.href || jobUrl.url || String(jobUrl);
           }
           
-          const jobDesc = job.description || job.jobDescription;
-          const jobTitle = job.title || job.jobTitle;
+          const jobDesc = job.description || job.jobDescription || '';
+          const jobTitle = job.title || job.jobTitle || '';
 
           if (!jobUrl && !jobTitle) continue; 
 
           const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
 
-          // 1. Try to add the job
+          // 1. Try to add the job (runs Claude's internal AI filter)
           const r = await addJob(env, { jobUrl: safeUrl });
           
           // 2. Check if it passed the filter OR if it was rejected because it's already in the DB
@@ -159,13 +159,17 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           }
 
           if (isMatch) {
-            // 3. Trigger the writer
-            try {
-               await runWriter(env, safeUrl);
-               console.log('Successfully triggered AI writer for:', jobTitle);
-               addedCount++;
-            } catch (writerErr) {
-               console.error('Failed to trigger AI writer:', writerErr);
+            // 3. Trigger the writer ONLY IF we actually have a title and description
+            if (jobTitle && jobDesc) {
+              try {
+                 await runWriter(env, safeUrl);
+                 console.log('Successfully triggered AI writer for:', jobTitle);
+                 addedCount++;
+              } catch (writerErr) {
+                 console.error('Failed to trigger AI writer:', writerErr);
+              }
+            } else {
+              console.log('Skipping writer: Missing title or description for', safeUrl);
             }
           } else if (!r.ok) {
              console.log('Skipping job (failed internal filter):', r.reason);
