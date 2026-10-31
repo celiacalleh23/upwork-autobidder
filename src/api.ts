@@ -125,6 +125,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
            } else if (payload.items && Array.isArray(payload.items)) {
                jobs = payload.items;
            } else {
+               // Fallback: treat the whole payload as one job
                jobs = [payload];
            }
         }
