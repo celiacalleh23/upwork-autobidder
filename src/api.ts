@@ -125,7 +125,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
            } else if (payload.items && Array.isArray(payload.items)) {
                jobs = payload.items;
            } else {
-               // Fallback: treat the whole payload as one job
                jobs = [payload];
            }
         }
@@ -133,6 +132,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         let addedCount = 0;
         for (const job of jobs) {
           
+          // Aggressively extract the URL string
           let jobUrl = job.url || job.link || job.jobUrl;
           if (typeof jobUrl === 'object' && jobUrl !== null) {
              jobUrl = jobUrl.href || jobUrl.url || String(jobUrl);
