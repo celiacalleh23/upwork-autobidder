@@ -221,7 +221,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
                 "jobType": ["fixed", "hourly"],
                 "fixedPriceRange": [minFixedBudget, 100000],
                 "hourlyRateRange": [minHourlyRate, 1000],
-                "maxJobAge": { "value": 20, "unit": "minutes" } // <--- ADDED THE AGE FILTER
+                "maxJobAge": { "value": 24, "unit": "hours" } // <--- CHANGED TO 24 HOURS TO CATCH DELAYED JOBS
               }
             })
           });
@@ -342,7 +342,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         const body = await readJson(req).catch(() => ({} as Record<string, unknown>));
         let range;
         try { range = resolveRange(body, (await loadSettings(env)).caps.timezone); } catch (e) { return fail(e instanceof Error ? e.message : 'Unknown period'); }
-        return json(await refreshAccountStats(env, body.resume === true));
+        return json(await refreshAccountStats(env, range, body.resume === true));
       } catch (e) {
         console.error('account stats failed', e instanceof Error ? e.message : e);
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);
