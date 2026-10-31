@@ -3,7 +3,7 @@ import {
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
-import { connectLoom, disconnectLoom, LoomError } from './loom';
+import { connectLoom, disconnectLoom, LoomError, copyForJob } from './loom'; // <-- IMPORTED copyForJob
 import { addJob, recheckMatched } from './pipeline/jobs';
 import { runWriter } from './pipeline/write';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
@@ -252,6 +252,35 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       if (!s.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
       return json({ updated: await relinkQueued(env, s.loom.sourceUrl) });
     }
+
+    // --- NEW MANUAL LOOM ROUTE ---
+    if (path.startsWith('/api/proposals/') && path.endsWith('/loom') && method === 'POST') {
+      const id = Number(path.split('/')[3]);
+      if (!id) return fail('Invalid proposal ID');
+      
+      try {
+        const s = await loadSettings(env);
+        if (!s.loom.sourceUrl) return fail('Set the Loom source video in Settings first');
+        
+        const prop = await env.DB.prepare("SELECT title FROM proposals WHERE id = ?").bind(id).first<{title: string}>();
+        if (!prop) return fail('Proposal not found');
+
+        // Trigger the copy
+        const copy = await copyForJob(env, s.loom.sourceUrl, prop.title);
+        
+        if (!copy) return fail('Loom is not connected or the copy failed');
+        
+        // Save it to the database
+        await env.DB.prepare("UPDATE proposals SET loom_video_id = ?, loom_url = ? WHERE id = ?")
+          .bind(copy.id, copy.url, id).run();
+          
+        return json({ ok: true, url: copy.url });
+      } catch (e) {
+        console.error('Manual Loom copy failed:', e);
+        return fail(e instanceof Error ? e.message : 'Loom copy failed');
+      }
+    }
+    // -----------------------------
 
     if (path === '/api/mode' && method === 'POST') {
       const body = await readJson(req);
