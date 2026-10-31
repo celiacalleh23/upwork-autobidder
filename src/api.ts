@@ -5,6 +5,7 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
+import { runWriter } from './pipeline/write'; // <-- IMPORTED RUNWRITER
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
@@ -48,7 +49,9 @@ const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
 const safeList = (s: string | null): string[] => {
   try { const v = JSON.parse(s ?? '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
 };
+// D1 stores datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC
 const toIso = (s: string | null) => (s ? s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z') : null);
+// Upwork's published date comes as ISO text, or as "YYYY-MM-DD HH:MM:SS" in UTC like D1's; null when unreadable.
 export function postedIso(s: string | null): string | null {
   if (!s) return null;
   const t = Date.parse(/T/.test(s) ? s : `${s.trim().replace(' ', 'T')}Z`);
@@ -56,6 +59,7 @@ export function postedIso(s: string | null): string | null {
 }
 const toSql = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
 
+// Start of "today" in the given time zone, as a D1 UTC timestamp string
 export function dayStartUtc(timeZone: string, now = new Date()): string {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
@@ -67,6 +71,7 @@ export function dayStartUtc(timeZone: string, now = new Date()): string {
   return toSql(new Date(midnight));
 }
 
+// Equal start and end means all day (BUILD_PLAN §11a: 24/7); an end before the start crosses midnight.
 export function isActiveNow(start: string, end: string, timeZone: string, now = new Date()): boolean {
   if (start === end) return true;
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
@@ -136,11 +141,25 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           const jobDesc = job.description || job.jobDescription;
           const jobTitle = job.title || job.jobTitle;
 
-          // If it's a web scraping job, we might not need a description to test the flow
           if (!jobUrl || !jobTitle) continue; 
 
+          // 1. Add the job to the database (and let Claude's filters check it)
           const r = await addJob(env, { jobUrl: String(jobUrl) });
-          if (r.ok) addedCount++;
+          
+          if (r.ok) {
+            addedCount++;
+            // 2. FORCE the AI to write the proposal immediately since it matched
+            try {
+               await runWriter(env, { 
+                 title: jobTitle, 
+                 description: jobDesc, 
+                 url: String(jobUrl) 
+               });
+               console.log('Successfully triggered AI writer for:', jobTitle);
+            } catch (writerErr) {
+               console.error('Failed to trigger AI writer:', writerErr);
+            }
+          }
         }
 
         return json({ success: true, count: addedCount });
@@ -169,6 +188,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (apifyToken && taskId) {
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
+          
           const countries = s.allowedCountries || [];
           const minFixedBudget = s.minFixedBudget || 0;
           const minHourlyRate = s.minHourlyRate || 0;
@@ -203,10 +223,12 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       }
       // --- END APIFY SYNC ---
 
+      // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
       }
       await recheckMatched(env, s);
+      // A new source video also goes into letters that have not been sent yet.
       if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
       return json(s);
     }
@@ -479,7 +501,7 @@ async function csv(env: Env): Promise<Response> {
   const cols = ['posted_at', 'found_at', 'created_at', 'submitted_at', 'status', 'title', 'url', 'job_type', 'budget', 'score', 'connects', 'boost_connects', 'bid', 'loom_url', 'upwork_proposal_id', 'error'] as const;
   const cell = (v: unknown) => {
     let s = v === null || v === undefined ? '' : String(v);
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; 
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // stop spreadsheet formula injection from job titles
     return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
   };
   const lines = [cols.join(','), ...results.map((r) => cols.map((c) => cell((shape(r) as Record<string, unknown>)[c])).join(','))];
