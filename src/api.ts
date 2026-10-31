@@ -150,13 +150,12 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
               body: JSON.stringify({
               input: {
                 "searchQuery": searchQuery,
-                "country": countries,
+                "location": countries, 
                 "paymentVerified": isVerified,
-                // Try both naming conventions so Apify definitely picks it up
-                "fixedPriceRange": { "min": minFixedBudget },
-                "hourlyRateRange": { "min": minHourlyRate },
-                "minFixedPrice": minFixedBudget,
-                "minHourlyRate": minHourlyRate
+                // Force Apify to search for both fixed and hourly jobs
+                "jobType": ["fixed", "hourly"], 
+                "fixedPriceRange": [minFixedBudget, 100000], 
+                "hourlyRateRange": [minHourlyRate, 1000] 
               }
             })
           });
