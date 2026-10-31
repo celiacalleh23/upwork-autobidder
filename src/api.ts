@@ -137,9 +137,9 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
           
           const countries = s.allowedCountries || [];
-          const minFixedBudget = s.minBudget || 0;
+          const minFixedBudget = s.minFixedBudget || 0;
           const minHourlyRate = s.minHourlyRate || 0;
-          const isVerified = s.onlyVerified || false;
+          const isVerified = s.verifiedOnly || false;
 
           const apifyResponse = await fetch(`https://api.apify.com/v2/actor-tasks/${taskId}`, {
             method: 'PUT',
