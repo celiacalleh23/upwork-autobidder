@@ -136,8 +136,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
           
-          // Get the countries from the dashboard settings
           const countries = s.allowedCountries || []; 
+          const minFixedBudget = s.caps.minBudget || 0;
+          const minHourlyRate = s.caps.minHourlyRate || 0;
+          const isVerified = s.caps.onlyVerified || false;
 
           const apifyResponse = await fetch(`https://api.apify.com/v2/actor-tasks/${taskId}`, {
             method: 'PUT',
@@ -148,7 +150,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
             body: JSON.stringify({
               input: {
                 "searchQuery": searchQuery,
-                "country": countries 
+                "country": countries,
+                "paymentVerified": isVerified,
+                "fixedPriceRange": { "min": minFixedBudget },
+                "hourlyRateRange": { "min": minHourlyRate }
               }
             })
           });
@@ -156,8 +161,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           if (!apifyResponse.ok) {
              console.error('Failed to sync keywords to Apify:', await apifyResponse.text());
           } else {
-             console.log('Successfully synced keywords to Apify:', searchQuery);
-             console.log('Successfully synced countries to Apify:', countries);
+             console.log('Successfully synced settings to Apify:', searchQuery, countries, minFixedBudget, minHourlyRate);
           }
         }
       } catch (err) {
