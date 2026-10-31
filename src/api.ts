@@ -130,16 +130,17 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       // --- START APIFY SYNC ---
       try {
         const apifyToken = env.APIFY_TOKEN; 
-        const actorId = env.APIFY_TASK_ID; 
+        const taskId = env.APIFY_TASK_ID; 
 
-        if (apifyToken && actorId) {
+        if (apifyToken && taskId) {
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
           
           // Get the countries from the dashboard settings
           const countries = s.allowedCountries || []; 
 
-          const apifyResponse = await fetch(`https://api.apify.com/v2/users/rw78pAF6WTqZH0vEQ/acts/${actorId}`, {
+          // CHANGED: Using the /actor-tasks/ endpoint
+          const apifyResponse = await fetch(`https://api.apify.com/v2/actor-tasks/${taskId}`, {
             method: 'PUT',
             headers: {
               'Authorization': `Bearer ${apifyToken}`,
