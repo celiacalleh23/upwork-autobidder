@@ -442,9 +442,22 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         return json({ ok: true });
       }
-      if (method === 'POST' && action === 'approve') {
+        if (method === 'POST' && action === 'approve') {
         const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending'").bind(id).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
+        
+        // THE FIX: Reset the sender timer to 20 minutes ago so the Sender Cron sends it instantly
+        try {
+          const stateRow = await env.DB.prepare("SELECT value FROM kv WHERE key = 'state'").first<{value: string}>();
+          if (stateRow) {
+             const stateObj = JSON.parse(stateRow.value);
+             stateObj.lastSendAt = new Date(Date.now() - 20 * 60000).toISOString();
+             await env.DB.prepare("UPDATE kv SET value = ? WHERE key = 'state'").bind(JSON.stringify(stateObj)).run();
+          }
+        } catch (e) {
+          console.error('Failed to reset timer:', e);
+        }
+        
         return json({ ok: true, status: 'approved' });
       }
       if (method === 'POST' && action === 'unapprove') {
