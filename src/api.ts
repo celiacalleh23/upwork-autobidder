@@ -48,9 +48,7 @@ const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
 const safeList = (s: string | null): string[] => {
   try { const v = JSON.parse(s ?? '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
 };
-// D1 stores datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC
 const toIso = (s: string | null) => (s ? s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z') : null);
-// Upwork's published date comes as ISO text, or as "YYYY-MM-DD HH:MM:SS" in UTC like D1's; null when unreadable.
 export function postedIso(s: string | null): string | null {
   if (!s) return null;
   const t = Date.parse(/T/.test(s) ? s : `${s.trim().replace(' ', 'T')}Z`);
@@ -58,7 +56,6 @@ export function postedIso(s: string | null): string | null {
 }
 const toSql = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
 
-// Start of "today" in the given time zone, as a D1 UTC timestamp string
 export function dayStartUtc(timeZone: string, now = new Date()): string {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
@@ -70,13 +67,22 @@ export function dayStartUtc(timeZone: string, now = new Date()): string {
   return toSql(new Date(midnight));
 }
 
-// Equal start and end means all day (BUILD_PLAN §11a: 24/7); an end before the start crosses midnight.
 export function isActiveNow(start: string, end: string, timeZone: string, now = new Date()): boolean {
   if (start === end) return true;
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   return start <= end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
+// Helper to dig through Apify's weird nested webhook payloads to find the Dataset ID
+function findDatasetId(obj: any): string | null {
+  if (!obj || typeof obj !== 'object') return null;
+  if (typeof obj.defaultDatasetId === 'string') return obj.defaultDatasetId;
+  for (const key in obj) {
+    const result = findDatasetId(obj[key]);
+    if (result) return result;
+  }
+  return null;
+}
 
 export async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   const method = req.method;
@@ -92,28 +98,48 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         }
 
         const payload = await req.json();
-        if (!payload) return json({ success: true, count: 0 }); // Ignore empty Apify tests
+        if (!payload) return json({ success: true, count: 0 }); 
         
-        const jobs = Array.isArray(payload) ? payload : [payload];
+        let jobs: any[] = [];
+
+        // 1. Try to find the Dataset ID and fetch the data directly from Apify
+        const datasetId = findDatasetId(payload);
+        if (datasetId) {
+           console.log('Found Dataset ID in webhook:', datasetId);
+           const dataRes = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?token=${env.APIFY_TOKEN}`);
+           if (dataRes.ok) {
+               jobs = await dataRes.json();
+               console.log(`Fetched ${jobs.length} jobs from Apify dataset.`);
+           }
+        } 
+        
+        // 2. If no dataset ID, check if Apify just sent the array directly
+        if (jobs.length === 0) {
+           if (Array.isArray(payload)) {
+               jobs = payload;
+           } else if (payload.items && Array.isArray(payload.items)) {
+               jobs = payload.items;
+           } else {
+               // Fallback: treat the whole payload as one job
+               jobs = [payload];
+           }
+        }
 
         let addedCount = 0;
         for (const job of jobs) {
           
           let jobUrl = job.url || job.link || job.jobUrl;
-          
           if (typeof jobUrl === 'object' && jobUrl !== null) {
              jobUrl = jobUrl.href || jobUrl.url || String(jobUrl);
-          } else if (typeof jobUrl === 'function') {
-             jobUrl = String(jobUrl());
           }
           
           const jobDesc = job.description || job.jobDescription;
           const jobTitle = job.title || job.jobTitle;
 
-          if (!jobUrl || !jobTitle || !jobDesc) continue; 
+          // If it's a web scraping job, we might not need a description to test the flow
+          if (!jobUrl || !jobTitle) continue; 
 
-          // Pass the correctly mapped fields to addJob
-          const r = await addJob(env, { jobUrl: jobUrl });
+          const r = await addJob(env, { jobUrl: String(jobUrl) });
           if (r.ok) addedCount++;
         }
 
@@ -143,7 +169,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (apifyToken && taskId) {
           const keywords = s.keywords; 
           const searchQuery = Array.isArray(keywords) ? keywords.join(', ') : keywords;
-          
           const countries = s.allowedCountries || [];
           const minFixedBudget = s.minFixedBudget || 0;
           const minHourlyRate = s.minHourlyRate || 0;
@@ -155,7 +180,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
               'Authorization': `Bearer ${apifyToken}`,
               'Content-Type': 'application/json'
             },
-              body: JSON.stringify({
+            body: JSON.stringify({
               input: {
                 "query": searchQuery, 
                 "location": countries, 
@@ -178,12 +203,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       }
       // --- END APIFY SYNC ---
 
-      // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
       }
       await recheckMatched(env, s);
-      // A new source video also goes into letters that have not been sent yet.
       if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
       return json(s);
     }
@@ -326,7 +349,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       return json({ rows: results.slice(0, limit).map((r) => ({ ...r, analysis: parseAnalysis(r.analysis as string | null) })), hasMore: results.length > limit });
     }
 
-    // Add a job by its link (Oct 30: no Upwork search; the writer reads the job and drafts the proposal within a minute).
     if (path === '/api/jobs' && method === 'POST') {
       const body = await readJson(req);
       const r = await addJob(env, { jobUrl: body.jobUrl });
@@ -345,7 +367,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         if (letter.length > 5000) return fail(`The letter is ${letter.length} characters. Upwork allows 5,000.`);
         const found = contactDetailsIn(letter.replaceAll(/https:\/\/(www\.)?loom\.com\/share\/\S+/g, ''));
         if (found) return fail(`Remove ${found} from the letter. Upwork does not allow contact details in proposals.`);
-        // The bid can be changed per proposal on review (Celia, Oct 26); the sender uses this column.
         let bid: number | null = null;
         if (body.bid !== undefined) {
           bid = Number(body.bid);
@@ -390,8 +411,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
   }
 }
 
-// Pending and approved proposals only: anything sending or sent keeps the letter Upwork has. Letters with their own Loom
-// copy (M5) keep it.
 async function relinkQueued(env: Env, loomUrl: string): Promise<number> {
   const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status IN ('pending', 'approved') AND is_example = 0 AND loom_video_id IS NULL")
     .all<{ id: number; cover_letter: string }>();
@@ -433,7 +452,6 @@ async function getState(env: Env) {
   return {
     ...state,
     lastScanAt: state.lastScanAt,
-    // The scan's last result: stale since the scan was removed (Oct 30). Writer problems show under Jobs found.
     lastRun: null,
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
     sendingEnabled: settings.sendingEnabled,
@@ -461,7 +479,7 @@ async function csv(env: Env): Promise<Response> {
   const cols = ['posted_at', 'found_at', 'created_at', 'submitted_at', 'status', 'title', 'url', 'job_type', 'budget', 'score', 'connects', 'boost_connects', 'bid', 'loom_url', 'upwork_proposal_id', 'error'] as const;
   const cell = (v: unknown) => {
     let s = v === null || v === undefined ? '' : String(v);
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // stop spreadsheet formula injection from job titles
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; 
     return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
   };
   const lines = [cols.join(','), ...results.map((r) => cols.map((c) => cell((shape(r) as Record<string, unknown>)[c])).join(','))];
