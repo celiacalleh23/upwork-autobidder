@@ -3,7 +3,7 @@ import {
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
-import { connectLoom, disconnectLoom, LoomError, copyForJob } from './loom'; // <-- IMPORTED copyForJob
+import { connectLoom, disconnectLoom, LoomError, copyForJob } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
 import { runWriter } from './pipeline/write';
 import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
@@ -237,12 +237,10 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       }
       // --- END APIFY SYNC ---
 
-      // The status line shows the sender's last note; don't leave "Sending is off" up until the next 5-minute run.
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
       }
       await recheckMatched(env, s);
-      // A new source video also goes into letters that have not been sent yet.
       if (s.loom.sourceUrl && s.loom.sourceUrl !== before.loom.sourceUrl) await relinkQueued(env, s.loom.sourceUrl);
       return json(s);
     }
@@ -250,7 +248,27 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     if (path === '/api/proposals/relink-loom' && method === 'POST') {
       const s = await loadSettings(env);
       if (!s.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
-      return json({ updated: await relinkQueued(env, s.loom.sourceUrl) });
+      
+      // Find all pending proposals missing a loom_video_id
+      const { results } = await env.DB.prepare("SELECT id, title, cover_letter FROM proposals WHERE status = 'pending' AND loom_video_id IS NULL").all<{id: number, title: string, cover_letter: string}>();
+      
+      let updated = 0;
+      for (const row of results) {
+        try {
+          const copy = await copyForJob(env, s.loom.sourceUrl, row.title);
+          if (copy) {
+             // Replace the source link in the cover letter text with the new custom link
+             const newLetter = row.cover_letter.replace(s.loom.sourceUrl, copy.url);
+             
+             await env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_video_id = ?, loom_url = ? WHERE id = ?")
+               .bind(newLetter, copy.id, copy.url, row.id).run();
+             updated++;
+          }
+        } catch (e) {
+          console.error('Loom copy failed for', row.title, e);
+        }
+      }
+      return json({ updated });
     }
 
     // --- NEW MANUAL LOOM ROUTE ---
@@ -262,7 +280,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         const s = await loadSettings(env);
         if (!s.loom.sourceUrl) return fail('Set the Loom source video in Settings first');
         
-        const prop = await env.DB.prepare("SELECT title FROM proposals WHERE id = ?").bind(id).first<{title: string}>();
+        const prop = await env.DB.prepare("SELECT title, cover_letter FROM proposals WHERE id = ?").bind(id).first<{title: string, cover_letter: string}>();
         if (!prop) return fail('Proposal not found');
 
         // Trigger the copy
@@ -270,9 +288,12 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
         
         if (!copy) return fail('Loom is not connected or the copy failed');
         
+        // Replace link in text
+        const newLetter = prop.cover_letter.replace(s.loom.sourceUrl, copy.url);
+
         // Save it to the database
-        await env.DB.prepare("UPDATE proposals SET loom_video_id = ?, loom_url = ? WHERE id = ?")
-          .bind(copy.id, copy.url, id).run();
+        await env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_video_id = ?, loom_url = ? WHERE id = ?")
+          .bind(newLetter, copy.id, copy.url, id).run();
           
         return json({ ok: true, url: copy.url });
       } catch (e) {
@@ -477,14 +498,24 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 }
 
 async function relinkQueued(env: Env, loomUrl: string): Promise<number> {
-  const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status IN ('pending', 'approved') AND is_example = 0 AND loom_video_id IS NULL")
-    .all<{ id: number; cover_letter: string }>();
-  const updates = results.flatMap((r) => {
-    const next = swapLoomLink(r.cover_letter, loomUrl);
-    return next === r.cover_letter ? [] : [env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_url = ? WHERE id = ? AND status IN ('pending', 'approved')").bind(next, loomUrl, r.id)];
-  });
-  if (updates.length) await env.DB.batch(updates);
-  return updates.length;
+  const { results } = await env.DB.prepare("SELECT id, title, cover_letter FROM proposals WHERE status = 'pending' AND loom_video_id IS NULL")
+    .all<{ id: number; title: string; cover_letter: string }>();
+  
+  let updated = 0;
+  for (const r of results) {
+    try {
+      const copy = await copyForJob(env, loomUrl, r.title);
+      if (copy) {
+        const next = r.cover_letter.replace(loomUrl, copy.url);
+        await env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_video_id = ?, loom_url = ? WHERE id = ?")
+          .bind(next, copy.id, copy.url, r.id).run();
+        updated++;
+      }
+    } catch (e) {
+      console.error('Loom copy failed in relinkQueued:', e);
+    }
+  }
+  return updated;
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown>> {
