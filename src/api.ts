@@ -144,14 +144,14 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
           const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
 
-          // 1. Try to add the job
+          // 1. Try to add the job (runs Claude's internal AI filter)
           const r = await addJob(env, { jobUrl: safeUrl });
           
-          // 2. Check if it was added OR if it was rejected because it's already in the DB
-          const alreadyExists = !r.ok && r.reason && (r.reason.includes('already waiting') || r.reason.includes('already in the queue'));
+          // 2. Check if it passed the filter (r.ok) OR if it was rejected ONLY because it's already in the DB
+          const isMatch = r.ok || (!r.ok && r.reason && (r.reason.includes('already waiting') || r.reason.includes('already in the queue')));
 
-          if (r.ok || alreadyExists) {
-            // 3. Force the AI to write the proposal
+          if (isMatch) {
+            // 3. Trigger the writer because we know it's a valid, matched job
             try {
                await runWriter(env, { 
                  title: jobTitle || 'Upwork Job', 
@@ -164,7 +164,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
                console.error('Failed to trigger AI writer:', writerErr);
             }
           } else if (!r.ok) {
-             console.log('Skipping job (failed filter):', r.reason);
+             console.log('Skipping job (failed internal filter):', r.reason);
           }
         }
 
