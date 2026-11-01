@@ -1,3 +1,4 @@
+import { setTimeout as realDelay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { environment } from './support/db';
 import worker from '../src/index';
@@ -16,6 +17,22 @@ const databases: ReturnType<typeof environment>[] = [];
 const env = () => { const e = environment(); databases.push(e); return e; };
 const request = (path: string, body: unknown, method = 'POST', headers: Record<string, string> = {}) => new Request('https://local.invalid'+path, { method, headers: { 'content-type': 'application/json', 'x-dashboard': '1', ...headers }, body: JSON.stringify(body) });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); databases.splice(0).forEach(e => e.sqlite.close()); });
+
+// WebCrypto completes on the real event loop even under Vitest's fake clock.
+// Yield to it before advancing only pending sleeps; racing far ahead can expire leases
+// and leave a newly scheduled pacing sleep stranded after the old fixed loop ends.
+async function finishPipeline<T>(work: Promise<T>): Promise<T> {
+  let done = false;
+  const settled = work.then(value => { done = true; return { value }; }, error => { done = true; return { error }; });
+  for (let i = 0; i < 1000 && !done; i++) {
+    await realDelay(1);
+    if (vi.getTimerCount()) await vi.advanceTimersToNextTimerAsync();
+  }
+  expect(done, 'mocked pipeline must settle while its clock is driven').toBe(true);
+  const result = await settled;
+  if ('error' in result) throw result.error;
+  return result.value;
+}
 
 async function connected(e: Env, auto = false) {
   await patchState(e, { mode: auto ? 'auto' : 'review', upwork: { connected: true, account: 'Synthetic', orgUid: 'mock', toolNames: {
@@ -53,10 +70,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
     }
     return new Response(m.id === undefined ? null : JSON.stringify({ jsonrpc: '2.0', id: m.id, result }), { status: m.id === undefined ? 202 : 200, headers: { 'content-type': 'application/json' } });
   });
-  let done = false;
-  const work = runSender(e).finally(() => { done = true; });
-  for (let i = 0; i < 100 && !done; i++) await vi.advanceTimersByTimeAsync(10_000);
-  await work;
+  await finishPipeline(runSender(e));
   vi.useRealTimers();
   return { e, confirms, row: e.sqlite.prepare('SELECT status,connects FROM proposals WHERE id=1').get() };
 }
@@ -196,7 +210,7 @@ describe('writer policy through the real pipeline', () => {
       }
       return new Response(m.id===undefined?null:JSON.stringify({jsonrpc:'2.0',id:m.id,result}),{status:m.id===undefined?202:200,headers:{'content-type':'application/json'}});
     });
-    let done=false;const work=runWriter(e).finally(()=>{done=true;});for(let i=0;i<80&&!done;i++)await vi.advanceTimersByTimeAsync(10_000);await work;vi.useRealTimers();
+    await finishPipeline(runWriter(e));vi.useRealTimers();
     return {e,aiCalls};
   }
   it('preserves automatic drafting for a verified eligible job',async()=>{
