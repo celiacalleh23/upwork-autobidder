@@ -555,10 +555,10 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   function renderState() {
     const s = state;
     const sync = s.apifySync;
-    $('apifyStatus').textContent = !sync?.configured ? 'Apify synchronization needs APIFY_TOKEN and APIFY_TASK_ID in Worker settings. Local filters still apply.'
+    $('apifyStatus').textContent = !sync?.configured ? `Apify synchronization unavailable: ${sync?.configurationError || 'check APIFY_TOKEN and APIFY_TASK_ID in Worker settings'}. Local filters still apply.`
       : sync.status === 'applied' ? `Discovery settings synchronized${sync.appliedAt ? ' · ' + when(sync.appliedAt) : ''}.`
       : sync.status === 'error' ? `Settings saved locally. Apify synchronization failed: ${sync.error}. It will retry automatically.`
-      : 'Settings saved locally. Apify synchronization is pending.';
+      : sync.status === 'not-requested' ? 'Save settings to synchronize the Apify task. The schedule is managed separately in Apify.' : 'Settings saved locally. Apify synchronization is pending; the next background run will apply it.';
     if (sync?.lastImport?.error) $('apifyStatus').textContent += ` Import waiting: ${sync.lastImport.error}.`;
     $('account').textContent = s.upwork.connected ? `Bidding as ${s.upwork.account || 'connected account'}` : 'Upwork not connected yet';
     $('connects').textContent = fmtNum(s.connectsBalance);

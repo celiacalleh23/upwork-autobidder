@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, loadState, patchState, saveSettings, type Env } from 
 import { runSender } from '../src/pipeline/send';
 import { runWriter } from '../src/pipeline/write';
 import { seal } from '../src/crypto';
-import { drainApify, receiveApify, requestApifySync, syncApify, apifySyncStatus } from '../src/apify';
+import { drainApify, receiveApify, requestApifySync, syncApify, apifySyncStatus, discoveryInput, mergeDiscoveryInput } from '../src/apify';
 import { sendDailyReport } from '../src/pipeline/report';
 import { cleanupLoomCopies } from '../src/loom';
 
@@ -178,6 +178,34 @@ describe('durable Apify delivery and synchronization', () => {
   });
 });
 
+describe('Apify task recovery', () => {
+  it('joins phrases with explicit OR and normalizes the saved Sweden code', () => {
+    const s = {...structuredClone(DEFAULT_SETTINGS), keywords:['Klaviyo','Email Marketer'], allowedCountries:['SWE','Canada']};
+    expect(discoveryInput(s)).toMatchObject({query:'"Klaviyo" OR "Email Marketer"',location:['Sweden','Canada'],maxJobAge:{value:60,unit:'minutes'}});
+  });
+  it('resynchronizes identical settings after the remote task was restored', async () => {
+    const e={...env(),APIFY_TOKEN:'synthetic',APIFY_TASK_ID:'owner~task'};
+    const s=structuredClone(DEFAULT_SETTINGS); await saveSettings(e,s);
+    let input:Record<string,unknown>={maxJobAge:{value:24,unit:'hours'},jobType:['fixed','hourly'],query:'web scraping'};
+    let writes=0;
+    vi.stubGlobal('fetch',async(url:string,init:RequestInit)=>{
+      expect(url).toBe('https://api.apify.com/v2/actor-tasks/owner~task/input');
+      if(init.method==='PUT'){writes++;input=JSON.parse(String(init.body));}
+      return new Response(JSON.stringify(input));
+    });
+    await syncApify(e);expect(await apifySyncStatus(e)).toMatchObject({configured:true,status:'applied'});
+    expect(input).toMatchObject({fixedPriceRange:[150,100000],hourlyRateRange:[30,1000],maxJobAge:{value:60,unit:'minutes'},jobType:['fixed','hourly']});
+    input={query:'web scraping'}; await saveSettings(e,s);
+    expect(await apifySyncStatus(e)).toMatchObject({status:'pending'});
+    await syncApify(e);expect(writes).toBe(2);expect(input.query).toBe(discoveryInput(s).query);
+  });
+  it('preserves configured ceilings and refuses malformed ones', () => {
+    const managed=discoveryInput(structuredClone(DEFAULT_SETTINGS));
+    expect(mergeDiscoveryInput({fixedPriceRange:[20,200000],hourlyRateRange:[0,2000],cookies:'unchanged'},managed)).toMatchObject({fixedPriceRange:[150,200000],hourlyRateRange:[30,2000],cookies:'unchanged'});
+    expect(()=>mergeDiscoveryInput({fixedPriceRange:['bad']},managed)).toThrow('ceiling');
+  });
+});
+
 describe('notifications and calendar boundaries',()=>{
   it('sends one daily report under concurrent cron execution',async()=>{
     const e={...env(),RESEND_API_KEY:'synthetic'};const s=structuredClone(DEFAULT_SETTINGS);s.report={email:'test@example.invalid',hour:0};await saveSettings(e,s);
@@ -289,9 +317,9 @@ describe('Apify task limits from the production configuration screenshots', () =
     const { mergeDiscoveryInput } = await import('../src/apify');
     expect(() => mergeDiscoveryInput({ fixedPriceRange: [20, 10000] }, { fixedPriceRange: [20000] })).toThrow('exceeds');
   });
-  it('does not invent a maximum budget when the task contract is missing', async () => {
+  it('recovers the previously specified ceiling when example input removed the range', async () => {
     const { mergeDiscoveryInput } = await import('../src/apify');
-    expect(() => mergeDiscoveryInput({}, { fixedPriceRange: [20] })).toThrow('ceiling will not be guessed');
-    expect(mergeDiscoveryInput({ maxJobAge: { value: 15, unit: 'minutes' } }, { fixedPriceRange: [0] })).toEqual({ maxJobAge: { value: 15, unit: 'minutes' } });
+    expect(mergeDiscoveryInput({}, { fixedPriceRange: [20] })).toEqual({fixedPriceRange:[20,100000]});
+    expect(mergeDiscoveryInput({ maxJobAge: { value: 15, unit: 'minutes' } }, { fixedPriceRange: [0] })).toEqual({ maxJobAge: { value: 15, unit: 'minutes' }, fixedPriceRange:[0,100000] });
   });
 });

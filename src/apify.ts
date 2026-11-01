@@ -8,6 +8,7 @@ import { InvalidInput, type Env, type Settings } from './settings';
 type ObjectValue = Record<string, unknown>;
 const object = (v: unknown): ObjectValue | null => v && typeof v === 'object' && !Array.isArray(v) ? v as ObjectValue : null;
 const validId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(v);
+const validTaskId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,80}(?:~[A-Za-z0-9_-]{1,80})?$/.test(v);
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 interface Receipt { dataset: string | null; items: unknown[]; offset: number; imported: number; duplicates: number; rejected: number; status: 'pending' | 'done' | 'error'; nextAt: number; error: string | null }
 
@@ -97,7 +98,7 @@ export async function drainApify(env: Env): Promise<void> {
 
 interface Sync { revision: string; input: ObjectValue; status: 'pending' | 'applied' | 'error'; error: string | null; nextAt: number; appliedAt: string | null }
 export function discoveryInput(s: Settings): ObjectValue {
-  return { query: s.keywords.map(k => `"${k.replaceAll('"', '').trim()}"`).join(', '), location: s.allowedCountries,
+  return { query: s.keywords.map(k => `"${k.replaceAll('"', '').trim()}"`).join(' OR '), location: s.allowedCountries.map(c => c === 'SWE' ? 'Sweden' : c),
     paymentVerified: s.verifiedOnly, fixedPriceRange: [s.minFixedBudget], hourlyRateRange: [s.minHourlyRate], maxJobAge: { value: 60, unit: 'minutes' } };
 }
 // The dashboard owns search terms, countries, verification and minimum budgets only.
@@ -108,8 +109,14 @@ export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue)
     const minimum = (managed[key] as number[] | undefined)?.[0];
     if (minimum === undefined) continue;
     const range = existing[key];
-    if (!Array.isArray(range) || range.length !== 2 || typeof range[1] !== 'number' || !Number.isFinite(range[1])) {
-      if (minimum === 0) { if (range === undefined) delete desired[key]; else desired[key] = range; continue; }
+    if (range === undefined) {
+      // Recover the user's previously chosen ceilings after Restore example input.
+      const ceiling = key === 'fixedPriceRange' ? 100000 : 1000;
+      if (minimum > ceiling) throw new Error(`Dashboard minimum exceeds the recovery ${key} ceiling. Configure the task ceiling explicitly.`);
+      desired[key] = [minimum, ceiling];
+      continue;
+    }
+    if (!Array.isArray(range) || range.length !== 2 || typeof range[1] !== 'number' || !Number.isFinite(range[1]) || range[1] < 0) {
       throw new Error(`Configure ${key} in the Apify task before synchronizing its minimum; its ceiling will not be guessed.`);
     }
     if (minimum > range[1]) throw new Error(`Dashboard minimum exceeds the existing Apify ${key} ceiling. Review both filters.`);
@@ -121,8 +128,7 @@ export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue)
 export function syncStatement(env: Env, settings: Settings): D1PreparedStatement {
   const desired: Sync = { revision: crypto.randomUUID(), input: discoveryInput(settings), status: 'pending', error: null, nextAt: 0, appliedAt: null };
   return env.DB.prepare(`INSERT INTO kv (key,value,updated_at) VALUES ('apify:sync',?,datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
-    WHERE json_extract(kv.value, '$.input') != json_extract(excluded.value, '$.input')`).bind(JSON.stringify(desired));
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(desired));
 }
 export async function requestApifySync(env: Env, settings: Settings): Promise<void> {
   await syncStatement(env, settings).run();
@@ -130,10 +136,10 @@ export async function requestApifySync(env: Env, settings: Settings): Promise<vo
 export async function apifySyncStatus(env: Env) {
   const raw = await getKv(env, 'apify:sync'), last = await getKv(env, 'apify:lastImport');
   const s = raw ? JSON.parse(raw) as Sync : null;
-  return { configured: Boolean(env.APIFY_TOKEN && validId(env.APIFY_TASK_ID)), status: s?.status ?? 'not-requested', error: s?.error ?? null, appliedAt: s?.appliedAt ?? null, lastImport: last ? JSON.parse(last) : null };
+  return { configured: Boolean(env.APIFY_TOKEN && validTaskId(env.APIFY_TASK_ID)), configurationError: !env.APIFY_TOKEN ? 'APIFY_TOKEN is missing' : !validTaskId(env.APIFY_TASK_ID) ? 'APIFY_TASK_ID is missing or invalid (use a task ID or owner~task-name)' : null, status: s?.status ?? 'not-requested', error: s?.error ?? null, appliedAt: s?.appliedAt ?? null, lastImport: last ? JSON.parse(last) : null };
 }
 export async function syncApify(env: Env): Promise<void> {
-  if (!env.APIFY_TOKEN || !validId(env.APIFY_TASK_ID)) return;
+  if (!env.APIFY_TOKEN || !validTaskId(env.APIFY_TASK_ID)) return;
   const lease = await acquireLease(env, 'apify-sync', 60_000);
   if (!lease) return;
   try {
