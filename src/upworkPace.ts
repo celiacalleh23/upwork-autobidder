@@ -40,18 +40,29 @@ export async function pauseForWarning(env: Env, where: string, msg: string): Pro
 // Runs one Upwork call at the slow pace. The client already waits out one rate limit (mcp.ts); a second one is an error
 // for the caller to show (these extras never pause bidding, except for an Upwork warning).
 export async function paced<T>(env: Env, call: () => Promise<T>): Promise<T> {
-  if (heldByUpwork(await loadState(env))) throw new UpworkBusy('Paused: Upwork restricted or warned the account. Nothing is read from Upwork until bidding is resumed.');
-  const queued = Number(await getKv(env, SLOT_KEY)) || 0;
-  if (queued + SLOW_GAP_MS - Date.now() > MAX_WAIT_MS) throw new UpworkBusy('Upwork is busy with other reads. Try again in a minute.');
+  if (heldByUpwork(await loadState(env))) throw new UpworkBusy('Paused: Upwork restricted or warned the account.');
+  return call(); // Authenticated McpClient now budgets all callers, including bidding.
+}
+
+export async function permitUpworkCall(env: Env, budgeted: boolean): Promise<void> {
+  if (heldByUpwork(await loadState(env))) throw new UpworkBusy('Paused: Upwork restricted or warned the account.');
+  if (Number(await getKv(env, 'upwork:retryAt')) > Date.now()) throw new UpworkBusy('Upwork asked to slow down; waiting for the requested retry time.');
+  if (!budgeted) return;
   const at = await reserve(env, Date.now());
+  if (at - Date.now() > MAX_WAIT_MS) throw new UpworkBusy('Upwork is busy; retry on a later run.');
   if (at > Date.now()) await sleep(at - Date.now());
-  try {
-    return await call();
-  } catch (e) {
-    if (throttleWait(e) !== null) throw new UpworkBusy('Upwork asked to slow down. Try again in a minute; bidding is not affected.');
-    const msg = e instanceof Error ? e.message : String(e);
-    if (isAccountWarning(msg)) { await pauseForWarning(env, 'a dashboard read', msg); throw new UpworkBusy(`Upwork restricted or warned the account; bidding is paused. ${msg.slice(0, 200)}`); }
-    throw e;
+  if (heldByUpwork(await loadState(env))) throw new UpworkBusy('Paused: Upwork restricted or warned the account.');
+  if (Number(await getKv(env, 'upwork:retryAt')) > Date.now()) throw new UpworkBusy('Upwork asked to slow down; retry later.');
+}
+
+export async function recordUpworkError(env: Env, e: unknown): Promise<void> {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (isAccountWarning(msg)) await pauseForWarning(env, 'an Upwork request', msg);
+  const wait = throttleWait(e);
+  if (wait !== null) {
+    await env.DB.prepare(`INSERT INTO kv (key, value) VALUES ('upwork:retryAt', ?)
+      ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(kv.value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)`)
+      .bind(String(Date.now() + wait)).run();
   }
 }
 
@@ -63,8 +74,10 @@ export const THROTTLE_PAUSE_AFTER = 3;
 export const isThrottle = (e: unknown) => throttleWait(e) !== null;
 
 export async function noteThrottle(env: Env, where: string, msg: string): Promise<boolean> {
-  const n = (Number(await getKv(env, THROTTLE_KEY)) || 0) + 1;
-  if (n < THROTTLE_PAUSE_AFTER) { await putKv(env, THROTTLE_KEY, String(n)); return false; }
+  const counter = await env.DB.prepare(`INSERT INTO kv (key,value) VALUES (?, '1')
+    ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) RETURNING value`).bind(THROTTLE_KEY).first<{ value: string }>();
+  const n = Number(counter?.value ?? 1);
+  if (n < THROTTLE_PAUSE_AFTER) return false;
   await delKv(env, THROTTLE_KEY);
   await patchState(env, { paused: true, pausedReason: `Upwork kept asking to slow down (${n} rounds in a row, last during ${where}): ${msg.slice(0, 200)}` });
   return true;
@@ -72,4 +85,16 @@ export async function noteThrottle(env: Env, where: string, msg: string): Promis
 
 export async function clearThrottle(env: Env): Promise<void> {
   if (await getKv(env, THROTTLE_KEY)) await delKv(env, THROTTLE_KEY);
+}
+
+// Search attempts, including retries, use shared rolling quotas confirmed by the account owner.
+export async function permitSearch(env: Env): Promise<void> {
+  const now = Date.now();
+  const r = await env.DB.prepare(`INSERT INTO kv(key,value)
+    SELECT ?, ? WHERE
+      (SELECT COUNT(*) FROM kv WHERE key LIKE 'upwork:search:%' AND CAST(value AS INTEGER) > ?) < 15
+      AND (SELECT COUNT(*) FROM kv WHERE key LIKE 'upwork:search:%' AND CAST(value AS INTEGER) > ?) < 150
+      AND (SELECT COUNT(*) FROM kv WHERE key LIKE 'upwork:search:%' AND CAST(value AS INTEGER) > ?) < 750`)
+    .bind(`upwork:search:${crypto.randomUUID()}`, String(now), now - 60_000, now - 3600_000, now - 86400_000).run();
+  if (!r.meta.changes) throw new UpworkBusy('Upwork search quota reached; discovery waits for a later scan.');
 }

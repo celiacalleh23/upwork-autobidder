@@ -1,5 +1,9 @@
+import { syncStatement } from './apify';
 export interface Env {
   DB: D1Database;
+  APIFY_WEBHOOK_SECRET?: string;
+  APIFY_TOKEN?: string;
+  APIFY_TASK_ID?: string;
   DASH_PASSWORD?: string;
   TOKEN_KEY?: string;
   ANTHROPIC_API_KEY?: string;
@@ -56,6 +60,7 @@ export interface Settings {
 export interface RunSummary { at: string; scanned: number; new: number; matched: number; queued?: number; errors: number; note: string | null }
 
 export interface State {
+  controlsVersion: number;
   mode: Mode;
   paused: boolean;
   pausedReason: string | null;
@@ -129,6 +134,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const DEFAULT_STATE: State = {
+  controlsVersion: 0,
   mode: 'review',
   paused: false,
   pausedReason: null,
@@ -157,22 +163,45 @@ async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {
   }
 }
 
-async function putJson(env: Env, key: string, value: unknown): Promise<void> {
-  await env.DB.prepare(
-    "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-  ).bind(key, JSON.stringify(value)).run();
-}
-
 // The report addresses as a list (Settings keeps them comma-separated).
 export const reportEmails = (s: Settings) => s.report.email.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
 
 export const loadSettings = (env: Env) => getJson(env, 'settings', DEFAULT_SETTINGS);
-export const saveSettings = (env: Env, s: Settings) => putJson(env, 'settings', s);
+export async function saveSettings(env: Env, s: Settings): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO kv (key,value,updated_at) VALUES ('settings',?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify(s)),
+    syncStatement(env, s),
+  ]);
+}
 export const loadState = (env: Env) => getJson(env, 'state', DEFAULT_STATE);
-export async function patchState(env: Env, patch: Partial<State>): Promise<State> {
-  const next = { ...(await loadState(env)), ...patch };
-  await putJson(env, 'state', next);
-  return next;
+type StatePatch = { [K in keyof State]?: State[K] extends object ? Partial<State[K]> : State[K] };
+// Update only supplied leaves in one statement: unrelated writes cannot erase a pause.
+export async function patchState(env: Env, patch: StatePatch): Promise<State> {
+  const entries: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'controlsVersion') continue;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [child, v] of Object.entries(value)) entries.push([`$.${key}.${child}`, v]);
+    } else entries.push([`$.${key}`, value]);
+  }
+  if (!entries.length) return loadState(env);
+  const changesControls = 'paused' in patch || 'mode' in patch || patch.upwork?.connected !== undefined;
+  const pairs = entries.map(() => '?, json(?)').join(', ');
+  const base = changesControls
+    ? "json_set(kv.value, '$.controlsVersion', COALESCE(json_extract(kv.value, '$.controlsVersion'), 0) + 1)"
+    : 'kv.value';
+  const args = entries.flatMap(([path, value]) => [path, JSON.stringify(value)]);
+  await env.DB.prepare(`INSERT INTO kv (key, value, updated_at)
+    VALUES ('state', json_set(?, ${pairs}), datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = json_set(${base}, ${pairs}), updated_at = excluded.updated_at`)
+    .bind(JSON.stringify({ ...DEFAULT_STATE, controlsVersion: changesControls ? 1 : 0 }), ...args, ...args).run();
+  if (patch.paused === true && patch.pausedReason && patch.pausedReason !== 'Paused from the dashboard') {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(patch.pausedReason));
+    const key = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+    await env.DB.prepare("INSERT OR IGNORE INTO kv (key, value) VALUES (?, ?)")
+      .bind(`notification:${key}`, JSON.stringify({ status: 'pending', subject: 'Upwork bidding paused: review required', text: patch.pausedReason, at: new Date().toISOString() })).run();
+  }
+  return loadState(env);
 }
 
 // Fill missing keys from defaults so older stored settings keep working after upgrades.

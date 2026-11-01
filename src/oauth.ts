@@ -1,5 +1,6 @@
+import { heldByUpwork } from './upworkPace';
 import { randomToken, seal, sha256b64url, unseal } from './crypto';
-import { delKv, getKv, putKv } from './kv';
+import { acquireLease, delKv, getKv, putKv, releaseLease } from './kv';
 import { McpAuthError, McpClient } from './mcp';
 import { loadState, patchState, type Env, type State } from './settings';
 
@@ -149,14 +150,21 @@ async function saveTokens(env: Env, base: Omit<Tokens, 'accessToken' | 'refreshT
 }
 
 export async function finishUpworkAuth(env: Env, params: URLSearchParams): Promise<void> {
+  const lease = await acquireLease(env, 'upwork-auth', 60_000);
+  if (!lease) throw new OAuthError('Upwork sign-in is busy; retry shortly.');
+  try { await finishAuthLocked(env, params); }
+  finally { await releaseLease(env, 'upwork-auth', lease); }
+}
+
+async function finishAuthLocked(env: Env, params: URLSearchParams): Promise<void> {
   if (params.get('error')) {
     throw new OAuthError(params.get('error') === 'access_denied' ? 'Upwork sign-in was cancelled.' : `Upwork sign-in failed: ${params.get('error_description') || params.get('error')}`);
   }
   const state = params.get('state') ?? '';
   const code = params.get('code') ?? '';
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(state) || !code) throw new OAuthError('This sign-in link is incomplete. Start again from the dashboard.');
-  const stored = await getKv(env, `oauth_state:${state}`);
-  await delKv(env, `oauth_state:${state}`); // single use
+  const consumed = await env.DB.prepare('DELETE FROM kv WHERE key = ? RETURNING value').bind(`oauth_state:${state}`).first<{ value: string }>();
+  const stored = consumed?.value;
   const s = stored ? await unseal<{ verifier: string; redirectUri: string; exp: number; as: AuthServer }>(env, stored) : null;
   if (!s || s.exp < Date.now()) throw new OAuthError('This sign-in link expired. Start again from the dashboard.');
 
@@ -174,13 +182,13 @@ export async function finishUpworkAuth(env: Env, params: URLSearchParams): Promi
   if (!r.ok) throw new OAuthError(`Upwork did not accept the sign-in (${r.data.error_description || r.data.error || r.status}).`);
   await saveTokens(env, base, r.data, null);
   const st = await loadState(env);
-  await patchState(env, { upwork: { ...st.upwork, connected: true, lastError: null } });
+  await patchState(env, { upwork: { connected: true, lastError: null } });
 }
 
 async function markDisconnected(env: Env, reason: string): Promise<void> {
   await delKv(env, 'upwork_tokens');
   const st = await loadState(env);
-  await patchState(env, { upwork: { ...st.upwork, connected: false, lastError: reason } });
+  await patchState(env, { upwork: { connected: false, lastError: reason } });
 }
 
 async function loadTokens(env: Env): Promise<Tokens | null> {
@@ -190,6 +198,16 @@ async function loadTokens(env: Env): Promise<Tokens | null> {
 
 // A valid access token, refreshed shortly before expiry. On invalid_grant the connection is marked for reconnecting.
 export async function getAccessToken(env: Env): Promise<string> {
+  if (heldByUpwork(await loadState(env))) throw new OAuthError('Upwork is held after an account warning; review the warning before resuming.');
+  const current = await loadTokens(env);
+  if (current && current.expiresAt - REFRESH_EARLY_MS > Date.now()) return current.accessToken;
+  const lease = await acquireLease(env, 'upwork-auth', 60_000);
+  if (!lease) throw new OAuthError('Upwork sign-in is refreshing; retry shortly.');
+  try { return await refreshAccessToken(env); }
+  finally { await releaseLease(env, 'upwork-auth', lease); }
+}
+
+async function refreshAccessToken(env: Env): Promise<string> {
   const t = await loadTokens(env);
   if (!t) throw new OAuthError('Upwork is not connected.');
   if (t.expiresAt - REFRESH_EARLY_MS > Date.now()) return t.accessToken;
@@ -210,7 +228,7 @@ export async function getAccessToken(env: Env): Promise<string> {
 }
 
 export async function upworkClient(env: Env): Promise<McpClient> {
-  const client = new McpClient(env.UPWORK_MCP_URL, await getAccessToken(env));
+  const client = new McpClient(env.UPWORK_MCP_URL, await getAccessToken(env), 25_000, env);
   try {
     await client.initialize();
   } catch (e) {
@@ -277,12 +295,19 @@ export async function checkUpwork(env: Env): Promise<State> {
   } catch (e) {
     const fresh = await loadState(env);
     const msg = e instanceof Error ? e.message : String(e);
-    await patchState(env, { upwork: { ...fresh.upwork, lastError: msg, checkedAt: new Date().toISOString() } });
+    await patchState(env, { upwork: { lastError: msg, checkedAt: new Date().toISOString() } });
     throw e;
   }
 }
 
 export async function disconnectUpwork(env: Env): Promise<State> {
+  const lease = await acquireLease(env, 'upwork-auth', 60_000);
+  if (!lease) throw new OAuthError('Upwork sign-in is busy; retry disconnect shortly.');
+  try { return await disconnectLocked(env); }
+  finally { await releaseLease(env, 'upwork-auth', lease); }
+}
+
+async function disconnectLocked(env: Env): Promise<State> {
   const t = await loadTokens(env).catch(() => null);
   if (t?.revocationEndpoint && t.refreshToken) {
     await tokenRequest({ ...t, tokenEndpoint: t.revocationEndpoint }, { token: t.refreshToken, token_type_hint: 'refresh_token' }).catch(() => null);

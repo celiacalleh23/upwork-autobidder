@@ -1,6 +1,6 @@
 import { dayStartUtc, postedIso } from '../api';
 import { emailConfigured, esc, sendEmail } from '../email';
-import { getKv, putKv } from '../kv';
+import { acquireLease, getKv, putKv, releaseLease } from '../kv';
 import { loadSettings, loadState, reportEmails, type Env, type Settings } from '../settings';
 
 // Daily report (M7): one email a day at settings.report.hour in the Settings time zone (Siv: 3 pm California), with
@@ -9,7 +9,7 @@ import { loadSettings, loadState, reportEmails, type Env, type Settings } from '
 export interface SentRow { title: string; url: string | null; submittedAt: string; postedAt: string | null; connects: number | null; bid: number | null; jobType: string | null; loomUrl: string | null; boost?: number | null }
 export interface Problem { title: string; url: string | null; status: string; error: string | null }
 export interface ReportData {
-  dateLabel: string; timeZone: string; now: string;
+  dateLabel: string; timeZone: string; now: string; from?: string;
   sent: SentRow[]; failed: Problem[];
   waiting: number; approved: number; scanned: number; matched: number;
   balance: number | null; alertBelow: number;
@@ -53,6 +53,7 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
   const boostLine = boosted.length ? `Boosted: ${boosted.length} · boost bids ${boostBids} Connects (${usd(boostBids)}), charged only for proposals that land in a paid slot` : null;
   const speeds = d.sent.map((r) => minutes(r.postedAt, r.submittedAt)).filter((m): m is number => m !== null).sort((a, b) => a - b);
   const median = speeds.length ? speeds[Math.floor(speeds.length / 2)] : null;
+  const period = d.from ? 'Since the previous report' : 'Today';
   const subject = `Upwork report ${d.dateLabel}: ${d.sent.length} sent, ${spent} Connects (${usd(spent)})`;
   const status = [
     d.paused ? `PAUSED: ${d.paused}` : d.sendingEnabled ? 'Sending is on' : 'Sending is off',
@@ -63,8 +64,8 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
   const sentLines = d.sent.map((r) => `- ${time(r.submittedAt)} · ${r.title} · ${r.connects ?? '?'} Connects (${usd(r.connects ?? 0)})${r.boost ? ` + ${r.boost} boost bid` : ''} · bid $${r.bid ?? '?'}${r.jobType === 'hourly' ? '/hr' : ''} · ${durText(minutes(r.postedAt, r.submittedAt))} after posting${r.url ? `\n  ${r.url}` : ''}`);
   const failLines = d.failed.map((r) => `- ${r.title}: ${r.error ?? r.status}`);
   const text = [
-    `Upwork Auto-Bidder, ${d.dateLabel} (so far, ${time(d.now)})`, '',
-    `Sent today: ${d.sent.length} · Connects spent: ${spent} (${usd(spent)} at $${CONNECT_USD.toFixed(2)} each)${median !== null ? ` · median speed: ${durText(median)} after posting` : ''}`,
+    `Upwork Auto-Bidder, ${d.dateLabel} (through ${time(d.now)})`, '',
+    `Sent ${d.from ? 'since the previous report' : 'today'}: ${d.sent.length} · Connects spent: ${spent} (${usd(spent)} at $${CONNECT_USD.toFixed(2)} each)${median !== null ? ` · median speed: ${durText(median)} after posting` : ''}`,
     ...(boostLine ? [boostLine] : []),
     `Jobs scanned: ${d.scanned} (${d.matched} matched) · waiting for review: ${d.waiting} · approved, sending soon: ${d.approved}`, '',
     ...status, '',
@@ -79,8 +80,8 @@ export function buildReport(d: ReportData): { subject: string; text: string; htm
   const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#16181D;background:#F3F4F2;padding:20px">
 <div style="max-width:680px;margin:0 auto">
 <h1 style="font-size:20px;margin:0 0 4px">Upwork report · ${esc(d.dateLabel)}</h1>
-<p style="margin:0 0 16px;color:#5B615A;font-size:14px">So far today, at ${esc(time(d.now))}${d.paused ? ` · <b style="color:#8A2A15">PAUSED: ${esc(d.paused)}</b>` : ''}</p>
-<table role="presentation" style="border-collapse:separate;border-spacing:8px;margin:0 -8px 8px"><tr>${tile('Sent today', String(d.sent.length))}${tile('Connects spent', String(spent), usd(spent))}${tile('Median speed', median === null ? '–' : durText(median))}${tile('Connects left', d.balance === null ? '–' : String(d.balance))}</tr></table>
+<p style="margin:0 0 16px;color:#5B615A;font-size:14px">${esc(period)}, through ${esc(time(d.now))}${d.paused ? ` · <b style="color:#8A2A15">PAUSED: ${esc(d.paused)}</b>` : ''}</p>
+<table role="presentation" style="border-collapse:separate;border-spacing:8px;margin:0 -8px 8px"><tr>${tile(d.from ? 'Since last report' : 'Sent today', String(d.sent.length))}${tile('Connects spent', String(spent), usd(spent))}${tile('Median speed', median === null ? '–' : durText(median))}${tile('Connects left', d.balance === null ? '–' : String(d.balance))}</tr></table>
 ${boostLine ? `<p style="font-size:14px;margin:0 0 6px">${esc(boostLine)}</p>` : ''}
 <p style="font-size:14px;margin:0 0 6px">Jobs scanned: <b>${d.scanned}</b> (${d.matched} matched) · Waiting for review: <b>${d.waiting}</b> · Approved, sending soon: <b>${d.approved}</b></p>
 <p style="font-size:14px;margin:0 0 16px;color:#5B615A">${status.map(esc).join(' · ')}</p>
@@ -91,22 +92,24 @@ ${d.failed.length ? `<h2 style="font-size:15px;margin:18px 0 6px">Needs a look</
   return { subject, text, html };
 }
 
-export async function collectReport(env: Env, s: Settings, now = new Date()): Promise<ReportData> {
+export async function collectReport(env: Env, s: Settings, now = new Date(), from?: string): Promise<ReportData> {
   const st = await loadState(env);
-  const since = dayStartUtc(s.caps.timezone, now);
+  const since = from ?? dayStartUtc(s.caps.timezone, now);
+  const until = now.toISOString().slice(0, 19).replace('T', ' ');
   const [sent, failed, counts, jobs] = await env.DB.batch<Record<string, unknown>>([
     env.DB.prepare(
       `SELECT title, url, submitted_at, connects, boost_connects, bid, job_type, loom_url, (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at
-       FROM proposals WHERE status = 'submitted' AND submitted_at >= ? AND is_example = 0 ORDER BY submitted_at`,
-    ).bind(since),
+       FROM proposals WHERE status = 'submitted' AND submitted_at >= ? AND submitted_at < ? AND is_example = 0 ORDER BY submitted_at`,
+    ).bind(since, until),
     env.DB.prepare(
-      `SELECT title, url, status, error FROM proposals WHERE status IN ('failed', 'unknown') AND COALESCE(submitted_at, created_at) >= ? AND is_example = 0 ORDER BY id LIMIT 20`,
-    ).bind(since),
+      `SELECT title, url, status, error FROM proposals WHERE status IN ('failed', 'unknown') AND COALESCE(submitted_at, created_at) >= ? AND COALESCE(submitted_at, created_at) < ? AND is_example = 0 ORDER BY id LIMIT 20`,
+    ).bind(since, until),
     env.DB.prepare("SELECT SUM(status = 'pending') AS waiting, SUM(status = 'approved') AS approved FROM proposals WHERE is_example = 0"),
-    env.DB.prepare("SELECT COUNT(*) AS scanned, SUM(status IN ('matched', 'low_score', 'proposed')) AS matched FROM jobs WHERE seen_at >= ?").bind(since),
+    env.DB.prepare("SELECT COUNT(*) AS scanned, SUM(status IN ('matched', 'low_score', 'proposed')) AS matched FROM jobs WHERE seen_at >= ? AND seen_at < ?").bind(since, until),
   ]);
   const c = counts.results[0] ?? {}, j = jobs.results[0] ?? {};
   return {
+    ...(from ? { from } : {}),
     dateLabel: localDay(s.caps.timezone, now).label, timeZone: s.caps.timezone, now: now.toISOString(),
     sent: sent.results.map((r) => ({
       title: String(r.title), url: (r.url as string) ?? null, submittedAt: toIso(String(r.submitted_at)), postedAt: postedIso((r.posted_at as string) ?? null),
@@ -122,15 +125,34 @@ export async function collectReport(env: Env, s: Settings, now = new Date()): Pr
 }
 
 // Sends today's report. `force` (the dashboard's "Send test report") sends now and does not count as today's report.
-export async function sendDailyReport(env: Env, opts: { force?: boolean; now?: Date } = {}): Promise<{ sent: boolean; to: string[] }> {
+async function deliverDailyReport(env: Env, opts: { force?: boolean; now?: Date } = {}): Promise<{ sent: boolean; to: string[] }> {
   const now = opts.now ?? new Date();
   const s = await loadSettings(env);
   const to = reportEmails(s);
   if (!opts.force && !reportDue(s, await getKv(env, LAST_KEY), now)) return { sent: false, to };
   if (!emailConfigured(env)) { if (opts.force) throw new Error('RESEND_API_KEY is missing in Cloudflare. Add it again under Workers → rafadataapp → Settings → Variables and Secrets, with type "Secret".'); return { sent: false, to }; }
   if (!to.length) { if (opts.force) throw new Error('Add a report email in Settings → Reports and connections, then save.'); return { sent: false, to }; }
-  const r = buildReport(await collectReport(env, s, now));
-  await sendEmail(env, to, opts.force ? `[Test] ${r.subject}` : r.subject, r.text, r.html);
-  if (!opts.force) await putKv(env, LAST_KEY, localDay(s.caps.timezone, now).date);
+  const date = localDay(s.caps.timezone, now).date;
+  const key = `report:pending:${s.caps.timezone}:${date}`;
+  const prior = !opts.force ? await getKv(env, key) : null;
+  const from = await getKv(env, 'report:coveredUntil');
+  const delivery = prior ? JSON.parse(prior) as { r: ReturnType<typeof buildReport>; to: string[]; until: string } : {
+    r: buildReport(await collectReport(env, s, now, opts.force ? undefined : from ?? undefined)), to,
+    until: now.toISOString().slice(0, 19).replace('T', ' '),
+  };
+  if (!opts.force && !prior) await putKv(env, key, JSON.stringify(delivery));
+  await sendEmail(env, delivery.to, opts.force ? `[Test] ${delivery.r.subject}` : delivery.r.subject, delivery.r.text, delivery.r.html,
+    opts.force ? undefined : `daily-${s.caps.timezone.replaceAll('/', '-')}-${date}`);
+  if (!opts.force) await env.DB.batch([
+    env.DB.prepare("INSERT INTO kv (key,value) VALUES ('report:lastDate',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(date),
+    env.DB.prepare("INSERT INTO kv (key,value) VALUES ('report:coveredUntil',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(delivery.until),
+  ]);
   return { sent: true, to };
+}
+
+export async function sendDailyReport(env: Env, opts: { force?: boolean; now?: Date } = {}): Promise<{ sent: boolean; to: string[] }> {
+  const lease = await acquireLease(env, 'report', 60_000);
+  if (!lease) return { sent: false, to: [] };
+  try { return await deliverDailyReport(env, opts); }
+  finally { await releaseLease(env, 'report', lease); }
 }

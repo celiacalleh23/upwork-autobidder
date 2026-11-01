@@ -32,7 +32,7 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-export const loginConfigured = (env: Env) => Boolean(env.DASH_PASSWORD);
+export const loginConfigured = (env: Env) => Boolean(env.DASH_PASSWORD && env.DASH_PASSWORD.trim().length >= 12);
 
 export async function hasSession(req: Request, env: Env): Promise<boolean> {
   if (!loginConfigured(env)) return false;

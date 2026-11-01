@@ -1,12 +1,16 @@
+import { upworkClient } from './oauth';
+import { createPreview } from './pipeline/preview';
+import type { Answer } from './pipeline/letter';
+import { apifySyncStatus } from './apify';
+import { readObject } from './http';
 import {
   Env, InvalidInput, loadSettings, loadState, patchState, saveSettings, validateSettings,
 } from './settings';
 import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFromPasted } from './oauth';
 import { MissingKey } from './crypto';
-import { connectLoom, disconnectLoom, LoomError, copyForJob } from './loom';
+import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
-import { runWriter } from './pipeline/write';
-import { contactDetailsIn, swapLoomLink } from './pipeline/letter';
+import { checkAnswers, contactDetailsIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
@@ -65,10 +69,16 @@ export function dayStartUtc(timeZone: string, now = new Date()): string {
     new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
       .formatToParts(now).map((p) => [p.type, p.value]),
   );
-  const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
-  const offset = asUtc - now.getTime();
-  const midnight = Date.UTC(+parts.year, +parts.month - 1, +parts.day) - offset;
-  return toSql(new Date(midnight));
+  const target = Date.UTC(+parts.year, +parts.month - 1, +parts.day);
+  let candidate = target;
+  for (let i = 0; i < 4; i++) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(candidate)).map(x => [x.type, x.value]));
+    const local = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+    const next = candidate + target - local;
+    if (next === candidate) break;
+    candidate = next;
+  }
+  return toSql(new Date(candidate));
 }
 
 // Equal start and end means all day (BUILD_PLAN §11a: 24/7); an end before the start crosses midnight.
@@ -78,107 +88,10 @@ export function isActiveNow(start: string, end: string, timeZone: string, now = 
   return start <= end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
-// Helper to dig through Apify's weird nested webhook payloads to find the Dataset ID
-function findDatasetId(obj: any): string | null {
-  if (!obj || typeof obj !== 'object') return null;
-  if (typeof obj.defaultDatasetId === 'string') return obj.defaultDatasetId;
-  for (const key in obj) {
-    const result = findDatasetId(obj[key]);
-    if (result) return result;
-  }
-  return null;
-}
-
 export async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   const method = req.method;
 
   try {
-    // ==========================================
-    // APIFY WEBHOOK RECEIVER
-    // ==========================================
-    if (path === '/api/apify-webhook' && method === 'POST') {
-      try {
-        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123') {
-          return fail('Unauthorized', 401);
-        }
-
-        const payload = await req.json();
-        if (!payload) return json({ success: true, count: 0 }); 
-        
-        let jobs: any[] = [];
-
-        // 1. Try to find the Dataset ID and fetch the data directly from Apify
-        const datasetId = findDatasetId(payload);
-        if (datasetId) {
-           console.log('Found Dataset ID in webhook:', datasetId);
-           const dataRes = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?token=${env.APIFY_TOKEN}`);
-           if (dataRes.ok) {
-               jobs = await dataRes.json();
-               console.log(`Fetched ${jobs.length} jobs from Apify dataset.`);
-           }
-        } 
-        
-        // 2. If no dataset ID, check if Apify just sent the array directly
-        if (jobs.length === 0) {
-           if (Array.isArray(payload)) {
-               jobs = payload;
-           } else if (payload.items && Array.isArray(payload.items)) {
-               jobs = payload.items;
-           } else {
-               jobs = [payload];
-           }
-        }
-
-        let addedCount = 0;
-        for (const job of jobs) {
-          
-          let jobUrl = job.url || job.link || job.jobUrl;
-          if (typeof jobUrl === 'object' && jobUrl !== null) {
-             jobUrl = jobUrl.href || jobUrl.url || String(jobUrl);
-          }
-          
-          const jobDesc = job.description || job.jobDescription;
-          const jobTitle = job.title || job.jobTitle;
-
-          if (!jobUrl && !jobTitle) continue; 
-
-          const safeUrl = String(jobUrl || `https://www.upwork.com/jobs/~${Date.now()}-${addedCount}`);
-
-          // 1. Try to add the job
-          const r = await addJob(env, { jobUrl: safeUrl });
-          
-          // 2. Check if it passed the filter OR if it was rejected because it's already in the DB
-          let isMatch = false;
-          if (r.ok) {
-            isMatch = true;
-          } else if (r.reason) {
-             const reasonStr = String(r.reason).toLowerCase();
-             if (reasonStr.includes('already waiting') || reasonStr.includes('already in the queue')) {
-                isMatch = true;
-             }
-          }
-
-          if (isMatch) {
-            // 3. Trigger the writer
-            try {
-               await runWriter(env, safeUrl);
-               console.log('Successfully triggered AI writer for:', jobTitle);
-               addedCount++;
-            } catch (writerErr) {
-               console.error('Failed to trigger AI writer:', writerErr);
-            }
-          } else if (!r.ok) {
-             console.log('Skipping job (failed internal filter):', r.reason);
-          }
-        }
-
-        return json({ success: true, count: addedCount });
-      } catch (error: any) {
-        console.error('Apify Webhook Error:', error);
-        return fail(error.message, 500);
-      }
-    }
-
     // Dashboard mutations require this header to prevent CSRF
     if (method !== 'GET' && req.headers.get('x-dashboard') !== '1') return fail('Missing dashboard header', 403);
 
@@ -190,53 +103,6 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       const s = validateSettings(await readJson(req));
       await saveSettings(env, s);
 
-      // --- START APIFY SYNC ---
-      try {
-        const apifyToken = env.APIFY_TOKEN; 
-        const taskId = env.APIFY_TASK_ID; 
-
-        if (apifyToken && taskId) {
-          const keywords = s.keywords; 
-          // THE FIX: Wrap every keyword in quotes to force Apify to only find exact phrase matches
-          const searchQuery = Array.isArray(keywords) 
-            ? keywords.map(k => `"${k.trim()}"`).join(', ') 
-            : `"${String(keywords).trim()}"`;
-          
-          const countries = s.allowedCountries || [];
-          const minFixedBudget = s.minFixedBudget || 0;
-          const minHourlyRate = s.minHourlyRate || 0;
-          const isVerified = s.verifiedOnly || false;
-
-          const apifyResponse = await fetch(`https://api.apify.com/v2/actor-tasks/${taskId}`, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${apifyToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              input: {
-                "query": searchQuery, 
-                "location": countries, 
-                "paymentVerified": isVerified,
-                "jobType": ["fixed", "hourly"],
-                "fixedPriceRange": [minFixedBudget, 100000],
-                "hourlyRateRange": [minHourlyRate, 1000],
-                "maxJobAge": { "value": 24, "unit": "hours" } // <--- CHANGED TO 24 HOURS TO CATCH DELAYED JOBS
-              }
-            })
-          });
-
-          if (!apifyResponse.ok) {
-             console.error('Failed to sync keywords to Apify:', await apifyResponse.text());
-          } else {
-             console.log('Successfully synced settings to Apify:', searchQuery, countries, minFixedBudget, minHourlyRate);
-          }
-        }
-      } catch (err) {
-        console.error('Apify Sync Error:', err);
-      }
-      // --- END APIFY SYNC ---
-
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });
       }
@@ -246,47 +112,18 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     }
 
     if (path === '/api/proposals/relink-loom' && method === 'POST') {
-      const s = await loadSettings(env);
-      if (!s.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
-
-      // Find ONE pending proposal missing a unique Loom video
-      const row = await env.DB.prepare(
-        "SELECT id, title, cover_letter FROM proposals WHERE status = 'pending' AND loom_video_id IS NULL LIMIT 1"
-      ).first<{ id: number; title: string; cover_letter: string }>();
-
-      if (!row) {
-        return json({ updated: 0, done: true, message: 'All pending proposals have unique Loom videos.' });
-      }
-
-      try {
-        // Tell Loom to duplicate the source video and rename it to the job title
-        const copy = await copyForJob(env, s.loom.sourceUrl, row.title);
-        if (!copy) throw new Error('Loom copy returned empty');
-
-        // Swap the generic source link in the text with the new unique Loom link
-        const next = row.cover_letter.replaceAll(s.loom.sourceUrl, copy.url);
-
-        // Save it to the database
-        await env.DB.prepare(
-          "UPDATE proposals SET cover_letter = ?, loom_video_id = ?, loom_url = ? WHERE id = ?"
-        ).bind(next, copy.id, copy.url, row.id).run();
-
-        // Check how many are left so the UI knows when to stop
-        const remaining = await env.DB.prepare(
-          "SELECT COUNT(*) as n FROM proposals WHERE status = 'pending' AND loom_video_id IS NULL"
-        ).first<{ n: number }>();
-
-        return json({ updated: 1, done: (remaining?.n ?? 0) === 0, title: row.title });
-
-      } catch (e) {
-        console.error('Loom copy failed for', row.title, e);
-        return fail(e instanceof Error ? e.message : 'Loom copy failed', 500);
-      }
+      const settings = await loadSettings(env);
+      if (!settings.loom.sourceUrl) return fail('Set the Loom video link in Settings first');
+      return json({ updated: await relinkQueued(env, settings.loom.sourceUrl), done: true });
     }
 
     if (path === '/api/mode' && method === 'POST') {
       const body = await readJson(req);
-      if (body.mode === 'review') return json(await patchState(env, { mode: 'review' }));
+      if (body.mode === 'review') {
+        const state = await patchState(env, { mode: 'review' });
+        await env.DB.prepare("UPDATE proposals SET status = 'pending', approved_at = NULL, approved_via = NULL WHERE status = 'approved' AND approved_via = 'auto-submit'").run();
+        return json(state);
+      }
       if (body.mode === 'auto') {
         if (body.confirm !== true) return fail('Confirm the switch to Auto mode');
         const state = await loadState(env);
@@ -381,22 +218,8 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
     }
 
     if (path === '/api/queue' && method === 'GET') {
-      const s = await loadSettings(env);
-      const keywords = s.keywords || [];
-      
-      let keywordFilter = '';
-      if (s.titleOnly && keywords.length > 0) {
-        const conditions = keywords.map(() => `LOWER(title) LIKE ?`).join(' OR ');
-        keywordFilter = `AND (${conditions})`;
-      }
-
-      const query = `SELECT ${PROPOSAL_COLS} FROM proposals WHERE status = 'pending' ${keywordFilter} ORDER BY COALESCE(found_at, created_at) DESC, created_at DESC LIMIT 100`;
-      
-      const stmt = env.DB.prepare(query);
-      const { results } = s.titleOnly && keywords.length > 0 
-        ? await stmt.bind(...keywords.map(k => `%${k.toLowerCase()}%`)).all<ProposalRow>()
-        : await stmt.all<ProposalRow>();
-
+      const { results } = await env.DB.prepare(`SELECT ${PROPOSAL_COLS} FROM proposals
+        WHERE status = 'pending' ORDER BY created_at DESC LIMIT 100`).all<ProposalRow>();
       return json(results.map(shape));
     }
 
@@ -435,10 +258,34 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       return r.ok ? json(r) : fail(r.reason);
     }
 
-    const m = path.match(/^\/api\/proposals\/(\d+)(?:\/(approve|skip|unapprove))?$/);
+    const m = path.match(/^\/api\/proposals\/(\d+)(?:\/(approve|skip|unapprove|refresh-questions|resolve-unknown))?$/);
     if (m) {
       const id = Number(m[1]);
       const action = m[2];
+      if (action === 'resolve-unknown' && method === 'POST') {
+        const body = await readJson(req);
+        if (body.confirm !== true || !['submitted', 'not_sent'].includes(String(body.outcome))) return fail('Check the proposal on Upwork first, then explicitly confirm its outcome');
+        const status = body.outcome === 'submitted' ? 'submitted' : 'failed';
+        const reference = body.proposalId === undefined ? null : String(body.proposalId).slice(0, 100);
+        const r = await env.DB.prepare("UPDATE proposals SET status = ?, upwork_proposal_id = COALESCE(?, upwork_proposal_id), submitted_at = COALESCE(submitted_at, datetime('now')), error = ? WHERE id = ? AND status = 'unknown'")
+          .bind(status, reference, status === 'submitted' ? 'Manually confirmed on Upwork from the dashboard' : 'Manually checked on Upwork: not sent. No automatic retry.', id).run();
+        return r.meta.changes ? json({ ok: true }) : fail('This proposal is no longer awaiting verification', 409);
+      }
+      if (action === 'refresh-questions' && method === 'POST') {
+        const row = await env.DB.prepare("SELECT job_id, cover_letter, bid, job_type, create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id)
+          .first<{ job_id: string; cover_letter: string; bid: number; job_type: string; create_params: string }>();
+        if (!row) return fail('This proposal is no longer waiting for review', 409);
+        const state = await loadState(env);
+        if (state.paused) return fail('Resume after reviewing the pause reason before refreshing Upwork data', 409);
+        const client = await upworkClient(env);
+        const preview = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed: row.job_type === 'fixed' });
+        const params = JSON.parse(row.create_params || '{}');
+        const old = Array.isArray(params.answers) ? params.answers as Answer[] : [];
+        params.answers = preview.questions.map(question => ({ question, answer: old.find(a => a.question === question)?.answer ?? '' }));
+        const updated = await env.DB.prepare("UPDATE proposals SET create_params = ?, error = 'Screening questions refreshed; edit the answers and review again.' WHERE id = ? AND status = 'pending' AND create_params = ? AND cover_letter = ? AND bid IS ?")
+          .bind(JSON.stringify(params), id, row.create_params, row.cover_letter, row.bid).run();
+        return updated.meta.changes ? json({ ok: true }) : fail('Proposal changed while refreshing; reload', 409);
+      }
       if (!action && method === 'PATCH') {
         const body = await readJson(req);
         if (typeof body.cover_letter !== 'string') return fail('cover_letter must be text');
@@ -453,25 +300,30 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
           if (!Number.isFinite(bid) || bid < 1 || bid > 10000) return fail('The bid must be a number between 1 and 10,000');
           bid = Math.round(bid * 100) / 100;
         }
-        const r = await env.DB.prepare("UPDATE proposals SET cover_letter = ?, bid = COALESCE(?, bid) WHERE id = ? AND status = 'pending'").bind(letter, bid, id).run();
+        const stored = await env.DB.prepare("SELECT create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ create_params: string }>();
+        if (!stored) return fail('This proposal is no longer waiting for review', 409);
+        const params = JSON.parse(stored.create_params || '{}');
+        if (body.answers !== undefined) {
+          if (!Array.isArray(body.answers)) return fail('Answers must be a list');
+          const questions = answersOf(stored.create_params).map(a => a.question);
+          const answers = body.answers.map(v => ({ question: String((v as Answer)?.question ?? ''), answer: String((v as Answer)?.answer ?? '').trim() }));
+          const problem = checkAnswers(questions, answers);
+          if (problem || answers.some((a, i) => a.question !== questions[i])) return fail(problem ?? 'Questions changed; refresh and review again');
+          params.answers = answers;
+        }
+        const r = await env.DB.prepare("UPDATE proposals SET cover_letter = ?, bid = COALESCE(?, bid), create_params = ? WHERE id = ? AND status = 'pending' AND create_params = ?")
+          .bind(letter, bid, JSON.stringify(params), id, stored.create_params).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         return json({ ok: true });
       }
       if (method === 'POST' && action === 'approve') {
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending'").bind(id).run();
+        const proposal = await env.DB.prepare("SELECT create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ create_params: string }>();
+        if (!proposal) return fail('This proposal is no longer waiting for review', 409);
+        const answers = answersOf(proposal.create_params);
+        const problem = checkAnswers(answers.map(a => a.question), answers);
+        if (problem) return fail('Review screening answers: ' + problem);
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(id, proposal.create_params).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
-        
-        // THE FIX: Reset the sender timer to 20 minutes ago so the Sender Cron sends it instantly
-        try {
-          const stateRow = await env.DB.prepare("SELECT value FROM kv WHERE key = 'state'").first<{value: string}>();
-          if (stateRow) {
-             const stateObj = JSON.parse(stateRow.value);
-             stateObj.lastSendAt = new Date(Date.now() - 20 * 60000).toISOString();
-             await env.DB.prepare("UPDATE kv SET value = ? WHERE key = 'state'").bind(JSON.stringify(stateObj)).run();
-          }
-        } catch (e) {
-          console.error('Failed to reset timer:', e);
-        }
         
         return json({ ok: true, status: 'approved' });
       }
@@ -505,22 +357,18 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 }
 
 async function relinkQueued(env: Env, loomUrl: string): Promise<number> {
-  const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status IN ('pending', 'approved') AND is_example = 0 AND loom_video_id IS NULL")
+  const { results } = await env.DB.prepare("SELECT id, cover_letter FROM proposals WHERE status = 'pending' AND is_example = 0 AND loom_video_id IS NULL")
     .all<{ id: number; cover_letter: string }>();
   const updates = results.flatMap((r) => {
     const next = swapLoomLink(r.cover_letter, loomUrl);
-    return next === r.cover_letter ? [] : [env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_url = ? WHERE id = ? AND status IN ('pending', 'approved')").bind(next, loomUrl, r.id)];
+    return next === r.cover_letter ? [] : [env.DB.prepare("UPDATE proposals SET cover_letter = ?, loom_url = ? WHERE id = ? AND status = 'pending' AND cover_letter = ?").bind(next, loomUrl, r.id, r.cover_letter)];
   });
   if (updates.length) await env.DB.batch(updates);
   return updates.length;
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown>> {
-  const len = Number(req.headers.get('content-length') || 0);
-  if (len > 64_000) throw new InvalidInput('Request is too large');
-  const body = await req.json();
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new InvalidInput('Expected a JSON object');
-  return body as Record<string, unknown>;
+  return readObject(req);
 }
 
 async function getState(env: Env) {
@@ -544,8 +392,9 @@ async function getState(env: Env) {
   const p = props.results[0] ?? {};
   return {
     ...state,
+    apifySync: await apifySyncStatus(env),
     lastScanAt: state.lastScanAt,
-    lastRun: null,
+    lastRun: await env.DB.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT 1").first(),
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
     sendingEnabled: settings.sendingEnabled,
     connectsAlertBelow: settings.connectsAlertBelow,

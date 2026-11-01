@@ -1,3 +1,4 @@
+import { getKv } from './kv';
 import type { Env } from './settings';
 
 // Email through Resend (BUILD_PLAN M7). Without RESEND_API_KEY nothing is sent and the caller shows the message on the
@@ -8,20 +9,22 @@ export const emailConfigured = (env: Env) => Boolean(env.RESEND_API_KEY);
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
-export async function sendEmail(env: Env, to: string[], subject: string, text: string, html?: string): Promise<void> {
+export async function sendEmail(env: Env, to: string[], subject: string, text: string, html?: string, idempotencyKey?: string): Promise<void> {
   if (!env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not set.');
   const recipients = to.map((t) => t.trim()).filter(Boolean);
   if (!recipients.length) throw new Error('No report email set in Settings.');
+  let payload = { from: env.REPORT_FROM || 'Upwork Auto-Bidder <onboarding@resend.dev>', to: recipients, subject, text,
+    html: html ?? `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5">${esc(text).replace(/\n/g, '<br>')}</div>` };
+  if (idempotencyKey) {
+    const key = `mail:payload:${idempotencyKey}`;
+    await env.DB.prepare('INSERT OR IGNORE INTO kv (key,value) VALUES (?,?)').bind(key, JSON.stringify(payload)).run();
+    // Provider idempotency requires identical content, even if a balance/date/recipient changes before retry.
+    payload = JSON.parse((await getKv(env, key))!) as typeof payload;
+  }
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
-    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      from: env.REPORT_FROM || 'Upwork Auto-Bidder <onboarding@resend.dev>',
-      to: recipients,
-      subject,
-      text,
-      html: html ?? `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5">${esc(text).replace(/\n/g, '<br>')}</div>`,
-    }),
+    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {

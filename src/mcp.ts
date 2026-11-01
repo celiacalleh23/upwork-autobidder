@@ -1,3 +1,6 @@
+import type { Env } from './settings';
+import { permitSearch, permitUpworkCall, recordUpworkError } from './upworkPace';
+
 // Minimal MCP client over Streamable HTTP: initialize → notifications/initialized → tools/list / tools/call.
 
 const PROTOCOL_VERSION = '2025-06-18';
@@ -25,7 +28,7 @@ export function throttleWait(e: unknown): number | null {
   const msg = e instanceof Error ? e.message : String(e);
   if (isAccountWarning(msg) || !/rate.?limit|too many requests|\b429\b/i.test(msg)) return null;
   const m = /wait about (\d+) seconds?|retry_after\D{0,6}(\d+)/i.exec(msg);
-  return Math.min(30, Number(m?.[1] ?? m?.[2] ?? 10)) * 1000 + 1000;
+  return Math.max(0, Number(m?.[1] ?? m?.[2] ?? 10)) * 1000 + 1000;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,11 +50,12 @@ export function parseSse(body: string): unknown[] {
 }
 
 export class McpClient {
+  confirmGuard?: () => Promise<void>;
   private sessionId: string | null = null;
   private protocol = PROTOCOL_VERSION;
   private nextId = 1;
 
-  constructor(private url: string, private token: string, private timeoutMs = 25_000) {}
+  constructor(private url: string, private token: string, private timeoutMs = 25_000, private env?: Env) {}
 
   private async post(body: object): Promise<Response> {
     const headers: Record<string, string> = {
@@ -67,9 +71,27 @@ export class McpClient {
   }
 
   private async request(method: string, params: object): Promise<unknown> {
+    try { return await this.requestOnce(method, params); }
+    catch (e) { if (this.env) await recordUpworkError(this.env, e); throw e; }
+  }
+
+  private async requestOnce(method: string, params: object): Promise<unknown> {
+    if (this.env) await permitUpworkCall(this.env, method === 'tools/call');
+    if (method === 'tools/call' && /confirm_preview$/.test(String((params as { name?: string }).name))) {
+      if (this.confirmGuard) await this.confirmGuard();
+    }
+    if (this.env && method === 'tools/call') {
+      const p = params as { name?: string; arguments?: { action?: string } };
+      if (/(?:^|__)find_jobs$/.test(p.name ?? '') && ['search', 'smart_search'].includes(p.arguments?.action ?? '')) await permitSearch(this.env);
+    }
     const id = this.nextId++;
     const res = await this.post({ jsonrpc: '2.0', id, method, params });
-    if (!res.ok) throw new McpError(`Upwork MCP ${method} failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      const header = res.headers.get('retry-after');
+      const wait = header ? (/^\d+$/.test(header) ? Number(header) : Math.max(0, Math.ceil((Date.parse(header) - Date.now()) / 1000))) : NaN;
+      const retry = res.status === 429 && Number.isFinite(wait) ? ` retry_after: ${wait}` : '';
+      throw new McpError(`Upwork MCP ${method} failed (${res.status})${retry}: ${(await res.text()).slice(0, 200)}`);
+    }
     const sid = res.headers.get('mcp-session-id');
     if (sid) this.sessionId = sid;
     const type = res.headers.get('content-type') ?? '';
@@ -112,6 +134,7 @@ export class McpClient {
       return await this.callOnce(name, args);
     } catch (e) {
       const wait = /confirm_preview$/.test(name) ? null : throttleWait(e);
+      if (wait !== null && wait > 30_000) throw e;
       if (wait === null) throw e;
       await sleep(wait);
       return await this.callOnce(name, args);
@@ -119,6 +142,11 @@ export class McpClient {
   }
 
   private async callOnce(name: string, args: object): Promise<unknown> {
+    try { return await this.callToolOnce(name, args); }
+    catch (e) { if (this.env) await recordUpworkError(this.env, e); throw e; }
+  }
+
+  private async callToolOnce(name: string, args: object): Promise<unknown> {
     const r = (await this.request('tools/call', { name, arguments: args })) as ToolResult;
     const text = (r.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n');
     if (r.isError) throw new McpToolError(`Upwork ${name.replace(/^.*__/, '')}: ${text.slice(0, 300) || 'error'}`);

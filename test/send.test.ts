@@ -21,9 +21,10 @@ describe('sendGate', () => {
     expect(sendGate(st({ paused: true, pausedReason: 'Upwork rate limit' }), s(), none, now)).toBe('Paused: Upwork rate limit');
     expect(sendGate(st({ upwork: { ...DEFAULT_STATE.upwork, connected: false } }), s(), none, now)).toBe('Upwork is not connected.');
   });
-  it('keeps proposals 5 minutes apart, with slack for the cron', () => {
+  it('keeps proposals at least 5 minutes apart', () => {
     expect(sendGate(st({ lastSendAt: '2026-10-23T17:57:00Z' }), s(), none, now)).toBe('Next proposal in 2 min (5 min apart).');
-    expect(sendGate(st({ lastSendAt: '2026-10-23T17:55:20Z' }), s(), none, now)).toBeNull(); // 4m40s ago
+    expect(sendGate(st({ lastSendAt: '2026-10-23T17:55:20Z' }), s(), none, now)).toContain('Next proposal');
+    expect(sendGate(st({ lastSendAt: '2026-10-23T17:55:00Z' }), s(), none, now)).toBeNull();
   });
   it('applies caps and active hours only when set', () => {
     expect(sendGate(st(), s({}, { daily: 15 }), { sentToday: 15, sentLastHour: 0 }, now)).toBe('Daily cap reached (15).');

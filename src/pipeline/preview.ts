@@ -3,7 +3,7 @@ import { findKey } from '../oauth';
 import type { State } from '../settings';
 import { stripUntrusted } from './filters';
 import type { Answer } from './letter';
-import { readBoost, type BoostInfo } from './sendRules';
+import { readBoost, finiteNumber, type BoostInfo } from './sendRules';
 
 // Upwork proposal preview (manage_proposals create). Nothing is sent: a preview only becomes a proposal through
 // confirm_preview, which only the sender calls. The first call may ask for more fields; retry once with the defaults.
@@ -45,9 +45,9 @@ export async function createPreview(
     const questions = (Array.isArray(raw) ? raw : [])
       .map((q) => (typeof q === 'string' ? q : String((q as Record<string, unknown>)?.question ?? (q as Record<string, unknown>)?.text ?? '')))
       .map((q) => stripUntrusted(q)).filter(Boolean);
-    const cost = Number(findKey(r, 'connects_cost'));
+    const cost = finiteNumber(findKey(r, 'connects_cost'));
     const can = findKey(r, 'can_apply');
-    return { previewId, connectsCost: Number.isFinite(cost) ? cost : null, canApply: typeof can === 'boolean' ? can : null, questions, extra, boost: readBoost(findKey(r, 'boost')) };
+    return { previewId, connectsCost: cost, canApply: typeof can === 'boolean' ? can : null, questions, extra, boost: readBoost(findKey(r, 'boost')) };
   }
   throw new McpError('Upwork preview kept asking for more details.');
 }

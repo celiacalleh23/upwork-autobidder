@@ -1,6 +1,6 @@
 import { seal, unseal } from './crypto';
 import { emailConfigured, sendEmail } from './email';
-import { delKv, getKv, putKv } from './kv';
+import { acquireLease, delKv, getKv, putKv, releaseLease } from './kv';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type State } from './settings';
 
 // Loom copies (M5). Loom has no public API: these are the requests loom.com itself sends, captured by Celia on Oct 22
@@ -153,7 +153,7 @@ async function saveSession(env: Env, sess: Session) {
 export async function markLoomError(env: Env, e: unknown) {
   const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
   const st = await loadState(env);
-  await patchState(env, { loom: { ...st.loom, connected: e instanceof LoomAuthError ? false : st.loom.connected, lastError: msg } });
+  await patchState(env, { loom: { ...(e instanceof LoomAuthError ? { connected: false } : {}), lastError: msg } });
 }
 
 // Runs Loom calls with the stored session: saves a renewed cookie, notes the activity, and marks the connection
@@ -179,7 +179,7 @@ async function withSession<T>(env: Env, fn: (sess: Session) => Promise<T>): Prom
     if (sess.renewed) {
       await saveSession(env, sess);
       const st = await loadState(env);
-      await patchState(env, { loom: { ...st.loom, expiresAt: sess.expiresAt } });
+      await patchState(env, { loom: { expiresAt: sess.expiresAt } });
     }
   }
 }
@@ -215,11 +215,14 @@ export async function copyForJob(env: Env, sourceUrl: string, title: string): Pr
   const source = videoIdFrom(sourceUrl);
   if (!source) return null;
   const copy = await withSession(env, (sess) => duplicate(sess, source, copyName(title)));
-  return copy ? { id: copy.id, url: shareUrl(copy.id) } : null;
+  if (!copy) return null;
+  try { await putKv(env, `loom:copy:${copy.id}`, JSON.stringify({ id: copy.id, createdAt: new Date().toISOString() })); }
+  catch (e) { await withSession(env, sess => deleteVideos(sess, [copy.id])).catch(() => undefined); throw e; }
+  return { id: copy.id, url: shareUrl(copy.id) };
 }
 
 export async function deleteCopy(env: Env, id: string): Promise<void> {
-  await withSession(env, (sess) => deleteVideos(sess, [id]));
+  if (await withSession(env, (sess) => deleteVideos(sess, [id]))) await delKv(env, `loom:copy:${id}`);
 }
 
 // ---------- Upkeep (from the 5-minute cron) ----------
@@ -237,20 +240,26 @@ export async function cleanupLoomCopies(env: Env, deleteAfterDays: number, now =
   await putKv(env, CLEANUP_KEY, String(now));
   const cutoff = new Date(now - deleteAfterDays * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
   const { results } = await env.DB.prepare(
-    'SELECT id, loom_video_id FROM proposals WHERE loom_video_id IS NOT NULL AND loom_deleted_at IS NULL AND created_at < ? ORDER BY created_at LIMIT ?',
+    "SELECT id, loom_video_id FROM proposals WHERE loom_video_id IS NOT NULL AND loom_deleted_at IS NULL AND status IN ('submitted', 'failed', 'skipped') AND created_at < ? ORDER BY created_at LIMIT ?",
   ).bind(cutoff, CLEANUP_BATCH).all<{ id: number; loom_video_id: string }>();
+  const { results: orphans } = await env.DB.prepare(`SELECT key FROM kv WHERE key LIKE 'loom:copy:%'
+    AND updated_at < datetime('now', '-1 day') AND NOT EXISTS (SELECT 1 FROM proposals WHERE loom_video_id = substr(kv.key, 11)) LIMIT 10`).all<{ key: string }>();
+  for (const orphan of orphans) await deleteCopy(env, orphan.key.slice('loom:copy:'.length));
   if (!results.length) return 0;
   return (await withSession(env, async (sess) => {
     let deleted = 0;
     for (const r of results) {
       try {
-        if (await deleteVideos(sess, [r.loom_video_id])) deleted++;
+        if (!(await deleteVideos(sess, [r.loom_video_id]))) continue;
+        deleted++;
       } catch (e) {
         if (e instanceof LoomAuthError) throw e;
         // Already gone or refused: log it and don't try again every pass.
         console.error('loom: copy not deleted', r.loom_video_id, e instanceof Error ? e.message : e);
+        continue;
       }
       await env.DB.prepare("UPDATE proposals SET loom_deleted_at = datetime('now') WHERE id = ?").bind(r.id).run();
+      await delKv(env, `loom:copy:${r.loom_video_id}`);
     }
     return deleted;
   })) ?? 0;
@@ -308,12 +317,19 @@ export function loomAlert(loom: State['loom'], sentFor: string | null, now = Dat
 
 // Emails the report address once per alert; without email the dashboard shows the same warning.
 export async function checkLoomAlert(env: Env, now = Date.now()): Promise<void> {
+  const lease = await acquireLease(env, 'loom-alert', 60_000); if (!lease) return;
+  try { await deliverLoomAlert(env, now); }
+  finally { await releaseLease(env, 'loom-alert', lease); }
+}
+
+async function deliverLoomAlert(env: Env, now: number): Promise<void> {
   const st = await loadState(env);
   const alert = loomAlert(st.loom, st.loomAlertSentFor, now);
   if (!alert) return;
   const s = await loadSettings(env);
+  if (!emailConfigured(env) || !reportEmails(s).length) return;
   if (emailConfigured(env) && reportEmails(s).length) {
-    try { await sendEmail(env, reportEmails(s), alert.subject, alert.text); }
+    try { await sendEmail(env, reportEmails(s), alert.subject, alert.text, undefined, `loom-${alert.key}`); }
     catch (e) { console.error('loom alert email failed', e instanceof Error ? e.message : e); return; } // retried next run
   }
   await patchState(env, { loomAlertSentFor: alert.key });

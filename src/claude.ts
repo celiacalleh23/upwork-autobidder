@@ -29,11 +29,13 @@ function client(env: Env): Anthropic {
   return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000, ...(env.ANTHROPIC_BASE_URL ? { baseURL: env.ANTHROPIC_BASE_URL } : {}) });
 }
 
+const dataText = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
 const jobBlock = (j: JobForClaude) => `<job_post>
-Title: ${j.title}
+Title: ${dataText(j.title)}
 Type: ${j.jobType ?? 'unknown'} · Budget: ${j.budget ?? 'not stated'} · Client country: ${j.country ?? 'unknown'}
 ${j.clientFeedbackNames.length ? `Names in this client's past reviews: ${j.clientFeedbackNames.join(', ')}\n` : ''}
-${j.description.slice(0, 12_000)}
+${dataText(j.description.slice(0, 12_000))}
 </job_post>`;
 
 async function json<T>(env: Env, system: string, user: string, schema: Record<string, unknown>, effort: 'low' | 'medium', maxTokens: number): Promise<T> {
@@ -149,7 +151,7 @@ ${profile}
 
 ${WHO}
 ${DATA_RULE}`;
-  const list = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  const list = questions.map((q, i) => `${i + 1}. ${dataText(q)}`).join('\n');
   const user = `${jobBlock(job)}\n\n<screening_questions>\n${list}\n</screening_questions>${feedback ? `\n\nYour previous answers were rejected because ${feedback}. Write new ones.` : ''}`;
   const r = await json<{ answers: string[] }>(env, system, user, {
     type: 'object', properties: { answers: { type: 'array', items: { type: 'string' } } }, required: ['answers'], additionalProperties: false,

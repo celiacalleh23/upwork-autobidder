@@ -1,3 +1,5 @@
+> Current discovery change: Upwork scans at :00/:30 after deployment; configure Apify separately for :15/:45. See [hybrid discovery rollout](docs/HYBRID-DISCOVERY.md) for limits and required live setup. Older milestone notes below describe historical behavior.
+
 # Upwork Auto-Bidder
 
 Siv's private dashboard and bidding pipeline, running on Cloudflare Workers + D1.
@@ -136,3 +138,13 @@ Proposal statuses: `pending` → `approved` → `submitting` → `submitted`, or
 4. Loom: copy the source video and rename it to the job title; 30-day cleanup.
 5. Sender: preview → confirm, one at a time, inside caps and active hours; auto-pause on warnings; falls back to Review if Upwork stops allowing automatic confirmation.
 6. Daily report email (`RESEND_API_KEY`) at 6 pm.
+
+## Local validation and repaired safety controls
+
+Use Node **24.19.0** (`.node-version`) and `npm ci`, then `npm run check` to run TypeScript, the unit/integration tests, and a local Worker bundle/dashboard JavaScript check. CI runs these checks without deployment or production credentials. Integration tests use an in-memory database and synthetic upstream responses; they never submit real proposals.
+
+Local login passwords must have at least 12 non-space characters. Keep `.dev.vars` ignored and use a development password, not the production password. Local D1 is separate from the remote database.
+
+Apify deliveries now require an independently configured **`APIFY_WEBHOOK_SECRET` of at least 32 random characters**, passed by the provider as `Authorization: Bearer …`. The old source credential is not accepted. Coordinate a new secret with the webhook configuration before any future production rollout; never put its value in Git or chat. `APIFY_TOKEN` and `APIFY_TASK_ID` enable background task-input synchronization and authenticated dataset reads. This patch does not configure those bindings or change any live task/schedule.
+
+See [repair behavior, validation and rollout notes](docs/REPAIRS.md) for dashboard changes and operational prerequisites.

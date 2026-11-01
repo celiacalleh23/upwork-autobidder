@@ -1,3 +1,8 @@
+import { discoveryDue, runScan } from './pipeline/scan';
+import { sha256b64url } from './crypto';
+import { deliverSafetyAlerts } from './notifications';
+import { receiveApify, drainApify, syncApify } from './apify';
+import { readObject, readTextStream } from './http';
 
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
@@ -64,7 +69,13 @@ function ensureSchema(env: Env): Promise<void> {
       const { results } = await env.DB.prepare(`SELECT name FROM pragma_table_info('${table}')`).all<{ name: string }>();
       const have = new Set(results.map((r) => r.name));
       const missing = ADDED_COLUMNS.filter(([t, c]) => t === table && !have.has(c));
-      if (missing.length) await env.DB.batch(missing.map(([t, c, type]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`)));
+      if (missing.length) {
+        try { await env.DB.batch(missing.map(([t, c, type]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`))); }
+        catch (e) {
+          const { results: current } = await env.DB.prepare(`SELECT name FROM pragma_table_info('${table}')`).all<{ name: string }>();
+          if (!missing.every(([, column]) => current.some(row => row.name === column))) throw e;
+        }
+      }
     }
   })().catch((e) => { schemaReady = null; throw e; });
   return schemaReady;
@@ -105,11 +116,19 @@ async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Res
   if (req.method === 'GET') return html(loginPage());
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
-  const form = await req.formData().catch(() => null);
+  await ensureSchema(env);
+  const bucket = `login:${Math.floor(Date.now() / 900_000)}:${await sha256b64url(req.headers.get('cf-connecting-ip') ?? 'local')}`;
+  const permit = await env.DB.prepare(`INSERT INTO kv (key, value) VALUES (?, '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+    WHERE CAST(value AS INTEGER) < 10 RETURNING value`).bind(bucket).first();
+  if (!permit) return html(loginPage('Too many sign-in attempts. Try again in 15 minutes.'), 429, { 'retry-after': '900' });
+  const raw = await readTextStream(req.body, 8192).catch(() => null);
+  if (raw === null) return new Response('Invalid or oversized form', { status: 413 });
+  const form = new URLSearchParams(raw);
   const password = String(form?.get('password') ?? '');
   if (!checkPassword(env, password)) {
     // Lengths only, never the values: enough to spot a stray character when reading the Worker logs.
-    console.log('login failed', { typedPasswordLength: password.length, expectedPasswordLength: (env.DASH_PASSWORD ?? '').length });
+    console.log('dashboard login refused');
     await new Promise((r) => setTimeout(r, 600));
     return html(loginPage("That password doesn't match."), 401);
   }
@@ -127,7 +146,7 @@ async function handleIntake(req: Request, env: Env): Promise<Response> {
   if (secret.length < 32) return reply({ error: 'Job intake is off. Set the INTAKE_SECRET secret (32+ characters) in Cloudflare.' }, 503);
   if (!timingSafeEqual(req.headers.get('authorization') ?? '', `Bearer ${secret}`)) return reply({ error: 'Unauthorized' }, 401);
   if (Number(req.headers.get('content-length') || 0) > 64_000) return reply({ error: 'Request is too large' }, 413);
-  const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+  const body = await readObject(req).catch(() => null);
   if (!body || typeof body !== 'object' || Array.isArray(body)) return reply({ error: 'Expected JSON: {"jobUrl": "https://www.upwork.com/jobs/~02…"}' }, 400);
   await ensureSchema(env);
   const r = await addJob(env, { jobUrl: body.jobUrl, title: body.title });
@@ -150,55 +169,8 @@ export default {
     if (url.pathname === '/oauth/upwork/callback' && req.method === 'GET') return withHeaders(await handleUpworkCallback(req, env));
     // Its own secret, not the dashboard session: called by other services.
     if (url.pathname === '/api/jobs/intake') return withHeaders(await handleIntake(req, env));
-        // ==========================================
-       // ==========================================
-    // APIFY WEBHOOK RECEIVER
-    // ==========================================
-    if (url.pathname === '/api/apify-webhook' && req.method === 'POST') {
-      try {
-        if (req.headers.get('Authorization') !== 'Bearer siv-secret-123') {
-          return new Response('Unauthorized', { status: 401 });
-        }
-
-        const payload = await req.json();
-        
-        // Log exactly what Apify sends so we can see it in Cloudflare logs
-        console.log('Apify Payload:', JSON.stringify(payload).substring(0, 500));
-
-        // Handle different Apify formats
-        const jobs = Array.isArray(payload) ? payload : (payload.items && Array.isArray(payload.items) ? payload.items : [payload]);
-
-        let addedCount = 0;
-        for (const job of jobs) {
-          try {
-            const jobUrl = job.url || job.link || job.jobUrl;
-            
-            if (!jobUrl) {
-                console.log('Skipping job: No URL found', job);
-                continue; 
-            }
-
-            const r = await addJob(env, { jobUrl: jobUrl });
-            if (r.ok) {
-              addedCount++;
-            } else {
-              console.log('addJob rejected:', r.reason, 'for URL:', jobUrl);
-            }
-
-          } catch (err) {
-             console.error('Error processing single job:', err);
-          }
-        }
-
-        return new Response(JSON.stringify({ success: true, count: addedCount }), { 
-          status: 200, 
-          headers: { 'Content-Type': 'application/json' } 
-        });
-
-      } catch (error: any) {
-        console.error('Apify Webhook Error:', error);
-        return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-      }
+    if (url.pathname === '/api/apify-webhook') {
+      return withHeaders(await receiveApify(req, env, () => ensureSchema(env)));
     }
     if (url.pathname === '/logout') {
       return withHeaders(new Response(null, { status: 303, headers: { location: '/login', 'set-cookie': clearCookie(secure) } }));
@@ -226,16 +198,22 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
   // Pipeline: job added by link → read and filter → score → letter → preview (M4) → Loom copy (M5) → submit (M6) →
-  // report (M7). No Upwork search (Oct 30).
+  // report (M7). Discovery runs separately at :00 and :30.
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
     const log = (what: string) => (e: unknown) => console.error(`${what} failed`, e instanceof Error ? e.message : e);
     const minute = new Date(event.scheduledTime).getUTCMinutes();
+    if (event.cron === UPKEEP_CRON) await env.DB.prepare(`DELETE FROM kv WHERE key IN (
+      SELECT key FROM kv WHERE ((key LIKE 'intake:hour:%' OR key LIKE 'intake:accepted:%' OR key LIKE 'login:%' OR key LIKE 'upwork:search:%') AND updated_at < datetime('now', '-2 days'))
+      OR (key LIKE 'apify:receipt:%' AND json_extract(value, '$.status') = 'done' AND updated_at < datetime('now', '-30 days')) LIMIT 100
+    )`).run();
     if (event.cron === SEND_CRON) {
-      // Sending only: the job scan was removed (Oct 30, Upwork restricted search on Rafa's account).
+      if (discoveryDue(minute)) await runScan(env, event.scheduledTime).catch(log('Upwork discovery'));
       if (!sendDue(minute, (await loadState(env)).mode)) return;
       await runSender(env).catch(log('sender'));
     } else if (event.cron === WRITE_CRON) {
+      await drainApify(env).catch(log('Apify import'));
+      await syncApify(env).catch(log('Apify settings sync'));
       // Every minute: drafts jobs added by link; with none waiting it makes no Upwork call.
       await runWriter(env).catch(log('writer'));
     } else if (event.cron === UPKEEP_CRON) {
@@ -247,6 +225,7 @@ export default {
       await cleanupLoomCopies(env, s.loom.deleteAfterDays).catch(log('loom cleanup'));
       await keepLoomAlive(env, s.loom.sourceUrl).catch(log('loom keep-alive'));
       await checkLoomAlert(env).catch(log('loom alert'));
+      await deliverSafetyAlerts(env).catch(log('safety alerts'));
       await sendDailyReport(env).catch(log('daily report'));
       // Rafa's account: twice a day, and the Connects history's first read, at Upwork's slow pace (last: it may wait).
       await accountUpkeep(env, s.caps.timezone).catch(log('account upkeep'));

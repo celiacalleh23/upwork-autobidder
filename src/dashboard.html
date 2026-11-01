@@ -256,7 +256,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
           <li><b>Filter.</b> Country, budget, rate, proposal count, then an AI match score.</li>
           <li><b>Write.</b> Claude writes the opening for this job; the rest of your template stays as is.</li>
           <li><b>Loom.</b> Your video is copied and renamed to the job title.</li>
-          <li><b>Review.</b> It waits here for you, or goes straight out in Auto-submit.</li>
+          <li><b>Review.</b> It waits here for you, or is approved automatically in Auto-submit. Sending still respects all controls.</li>
           <li><b>Send.</b> Approved proposals go out one at a time, spaced apart, in active hours.</li>
           <li><b>Log.</b> Result, Connects and Loom link are saved; daily report by email.</li>
         </ol>
@@ -340,7 +340,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <!-- SETTINGS -->
   <form id="viewSettings" class="settings" hidden novalidate>
     <section class="section" aria-labelledby="s1">
-      <header><h2 id="s1">Which jobs to bid on</h2><p>Upwork search is off (Oct 30: Upwork restricted it on Rafa's account), so jobs are added by link on the Proposals tab. Exclusions, client countries, budget and rate below still apply to them; keywords are kept for later.</p></header>
+      <p class="note info" id="apifyStatus" role="status">Checking discovery synchronization…</p>
+      <header><h2 id="s1">Which jobs to bid on</h2><p>Jobs arrive from the external provider or links you add. These filters are checked before proposals are written. Provider settings synchronize in the background; the status above shows whether they are applied.</p></header>
       <div class="field">
         <span class="lbl" id="kwLbl">Keywords</span>
         <div class="tags" id="kwTags" aria-labelledby="kwLbl"></div>
@@ -400,7 +401,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="grid">
         <div class="field" style="grid-column:1/-1"><label for="loomUrl">Source video link</label><input type="url" id="loomUrl" placeholder="https://www.loom.com/share/…"><span class="hint">Must belong to the connected Loom account; Loom only lets the owner duplicate a video.</span></div>
         <div class="field"><label for="loomDelete">Delete copies after (days)</label><input type="number" id="loomDelete" min="7" max="365"></div>
-        <div class="field"><span class="lbl">Letters already in the queue</span><button type="button" class="btn outline" id="relinkLoom">Update the link in queued letters</button><span class="hint">Puts the saved video link in every proposal waiting for review or approved that has no copy of its own. Sent ones are never changed. Saving a new link here does this by itself.</span></div>
+        <div class="field"><span class="lbl">Letters already in the queue</span><button type="button" class="btn outline" id="relinkLoom">Update the link in queued letters</button><span class="hint">Puts the saved video link in every proposal waiting for review that has no copy of its own. Approved letters keep their reviewed content. Saving a new link here does this by itself.</span></div>
       </div>
       <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div><div class="small msg bad" id="loomError" role="alert" hidden></div></div>
         <div class="conn-actions"><span class="chip warn" id="loomChip">Not connected</span>
@@ -553,6 +554,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   // ---------- State / header ----------
   function renderState() {
     const s = state;
+    const sync = s.apifySync;
+    $('apifyStatus').textContent = !sync?.configured ? 'Apify synchronization needs APIFY_TOKEN and APIFY_TASK_ID in Worker settings. Local filters still apply.'
+      : sync.status === 'applied' ? `Discovery settings synchronized${sync.appliedAt ? ' · ' + when(sync.appliedAt) : ''}.`
+      : sync.status === 'error' ? `Settings saved locally. Apify synchronization failed: ${sync.error}. It will retry automatically.`
+      : 'Settings saved locally. Apify synchronization is pending.';
+    if (sync?.lastImport?.error) $('apifyStatus').textContent += ` Import waiting: ${sync.lastImport.error}.`;
     $('account').textContent = s.upwork.connected ? `Bidding as ${s.upwork.account || 'connected account'}` : 'Upwork not connected yet';
     $('connects').textContent = fmtNum(s.connectsBalance);
     $('modeReview').setAttribute('aria-pressed', String(s.mode === 'review'));
@@ -565,7 +572,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('pausedText').textContent = s.paused ? `Bidding is paused. ${s.pausedReason || ''} Nothing is written or sent until you resume.` : '';
     $('reviewBanner').hidden = !s.switchedToReviewReason;
     $('reviewText').textContent = s.switchedToReviewReason ? `Switched back to Review first. ${s.switchedToReviewReason} Approve proposals here; Auto-submit can be turned on again once this is sorted out.` : '';
-    const low = s.connectsAlertSentAt && s.connectsAlertBelow && s.connectsBalance !== null && s.connectsBalance < s.connectsAlertBelow;
+    const low = s.connectsAlertBelow && s.connectsBalance !== null && s.connectsBalance < s.connectsAlertBelow;
     $('connectsBanner').hidden = !low;
     $('connectsText').textContent = low ? `Connects are low: ${s.connectsBalance} left (alert below ${s.connectsAlertBelow}). Add Connects on Upwork to keep proposals going.` : '';
     // senderNote is written by the last sender run; ignore a leftover "off" note once Sending is switched on.
@@ -672,7 +679,18 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const bidIn = h('input', { type: 'number', id: `bid-${p.id}`, min: '1', max: '10000', step: '0.01', style: 'max-width:160px' });
     bidIn.value = p.bid ?? '';
     const bidLabel = h('label', { for: `bid-${p.id}`, text: p.job_type === 'hourly' ? 'Bid (USD per hour)' : 'Bid (USD, whole project)' });
-    editWrap.append(ta, counter, bidLabel, bidIn);
+    const answerInputs = (p.answers || []).map((a, i) => {
+      const input = h('textarea', { rows: '3', 'aria-label': a.question, maxlength: '2000' }); input.value = a.answer;
+      return { question: a.question, input };
+    });
+    editWrap.append(ta, counter, bidLabel, bidIn, ...answerInputs.map(a => h('label', {}, a.question, a.input)));
+    const refreshQuestions = h('button', { type: 'button', class: 'btn outline', text: 'Refresh screening questions' });
+    refreshQuestions.addEventListener('click', async () => {
+      refreshQuestions.disabled = true;
+      try { await api(`/api/proposals/${p.id}/refresh-questions`, { method: 'POST' }); editing.delete(p.id); await loadQueue(); toast('Questions refreshed. Edit the answers, save, then approve.'); }
+      catch (e) { toast(e.message, true); }
+      finally { refreshQuestions.disabled = false; }
+    });
 
     const editBtn = h('button', { type: 'button', class: 'btn outline', text: 'Edit' });
     const approveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Approve' });
@@ -701,7 +719,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('div', { class: 'loom' },
           h('span', { 'aria-hidden': 'true', text: '▶' }),
           p.loom_url ? h('span', {}, 'Loom: ', h('a', { href: p.loom_url, target: '_blank', rel: 'noopener noreferrer', text: 'open video' })) : h('span', { text: 'No Loom link (set the source video in Settings)' })),
-        h('div', { class: 'actions' }, skipBtn, editBtn, approveBtn)));
+        h('div', { class: 'actions' }, refreshQuestions, skipBtn, editBtn, approveBtn)));
 
     editBtn.addEventListener('click', async () => {
       if (editWrap.hidden) {
@@ -710,11 +728,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       }
       editBtn.disabled = true;
       try {
-        await api(`/api/proposals/${p.id}`, { method: 'PATCH', body: { cover_letter: ta.value, ...(bidIn.value !== '' ? { bid: Number(bidIn.value) } : {}) } });
+        await api(`/api/proposals/${p.id}`, { method: 'PATCH', body: { cover_letter: ta.value, answers: answerInputs.map(a => ({ question: a.question, answer: a.input.value })), ...(bidIn.value !== '' ? { bid: Number(bidIn.value) } : {}) } });
         p.cover_letter = ta.value.trim(); letterBox.textContent = p.cover_letter;
         if (bidIn.value !== '') { p.bid = Math.round(Number(bidIn.value) * 100) / 100; bidChip.textContent = bidText(); }
+        p.answers = answerInputs.map(a => ({ question: a.question, answer: a.input.value.trim() }));
         editing.delete(p.id); editWrap.hidden = true; letterBox.hidden = false; editBtn.textContent = 'Edit'; approveBtn.disabled = false;
-        toast('Saved.');
+        toast('Saved.'); loadQueue();
       } catch (e) { toast(e.message, true); }
       editBtn.disabled = false;
     });
@@ -752,6 +771,17 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         r.boost_connects ? h('span', { class: 'chip pink', title: 'Boosted: Upwork charges the bid only if the proposal lands in a paid spot', text: `Boosted · ${r.boost_connects} Connects` }) : null,
         r.error ? h('span', { class: 'err', text: r.error }) : null,
         r.approved_at && via ? h('span', { class: 'sub-time', style: 'flex-basis:100%', text: `approved ${when(r.approved_at)} ${via}` }) : null);
+      if (r.status === 'unknown') {
+        const resolve = async (outcome) => {
+          const question = outcome === 'submitted' ? 'Have you checked Upwork and confirmed that this proposal was submitted?'
+            : 'Have you checked Upwork and confirmed this proposal was NOT sent? This records a failure and does not retry it.';
+          if (!confirm(question)) return;
+          try { await api(`/api/proposals/${r.id}/resolve-unknown`, { method: 'POST', body: { outcome, confirm: true } }); toast('Outcome recorded.'); refresh(); }
+          catch (e) { toast(e.message, true); }
+        };
+        stBox.append(h('button', { type: 'button', class: 'btn', text: 'Confirm submitted', onclick: () => resolve('submitted') }),
+          h('button', { type: 'button', class: 'btn', text: 'Confirm not sent', onclick: () => resolve('not_sent') }));
+      }
       const statusCell = h('td', {}, stBox);
       if (r.status === 'approved') {
         stBox.append(h('button', { type: 'button', class: 'btn', style: 'min-height:32px; padding:4px 10px; font-size:13px', text: 'Undo',
@@ -945,7 +975,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     // Upwork lists 10 proposals per page, so a full count takes several requests; keep asking until it's done.
     try {
       const period = { range: $('acctDays').value, from: $('acctFrom').value, to: $('acctTo').value };
-      let r = await api('/api/account-stats', { method: 'POST', body: period });
+      let r = await api('/api/account-stats', { method: 'POST', body: { ...period, resume: true } });
       for (let i = 0; !r.done && i < 40; i++) {
         renderAccount(r.stats, true);
         const so = Object.values(r.stats.proposals).reduce((t, c) => t + c.n, 0);
@@ -1077,7 +1107,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('saveBtn').disabled = true;
     try {
       settings = await api('/api/settings', { method: 'PUT', body: readForm() });
-      fillForm(settings); $('saveMsg').textContent = 'Saved.'; $('saveMsg').className = 'msg good';
+      fillForm(settings); $('saveMsg').textContent = 'Saved locally. Check discovery synchronization above.'; $('saveMsg').className = 'msg good';
       loadState();
     } catch (err) { $('saveMsg').textContent = err.message; $('saveMsg').className = 'msg bad'; }
     $('saveBtn').disabled = false;
@@ -1088,7 +1118,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   $('modeReview').addEventListener('click', async () => {
     $('autoConfirm').hidden = true;
     if (state.mode === 'review') return;
-    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'review' } })) }; renderState(); loadState(); toast('Review first is on. Every proposal waits for your approval.'); }
+    try { state = { ...state, ...(await api('/api/mode', { method: 'POST', body: { mode: 'review' } })) }; renderState(); loadState(); toast('Review first is on. Unsent Auto approvals return to review. Manually approved proposals retain their approval.'); }
     catch (e) { toast(e.message, true); }
   });
   $('modeAuto').addEventListener('click', () => {
@@ -1174,7 +1204,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 
   async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs()]); }
   route(); refresh();
-  setInterval(() => { if (!document.hidden && location.hash !== '#settings') refresh(); }, 60000);
+  setInterval(() => { if (!document.hidden) { if (location.hash === '#settings') loadState(); else refresh(); } }, 60000);
 })();
 </script>
 </body>

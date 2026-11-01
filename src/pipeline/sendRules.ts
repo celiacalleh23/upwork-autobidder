@@ -18,14 +18,15 @@ export function sendGate(state: State, s: Settings, counts: SendCounts, now = ne
   if (state.lastSendAt) {
     const wait = s.caps.gapMinutes * 60_000 - (now.getTime() - Date.parse(state.lastSendAt));
     // 30 s slack: the sender runs on the minute (every 5 minutes in Review) and a 5-minute gap should not skip a run.
-    if (wait > 30_000) return `Next proposal in ${Math.ceil(wait / 60_000)} min (${s.caps.gapMinutes} min apart).`;
+    if (wait > 0) return `Next proposal in ${Math.ceil(wait / 60_000)} min (${s.caps.gapMinutes} min apart).`;
   }
   return null;
 }
 
 // Connects check against the live balance and the job's cost. Returns why to wait, or null.
 export function connectsGate(balance: number | null, cost: number | null, s: Settings): string | null {
-  if (balance === null) return 'Could not read the Connects balance.';
+  if (balance === null || !Number.isFinite(balance) || balance < 0) return 'Could not read the Connects balance.';
+  if (cost === null || !Number.isFinite(cost) || cost < 0) return 'Could not read the Connects cost.';
   if (cost !== null && balance < cost) return `Waiting for Connects: balance ${balance}, this job costs ${cost}.`;
   if (s.caps.connectsFloorEnabled && balance - (cost ?? 0) < s.caps.connectsFloor) {
     return `Connects floor: sending would leave ${balance - (cost ?? 0)}, below ${s.caps.connectsFloor}.`;
@@ -48,7 +49,7 @@ export function classifyFailure(e: unknown): FailureKind {
   return 'ambiguous';
 }
 
-export type ConfirmOutcome = { ok: true; proposalId: string | null } | { ok: false; message: string };
+export type ConfirmOutcome = { ok: true; proposalId: string | null } | { ok: false; message: string; uncertain?: boolean };
 
 // confirm_preview answers status "submitted" and data.createJobProposal{status: "SUCCESS", newProposalId, error}.
 export function readConfirm(r: unknown): ConfirmOutcome {
@@ -58,7 +59,7 @@ export function readConfirm(r: unknown): ConfirmOutcome {
   const error = created?.error ?? findKey(r, 'error');
   if ((status === 'SUCCESS' || status === 'SUBMITTED') && !error) return { ok: true, proposalId: id === undefined || id === null ? null : String(id) };
   const message = typeof error === 'string' ? error : error ? JSON.stringify(error) : `Upwork answered: ${JSON.stringify(r ?? '').slice(0, 200)}`;
-  return { ok: false, message: message.slice(0, 300) };
+  return { ok: false, message: message.slice(0, 300), ...(['ERROR', 'FAILED', 'REFUSED', 'REJECTED'].includes(status) ? {} : { uncertain: true }) };
 }
 
 // Low-Connects alert: once per drop below the threshold; re-armed when the balance is back at or above it.
@@ -95,3 +96,9 @@ export function boostBid(score: number | null, b: BoostInfo | null, s: Settings,
 
 // Upwork re-reads the bids at confirm and refuses (sends nothing) when the boost no longer takes a paid slot.
 export const isBoostRefusal = (message: string) => /paid slot|bids? to beat|outbid|boost/i.test(message);
+
+export function finiteNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean' || typeof v === 'object') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}

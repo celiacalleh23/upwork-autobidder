@@ -92,18 +92,21 @@ describe('parseLedgerPage (Connects history, stored in D1)', () => {
       { amount: { rawValue: '10' }, createdDateTime: '2026-10-16T10:05:53Z', jobPost: null, reason: 'Behavioral based subsidy', transactionType: 'Connects received' },
       { amount: { rawValue: '14' }, createdDateTime: '2026-10-16T07:37:55Z', jobPost: { jobId: '~0221', jobTitle: '<untrusted_participant_content>Recreate Klaviyo flows</untrusted_participant_content>' }, reason: 'Refund job cancellation', transactionType: 'Connects refunded' },
       { amount: { rawValue: '-14' }, createdDateTime: '2026-10-15T23:24:44Z', jobPost: { jobId: '~0221', jobTitle: 'Recreate Klaviyo flows' }, reason: 'Job application', transactionType: 'Connects spent' },
-      { amount: { rawValue: '-3' }, createdDateTime: 'not a date', jobPost: null, reason: 'Job application', transactionType: 'Connects spent' },
+
     ] },
   };
   it('reads each transaction with a stable key, its kind and a positive amount', () => {
     const p = parseLedgerPage(page);
     expect(p.next).toBe('MCw0NTk4');
     expect(p.credits).toEqual({ profile_ads: 50 });
-    expect(p.rows).toHaveLength(3); // the unreadable date is skipped, never guessed
+    expect(p.rows).toHaveLength(3);
     expect(p.rows[1]).toMatchObject({ type: 'refunded', amount: 14, kind: 'applications', jobId: '~0221', jobTitle: 'Recreate Klaviyo flows' });
     expect(p.rows[2]).toMatchObject({ type: 'spent', amount: 14, kind: 'applications' });
     expect(p.rows[2].key).toBe('2026-10-15T23:24:44.000Z|spent|14|~0221|Job application');
     expect(parseLedgerPage(page).rows.map((r) => r.key)).toEqual(p.rows.map((r) => r.key)); // same page, same keys
+  });
+  it('keeps malformed history incomplete instead of silently dropping it', () => {
+    expect(() => parseLedgerPage({ transactions: [{ createdDateTime: 'not a date' }] })).toThrow('unreadable date');
   });
   it('ends at the last page', () => {
     expect(parseLedgerPage({ ...page, hasMore: false }).next).toBeNull();
@@ -129,7 +132,7 @@ describe('throttleWait (Upwork asks to slow down)', () => {
     const real = 'Upwork find_jobs: {"error_code":"SENSITIVE_RATE_LIMIT_EXCEEDED","reason":"Rate limit exceeded for this tool. Wait about 5 seconds before retrying (~12 requests/min sustained for find_jobs, find_freelancers, get_profile, and write tools). There is no daily cap — limits refill continuously."}';
     expect(throttleWait(new Error(real))).toBe(6000);
     expect(throttleWait(new Error('429 Too Many Requests'))).toBe(11000);
-    expect(throttleWait(new Error('Rate limit exceeded, wait about 300 seconds'))).toBe(31000); // capped
+    expect(throttleWait(new Error('Rate limit exceeded, wait about 300 seconds'))).toBe(301000); // preserve the full requested hold
     expect(throttleWait(new Error('Job is closed'))).toBeNull();
     expect(throttleWait(new Error('Too many requests: account restricted'))).toBeNull(); // a warning is never a wait
   });

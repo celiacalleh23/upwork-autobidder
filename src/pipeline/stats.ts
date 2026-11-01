@@ -47,7 +47,7 @@ export function resolveRange(input: { range?: unknown; days?: unknown; from?: un
 }
 // Proposal pages read per step: Workers allow 50 outside calls per request on the free plan, and a proposals step makes
 // no other Upwork calls. The dashboard keeps asking until every status is counted.
-const PAGE_BUDGET = 25;
+const PAGE_BUDGET = 5;
 const MAX_PAGES_PER_STATUS = 100; // 1,000 proposals per status; beyond that the count shows "+"
 const STATUSES = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired', 'Activated'] as const;
 
@@ -128,34 +128,34 @@ export function parseWhen(v: unknown, depth = 0): number {
 // Unreadable dates count as inside the window, so a format change can only over-count, never hide proposals.
 const before = (v: unknown, cutoff: number) => { const t = parseWhen(v); return Number.isFinite(t) && t < cutoff; };
 
-const unreadable = { n: 0 };
+
 
 // Reads one status a page at a time, from `cursor`, for at most `budget` pages. Upwork returns 10 per page, so a full
 // count can take several requests; the caller keeps the cursor between them.
-interface PageRun { n: number; viewed: number; pages: number; done: boolean; cursor: string | null }
+interface PageRun { n: number; viewed: number; pages: number; done: boolean; cursor: string | null; unreadable?: number }
 export async function readProposalPages(client: McpClient, tool: string, org: string, status: string, cutoff: number, cursor: string | null, budget: number, until = Infinity): Promise<PageRun> {
-  let n = 0, viewed = 0, pages = 0;
+  let n = 0, viewed = 0, pages = 0, unreadable = 0;
   while (pages < budget) {
     const r = await client.callTool(tool, { action: 'list', org_uid: org, params: { status, limit: 10, sort_field: 'CREATEDDATETIME', sort_order: 'DESC', ...(cursor ? { cursor } : {}) } });
     pages++;
     const edges = findKey(r, 'edges') ?? findKey(r, 'proposals') ?? [];
     const rows = Array.isArray(edges) ? edges.map((e) => findKey(e, 'node') ?? e) : [];
     // An empty page ends the list, even if Upwork still reports a next page (seen on Rafa's account, Oct 21).
-    if (!rows.length) return { n, viewed, pages, done: true, cursor: null };
+    if (!rows.length) return { n, viewed, pages, done: true, cursor: null, unreadable };
     let older = false;
     for (const row of rows) {
       const created = findKey(row, 'createdDateTime') ?? findKey(row, 'created');
       if (before(created, cutoff)) { older = true; break; }
       if (parseWhen(created) >= until) continue; // newer than the period (e.g. yesterday's figures read today)
-      if (!Number.isFinite(parseWhen(created))) unreadable.n++;
+      if (!Number.isFinite(parseWhen(created))) unreadable++;
       n++;
       if (findKey(row, 'viewedByClient') === true) viewed++;
     }
     const info = findKey(r, 'pageInfo') as { hasNextPage?: boolean; endCursor?: string } | undefined;
-    if (older || !info?.hasNextPage || !info.endCursor) return { n, viewed, pages, done: true, cursor: null };
+    if (older || !info?.hasNextPage || !info.endCursor) return { n, viewed, pages, done: true, cursor: null, unreadable };
     cursor = info.endCursor;
   }
-  return { n, viewed, pages, done: false, cursor };
+  return { n, viewed, pages, done: false, cursor, unreadable };
 }
 
 async function countContracts(client: McpClient, tool: string, org: string, status: 'ACTIVE' | 'CLOSED'): Promise<Count> {
@@ -182,9 +182,10 @@ export interface LedgerSync { cursor: string | null; complete: boolean; syncedAt
 export function parseLedgerPage(r: unknown): { rows: LedgerRow[]; next: string | null; credits: Record<string, number> | null } {
   const rows: LedgerRow[] = [];
   const tx = findKey(r, 'transactions');
+  if (!Array.isArray(tx)) throw new Error('Could not read Connects history; preserving the previous checkpoint.');
   for (const t of Array.isArray(tx) ? tx : []) {
     const ms = parseWhen(findKey(t, 'createdDateTime'));
-    if (!Number.isFinite(ms)) continue;
+    if (!Number.isFinite(ms)) throw new Error('Connects history contains an unreadable date; synchronization remains incomplete.');
     const at = new Date(ms).toISOString();
     const raw = String(findKey(t, 'transactionType') ?? '');
     const type = /spent/i.test(raw) ? 'spent' : /refund/i.test(raw) ? 'refunded' : /receiv|purchas|bought/i.test(raw) ? 'received' : 'other';
@@ -306,6 +307,13 @@ const emptyHead = (range: Range): Head => ({
 // Connects history; then proposals by status (list_freelancer_proposals, not one of Upwork's slow tools, PAGE_BUDGET
 // pages a step). Calls to get_profile and boost_profile take the slow shared pace (upworkPace.ts).
 export async function refreshAccountStats(env: Env, range: Range, resume = false, slot: 'manual' | 'auto' = 'manual'): Promise<{ stats: AccountStats; done: boolean; phase: Phase }> {
+  const lease = await acquireLease(env, `stats:${slot}`, 10 * 60_000);
+  if (!lease) throw new Error('Account refresh is already in progress; retry shortly.');
+  try { return await refreshStatsLocked(env, range, resume, slot); }
+  finally { await releaseLease(env, `stats:${slot}`, lease); }
+}
+
+async function refreshStatsLocked(env: Env, range: Range, resume: boolean, slot: 'manual' | 'auto'): Promise<{ stats: AccountStats; done: boolean; phase: Phase }> {
   const state = await loadState(env);
   const org = state.upwork.orgUid;
   const tools = state.upwork.toolNames;
@@ -325,14 +333,14 @@ export async function refreshAccountStats(env: Env, range: Range, resume = false
 
   if (prog.phase === 'head') {
     const profileTool = tool('get_profile'), contractsTool = tool('list_contracts'), boostTool = tool('boost_profile');
-    const profile = profileTool ? await paced(env, () => client.callTool(profileTool, { action: 'get', org_uid: org })).catch(() => null) : null;
+    const profile = profileTool ? await paced(env, () => client.callTool(profileTool, { action: 'get', org_uid: org })) : null;
     const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
     const contracts = contractsTool
-      ? { active: await countContracts(client, contractsTool, org, 'ACTIVE').catch(() => ({ n: 0, capped: false })),
-          closed: await countContracts(client, contractsTool, org, 'CLOSED').catch(() => ({ n: 0, capped: false })) }
+      ? { active: await countContracts(client, contractsTool, org, 'ACTIVE'),
+          closed: await countContracts(client, contractsTool, org, 'CLOSED') }
       : { active: { n: 0, capped: false }, closed: { n: 0, capped: false } };
     // get_status only reads the badge and the ad; this tool's other actions are never called.
-    const boosters = boostTool ? await paced(env, () => client.callTool(boostTool, { action: 'get_status', org_uid: org })).then(readBoosters, () => null) : null;
+    const boosters = boostTool ? await paced(env, () => client.callTool(boostTool, { action: 'get_status', org_uid: org })).then(readBoosters) : null;
     prog.head = {
       ...emptyHead(range),
       profile: {
@@ -346,21 +354,21 @@ export async function refreshAccountStats(env: Env, range: Range, resume = false
     const profileTool = tool('get_profile');
     let next = true;
     // Another run (the background catch-up) holding the history lease is reading it already.
-    if (profileTool && await acquireLease(env, 'ledger', 5 * 60_000)) {
+    const lease = profileTool ? await acquireLease(env, 'ledger', 5 * 60_000) : null;
+    if (profileTool && lease) {
       try {
         const r = await syncLedger(env, client, profileTool, org, 3);
         prog.ledgerPages += r.pages;
         next = r.caughtUp || !r.sync.complete || prog.ledgerPages >= MANUAL_LEDGER_PAGES;
-      } catch { next = true; } finally { await releaseLease(env, 'ledger'); }
+      } finally { await releaseLease(env, 'ledger', lease); }
     }
     if (next) prog.phase = 'statuses';
   } else {
-    unreadable.n = prog.unreadable;
     let budget = PAGE_BUDGET;
     while (prog.idx < STATUSES.length && budget > 0) {
       const status = STATUSES[prog.idx];
-      const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages), prog.until)
-        .catch(() => ({ n: 0, viewed: 0, pages: 1, done: true, cursor: null } as PageRun));
+      const run = await readProposalPages(client, tools.list_freelancer_proposals, org, status, prog.cutoff, prog.cursor, Math.min(budget, MAX_PAGES_PER_STATUS - prog.statusPages), prog.until);
+      prog.unreadable += run.unreadable ?? 0;
       budget -= run.pages;
       prog.statusPages += run.pages;
       prog.cur = { n: prog.cur.n + run.n, viewed: prog.cur.viewed + run.viewed };
@@ -370,7 +378,6 @@ export async function refreshAccountStats(env: Env, range: Range, resume = false
         Object.assign(prog, { idx: prog.idx + 1, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 } });
       } else prog.cursor = run.cursor;
     }
-    prog.unreadable = unreadable.n;
   }
 
   const done = prog.phase === 'statuses' && prog.idx >= STATUSES.length;
@@ -397,13 +404,14 @@ export async function accountUpkeep(env: Env, tz: string, now = Date.now()): Pro
   if (!state.upwork.connected || !state.upwork.orgUid || !state.upwork.toolNames.list_freelancer_proposals || heldByUpwork(state)) return;
   const sync = await loadLedgerSync(env);
   if (!sync.complete || sync.cursor !== null) {
-    if (await acquireLease(env, 'ledger', 5 * 60_000)) {
+    const lease = await acquireLease(env, 'ledger', 5 * 60_000);
+    if (lease) {
       try {
         const client = await upworkClient(env);
         const names = await client.listTools();
         const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
         if (profileTool) await syncLedger(env, client, profileTool, state.upwork.orgUid, 2, now);
-      } finally { await releaseLease(env, 'ledger'); }
+      } finally { await releaseLease(env, 'ledger', lease); }
     }
     return; // one Upwork task per upkeep run
   }

@@ -1,11 +1,9 @@
+import { acquireLease, releaseLease } from '../kv';
 import type { Env, Settings } from '../settings';
 import { containsTerm, recheckStored, reopenable, stripUntrusted, type StoredJob } from './filters';
 
-// Jobs come in by link (Oct 30): Upwork restricted search on Rafa's account "due to violations of our Terms of
-// Service", so this Worker no longer searches Upwork at all. A job is added from the dashboard ("Add a job") or by
-// POST /api/jobs/intake with INTAKE_SECRET, and waits as 'matched'. The writer then reads that one job by id
-// (find_jobs get, not a search), fills in its title, type, budget and country, applies the filters and drafts the
-// proposal, which waits in the Review queue (or is approved in Auto-submit).
+// Jobs arrive by manual link, Upwork discovery, or Apify. Automatic sources share canonical
+// deduplication and the intake cap; the writer fetches full details and applies current filters.
 
 export const ADDED_REASON = 'Added by link';
 export const MAX_ADDED_PER_HOUR = 30; // a feed gone wrong must not run up Claude and Loom costs
@@ -26,26 +24,34 @@ export const jobUrl = (id: string) => `https://www.upwork.com/jobs/~02${id}`;
 
 export type AddResult =
   | { ok: true; id: string; status: 'added' | 'requeued' }
-  | { ok: false; id: string | null; reason: string };
+  | { ok: false; id: string | null; reason: string; retryable?: boolean };
 
 // Adds a job for the writer. A job already proposed is left alone; one filtered, scored low or failed before comes back
 // (someone chose it on purpose). `title` is a placeholder until the writer reads the job.
-export async function addJob(env: Env, input: { jobUrl?: unknown; title?: unknown }): Promise<AddResult> {
+export async function addJob(env: Env, input: { jobUrl?: unknown; title?: unknown; postedAt?: unknown; automatic?: boolean }): Promise<AddResult> {
   const id = jobIdFromUrl(String(input.jobUrl ?? ''));
   if (!id) return { ok: false, id: null, reason: 'Paste an Upwork job link (https://www.upwork.com/jobs/…).' };
-  const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE reason = ? AND seen_at >= datetime('now', '-1 hour')")
-    .bind(ADDED_REASON).first<{ n: number }>();
-  if ((recent?.n ?? 0) >= MAX_ADDED_PER_HOUR) return { ok: false, id, reason: `At most ${MAX_ADDED_PER_HOUR} jobs an hour; try again later.` };
-  const title = stripUntrusted(String(input.title ?? '')).replace(/\s+/g, ' ').trim().slice(0, 300) || 'Job added by link';
-  const existing = await env.DB.prepare('SELECT status FROM jobs WHERE id = ?').bind(id).first<{ status: string }>();
-  if (existing) {
-    if (existing.status === 'proposed') return { ok: false, id, reason: 'A proposal for this job is already in the queue or the log.' };
-    if (existing.status === 'matched') return { ok: false, id, reason: 'This job is already waiting to be written.' };
-    await env.DB.prepare("UPDATE jobs SET status = 'matched', reason = ?, seen_at = datetime('now') WHERE id = ?").bind(ADDED_REASON, id).run();
-    return { ok: true, id, status: 'requeued' };
-  }
-  await env.DB.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, ?, ?, 'matched', ?)").bind(id, title, jobUrl(id), ADDED_REASON).run();
-  return { ok: true, id, status: 'added' };
+  const lease = await acquireLease(env, 'intake', 30_000);
+  if (!lease) return { ok: false, id, reason: 'Intake is busy; retry shortly.', retryable: true };
+  try {
+    const existing = await env.DB.prepare('SELECT status FROM jobs WHERE id = ?').bind(id).first<{ status: string }>();
+    if (existing && (input.automatic || ['proposed', 'matched'].includes(existing.status))) {
+      return { ok: false, id, reason: existing.status === 'proposed' ? 'A proposal for this job is already in the queue or the log.' : 'This job was already imported; its existing outcome is preserved.' };
+    }
+    if (await env.DB.prepare('SELECT 1 FROM proposals WHERE job_id = ?').bind(id).first()) return { ok: false, id, reason: 'A proposal for this job already exists.' };
+    const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM kv WHERE key LIKE 'intake:accepted:%' AND updated_at >= datetime('now', '-1 hour')").first<{ n: number }>();
+    const count = recent?.n ?? 0;
+    const key = `intake:accepted:${crypto.randomUUID()}`;
+    if (count >= MAX_ADDED_PER_HOUR) return { ok: false, id, reason: `At most ${MAX_ADDED_PER_HOUR} jobs an hour; retry later.`, retryable: true };
+    const title = stripUntrusted(String(input.title ?? '')).replace(/\s+/g, ' ').trim().slice(0, 300) || 'Job added by link';
+    const date = typeof input.postedAt === 'string' ? Date.parse(input.postedAt) : NaN;
+    const posted = Number.isFinite(date) && date <= Date.now() + 300_000 ? new Date(date).toISOString() : null;
+    const change = existing
+      ? env.DB.prepare("UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status NOT IN ('matched', 'proposed')").bind(ADDED_REASON, id)
+      : env.DB.prepare("INSERT OR IGNORE INTO jobs (id, title, url, status, reason, posted_at) VALUES (?, ?, ?, 'matched', ?, ?)").bind(id, title, jobUrl(id), ADDED_REASON, posted);
+    await env.DB.batch([change, env.DB.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").bind(key, id)]);
+    return { ok: true, id, status: existing ? 'requeued' : 'added' };
+  } finally { await releaseLease(env, 'intake', lease); }
 }
 
 // Jobs still waiting as 'matched' are re-checked against the current settings, so a filter changed after they were

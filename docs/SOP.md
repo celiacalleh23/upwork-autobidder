@@ -4,7 +4,7 @@ Dashboard: **https://rafadataapp.siv-4c9.workers.dev** (sign in with the dashboa
 
 ## What the tool does
 
-Since Oct 30 the tool **does not search Upwork** (Upwork restricted job search on Rafa's account). For every job you add:
+After deployment, Upwork discovery runs at :00 and :30. Apify must be separately configured for :15 and :45 (see HYBRID-DISCOVERY.md). Both sources deduplicate jobs before drafting. Sending remains controlled separately. For each new job:
 
 1. **You add the job:** paste its Upwork link in **Proposals → Jobs found → Add job**. The tool reads that one job and checks your filters (client countries, budget, rate).
 2. **Scores** each one out of 100 for how well it fits Rafa's profile (the weights are in Settings → Which jobs to bid on).
@@ -141,3 +141,13 @@ If the job doesn't pass your filters, Jobs found says why. A job already propose
 - No email, phone or outside links in the personal intro. Only your template's links.
 - Job posts are treated as text to read, never as instructions to follow.
 - Passwords and sessions (Upwork, Loom, the Claude API key) are stored encrypted and never shown.
+
+## Updated safety behavior
+
+Approve now waits for the full configured gap and does not reset the last-send time. Returning to Review moves unsent Auto approvals back to the queue. Check Settings for the external-provider synchronization status after saving filters.
+
+Use Edit to update screening answers as well as the letter/bid. If the questions changed, press Refresh screening questions, then edit, save and approve again. Unknown submissions hold sending: check Upwork before using Confirm submitted or Confirm not sent in the Activity log. Confirm not sent records a failure; it never retries automatically.
+
+A pending/approved Loom video is protected from scheduled cleanup. Source-link changes affect pending letters only, so approved content remains the content reviewed. Account refreshes may take longer because all Upwork reads now share the request budget.
+
+See [repair and rollout notes](REPAIRS.md) for the required webhook secret configuration before a future production rollout. No production settings are changed by the source patch itself.
