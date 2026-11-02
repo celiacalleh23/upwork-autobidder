@@ -43,7 +43,7 @@ describe('evaluateJob', () => {
   it('filters clients outside the allowed countries, and keeps aliases working', () => {
     expect(evaluateJob(job({ client: { country: 'Pakistan' } }), siv, new Set())).toMatchObject({ status: 'filtered', reason: 'Client country: Pakistan' });
     expect(evaluateJob(job({ client: { country: 'United Kingdom' } }), { ...siv, allowedCountries: ['UK'] }, new Set()).status).toBe('matched');
-    expect(evaluateJob(job({ client: {} }), siv, new Set())).toMatchObject({ reason: 'Client country unknown' });
+    expect(evaluateJob(job({ client: {} }), siv, new Set()).status).toBe('matched');
     expect(evaluateJob(job({ client: { country: 'Pakistan' } }), { ...siv, allowedCountries: [] }, new Set()).status).toBe('matched');
   });
 
@@ -156,5 +156,17 @@ describe('cannotApply', () => {
   it('reopens jobs dropped by the old can_apply reason, but not by the new closed reason', () => {
     expect(reopenable('Upwork says this job can no longer be applied to')).toBe(true);
     expect(reopenable(CLOSED_REASON)).toBe(false);
+  });
+});
+
+
+describe('unknown client countries', () => {
+  it.each([undefined, '', '   ', 'unknown', ' Unknown '])('keeps an otherwise matching job with country %j', country => {
+    expect(evaluateJob(job({ client: { country } }), siv, new Set()).status).toBe('matched');
+    expect(recheckStored({ title: 'Klaviyo flows', job_type: 'hourly', budget: '40.00/hr', client_country: country ?? null }, siv)).toBeNull();
+  });
+  it('keeps other filters active and makes old unknown-country rejections eligible for recheck', () => {
+    expect(evaluateJob(job({ client: {}, title: 'Klaviyo WordPress' }), { ...siv, exclude: ['WordPress'] }, new Set())).toMatchObject({ reason: 'Excluded word: WordPress' });
+    expect(reopenable('Client country unknown')).toBe(true);
   });
 });

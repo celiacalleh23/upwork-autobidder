@@ -62,7 +62,7 @@ const COUNTRY_ALIASES: Record<string, string> = {
 };
 export function normalizeCountry(s: string | undefined): string {
   const k = (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-  return COUNTRY_ALIASES[k] ?? k;
+  return k === 'unknown' ? '' : COUNTRY_ALIASES[k] ?? k;
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -83,8 +83,7 @@ export function recheckStored(job: StoredJob, s: Settings): string | null {
   if (excluded) return `Excluded word: ${excluded}`;
   if (s.allowedCountries.length) {
     const country = normalizeCountry(job.client_country ?? undefined);
-    if (!country) return 'Client country unknown';
-    if (!s.allowedCountries.some((c) => normalizeCountry(c) === country)) return `Client country: ${job.client_country}`;
+    if (country && !s.allowedCountries.some((c) => normalizeCountry(c) === country)) return `Client country: ${job.client_country}`;
   }
   const budget = parseBudget(job.job_type ?? undefined, job.budget ?? undefined);
   if (budget?.kind === 'fixed' && s.minFixedBudget > 0 && budget.amount < s.minFixedBudget) return `Budget $${budget.amount} below $${s.minFixedBudget}`;
@@ -103,7 +102,7 @@ export function connectsOverLimit(cost: number | null, s: Settings): string | nu
 // Filter reasons that recheckStored can re-evaluate from stored data, so a job dropped by a setting that changed since
 // (a misspelt country, a removed exclusion, a lowered budget) can come back.
 // 'Upwork says this job can no longer be applied to' was also given (until Oct 22) when only Connects were short.
-const REOPENABLE = ['Client country:', 'Excluded word:', 'Budget $', 'Rate up to $', 'Upwork says this job can no longer be applied to'];
+const REOPENABLE = ['Client country unknown', 'Client country:', 'Excluded word:', 'Budget $', 'Rate up to $', 'Upwork says this job can no longer be applied to'];
 
 // Upwork's can_apply is false both for a closed job and when the balance can't pay the job's Connects. Only the first
 // is a reason to drop the job; the second waits for Connects (the sender checks the balance before sending).
@@ -129,8 +128,7 @@ export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<stri
 
   if (s.allowedCountries.length) {
     const country = normalizeCountry(job.client?.country);
-    if (!country) return no('Client country unknown');
-    if (!s.allowedCountries.some((c) => normalizeCountry(c) === country)) return no(`Client country: ${job.client?.country}`);
+    if (country && !s.allowedCountries.some((c) => normalizeCountry(c) === country)) return no(`Client country: ${job.client?.country}`);
   }
 
   if (s.verifiedOnly && job.client?.verification_status !== 'VERIFIED') return no('Client payment not verified');
