@@ -562,7 +562,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const s = state;
     const sync = s.apifySync;
     const scan = s.scanConnection;
-    $('scanStatus').textContent = `${scan?.connected ? 'Connected: ' + (scan.account || 'account not checked') : 'Not connected'}${scan?.lastError ? ' · ' + scan.lastError : ''}`;
+    $('scanStatus').textContent = scan?.connected ? 'Connected' : 'Not connected';
     $('scanCheck').hidden = $('scanDisconnect').hidden = !scan?.connected;
     const summary = (r) => !r ? 'no completed attempt recorded' : `${when(r.at)} · ${r.queries} searches · ${r.imported} imported${r.truncated ? ' · result limit reached' : ''}${r.error ? ' · error: ' + r.error : ''}`;
     $('discoveryStatus').textContent = `Upwork bidding account: :00/:30. Additional scan-only account: :15/:45. Each scans every 30 minutes with its own search quota. ${s.paused ? 'Paused. ' : ''}Bidding account: ${summary(s.discovery?.bidding)}. Additional scan-only account: ${scan?.connected ? summary(s.discovery?.scan) : 'not connected'}. Apify: ${sync?.lastImport?.at ? 'last import ' + when(sync.lastImport.at) + (sync.lastImport.error ? ' · ' + sync.lastImport.error : '') : 'no import recorded'}. Apify schedule is managed separately.`;
