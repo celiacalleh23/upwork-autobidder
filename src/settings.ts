@@ -305,7 +305,7 @@ export function validateSettings(input: unknown): Settings {
     caps: {
       daily: num(caps.daily, 0, 500, 'Daily cap'),
       hourly: num(caps.hourly, 0, 60, 'Hourly cap'),
-      gapMinutes: num(caps.gapMinutes, 5, 120, 'Minimum gap'),
+      gapMinutes: num(caps.gapMinutes, 3, 120, 'Minimum gap'),
       activeStart: hhmm(caps.activeStart, 'Active from'),
       activeEnd: hhmm(caps.activeEnd, 'Active until'),
       timezone: tz(caps.timezone),

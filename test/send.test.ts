@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isAccountWarning, McpAuthError, McpError, McpToolError, throttleWait } from '../src/mcp';
 import { alertAction, classifyFailure, connectsGate, readConfirm, sendGate } from '../src/pipeline/sendRules';
-import { DEFAULT_SETTINGS, DEFAULT_STATE, type Settings, type State } from '../src/settings';
+import { DEFAULT_SETTINGS, DEFAULT_STATE, validateSettings, type Settings, type State } from '../src/settings';
 
 // Siv's settings (BUILD_PLAN §11a): 24/7, no caps, 5 min apart, no floor, sending switched on.
 const s = (over: Partial<Settings> = {}, caps: Partial<Settings['caps']> = {}): Settings => {
@@ -90,5 +90,15 @@ describe('alertAction', () => {
     expect(alertAction(300, 250, '2026-10-23T10:00:00Z')).toBe('reset');
     expect(alertAction(300, 250, null)).toBeNull();
     expect(alertAction(10, 0, null)).toBeNull(); // alert off
+  });
+});
+
+
+describe('minimum sending gap setting', () => {
+  it('accepts three minutes and preserves higher configured gaps', () => {
+    expect(validateSettings(s({}, { gapMinutes: 3 })).caps.gapMinutes).toBe(3);
+    expect(validateSettings(s({}, { gapMinutes: 10 })).caps.gapMinutes).toBe(10);
+    expect(() => validateSettings(s({}, { gapMinutes: 2 }))).toThrow('Minimum gap');
+    expect(() => validateSettings(s({}, { gapMinutes: 121 }))).toThrow('Minimum gap');
   });
 });

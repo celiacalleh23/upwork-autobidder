@@ -437,7 +437,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="grid">
         <div class="field"><label for="capDaily">Proposals per day (0 = no limit)</label><input type="number" id="capDaily" min="0" max="500"></div>
         <div class="field"><label for="capHourly">Proposals per hour (0 = no limit)</label><input type="number" id="capHourly" min="0" max="60"></div>
-        <div class="field"><label for="capGap">Minutes between proposals</label><input type="number" id="capGap" min="5" max="120"></div>
+        <div class="field"><label for="capGap">Minimum minutes between proposals</label><input type="number" id="capGap" min="3" max="120" aria-describedby="capGapHint"><span class="hint" id="capGapHint">Auto-submit uses random / humanized sending: 3–9 minutes between proposals. A higher minimum here takes priority.</span></div>
         <div class="field"><label for="activeStart">Active from</label><input type="time" id="activeStart"></div>
         <div class="field"><label for="activeEnd">Active until</label><input type="time" id="activeEnd"></div>
         <div class="field"><label for="timezone">Time zone</label>
