@@ -4,6 +4,7 @@ export interface Env {
   APIFY_WEBHOOK_SECRET?: string;
   APIFY_TOKEN?: string;
   APIFY_TASK_ID?: string;
+  APIFY_PROVIDER?: 'neatrat' | 'hyperbach';
   DASH_PASSWORD?: string;
   TOKEN_KEY?: string;
   ANTHROPIC_API_KEY?: string;

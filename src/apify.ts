@@ -77,7 +77,7 @@ export async function drainApify(env: Env): Promise<void> {
         const j = object(value);
         const raw = j?.url ?? j?.link ?? j?.jobUrl;
         const url = object(raw)?.href ?? object(raw)?.url ?? raw;
-        const result = await addJob(env, { jobUrl: url, title: j?.title ?? j?.jobTitle, postedAt: j?.publishedDate ?? j?.postedAt ?? j?.published_date, automatic: true });
+        const result = await addJob(env, { jobUrl: url, title: j?.title ?? j?.jobTitle, postedAt: j?.date_posted ?? j?.publishedDate ?? j?.postedAt ?? j?.published_date, automatic: true });
         if (!result.ok && result.retryable) throw new Error(result.reason);
         if (result.ok) receipt.imported++;
         else if (result.id) receipt.duplicates++;
@@ -97,14 +97,38 @@ export async function drainApify(env: Env): Promise<void> {
   } finally { await releaseLease(env, 'apify-import', lease); }
 }
 
-interface Sync { revision: string; input: ObjectValue; status: 'pending' | 'applied' | 'error'; error: string | null; nextAt: number; appliedAt: string | null }
-export function discoveryInput(s: Settings): ObjectValue {
+type Provider = 'neatrat' | 'hyperbach';
+const provider = (env: Env): Provider => env.APIFY_PROVIDER ?? 'neatrat';
+const LEGACY_KEYS = ['query', 'location', 'paymentVerified', 'fixedPriceRange', 'hourlyRateRange', 'maxJobAge', 'rawUrl', 'jobType', 'page', 'pagesToScrape', 'perPage', 'sort'];
+interface Sync { provider?: Provider; taskId?: string; revision: string; input: ObjectValue; status: 'pending' | 'applied' | 'error'; error: string | null; nextAt: number; appliedAt: string | null }
+export function discoveryInput(s: Settings, actor: Provider = 'neatrat'): ObjectValue {
+  if (actor === 'hyperbach') {
+    return {
+      keywords: s.keywords.map(k => `"${k.replaceAll('"', '').trim()}"`).join(' OR '),
+      keywords_match: 'strict',
+      client_location: s.allowedCountries.map(c => c === 'SWE' ? 'Sweden' : c).join(' OR '),
+      notifications_only: true, date_posted: '60m', estimate: false,
+      ...(s.verifiedOnly ? { buyer_payment_verified: true } : {}),
+    };
+  }
   return { query: s.keywords.map(k => `"${k.replaceAll('"', '').trim()}"`).join(' OR '), location: s.allowedCountries.map(c => c === 'SWE' ? 'Sweden' : c),
     paymentVerified: s.verifiedOnly, fixedPriceRange: [s.minFixedBudget], hourlyRateRange: [s.minHourlyRate], maxJobAge: { value: 60, unit: 'minutes' } };
 }
 // The dashboard owns search terms, countries, verification and minimum budgets only.
 // Use the hybrid 60-minute window; preserve maximum budgets, job types, cookies and schedule.
-export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue): ObjectValue {
+export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue, actor: Provider = 'neatrat'): ObjectValue {
+  if (actor === 'hyperbach') {
+    const desired: ObjectValue = { ...existing, ...managed };
+    for (const key of LEGACY_KEYS) delete desired[key];
+    if (!('buyer_payment_verified' in managed)) delete desired.buyer_payment_verified;
+    // A page cursor changes this into a historic replay; the scheduled feed owns its position.
+    delete desired.page_after;
+    if (existing.fields !== undefined) {
+      if (!Array.isArray(existing.fields) || !existing.fields.every(f => typeof f === 'string')) throw new Error('Hyperbach fields must be a list of field names.');
+      if (existing.fields.length) desired.fields = [...new Set([...existing.fields, 'url', 'title', 'date_posted'])];
+    }
+    return desired;
+  }
   const desired = { ...existing, ...managed };
   if ('query' in managed) delete desired.rawUrl;
   for (const key of ['fixedPriceRange', 'hourlyRateRange']) {
@@ -128,7 +152,7 @@ export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue)
 }
 
 export function syncStatement(env: Env, settings: Settings): D1PreparedStatement {
-  const desired: Sync = { revision: crypto.randomUUID(), input: discoveryInput(settings), status: 'pending', error: null, nextAt: 0, appliedAt: null };
+  const desired: Sync = { provider: provider(env), taskId: env.APIFY_TASK_ID, revision: crypto.randomUUID(), input: discoveryInput(settings, provider(env)), status: 'pending', error: null, nextAt: 0, appliedAt: null };
   return env.DB.prepare(`INSERT INTO kv (key,value,updated_at) VALUES ('apify:sync',?,datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(desired));
 }
@@ -138,7 +162,7 @@ export async function requestApifySync(env: Env, settings: Settings): Promise<vo
 export async function apifySyncStatus(env: Env) {
   const raw = await getKv(env, 'apify:sync'), last = await getKv(env, 'apify:lastImport');
   const s = raw ? JSON.parse(raw) as Sync : null;
-  return { configured: Boolean(env.APIFY_TOKEN && validTaskId(env.APIFY_TASK_ID)), configurationError: !env.APIFY_TOKEN ? 'APIFY_TOKEN is missing' : !validTaskId(env.APIFY_TASK_ID) ? 'APIFY_TASK_ID is missing or invalid (use a task ID or owner~task-name)' : null, status: s?.status ?? 'not-requested', error: s?.error ?? null, appliedAt: s?.appliedAt ?? null, lastImport: last ? JSON.parse(last) : null };
+  return { provider: provider(env), configured: Boolean(env.APIFY_TOKEN && validTaskId(env.APIFY_TASK_ID)), configurationError: !env.APIFY_TOKEN ? 'APIFY_TOKEN is missing' : !validTaskId(env.APIFY_TASK_ID) ? 'APIFY_TASK_ID is missing or invalid (use a task ID or owner~task-name)' : null, status: s?.status ?? 'not-requested', error: s?.error ?? null, appliedAt: s?.appliedAt ?? null, lastImport: last ? JSON.parse(last) : null };
 }
 export async function syncApify(env: Env): Promise<void> {
   if (!env.APIFY_TOKEN || !validTaskId(env.APIFY_TASK_ID)) return;
@@ -147,16 +171,27 @@ export async function syncApify(env: Env): Promise<void> {
   try {
     const raw = await getKv(env, 'apify:sync'); if (!raw) return;
     const s = JSON.parse(raw) as Sync;
+    if ((s.provider ?? 'neatrat') !== provider(env) || (s.taskId !== undefined && s.taskId !== env.APIFY_TASK_ID)) {
+      s.status = 'error'; s.error = 'The Apify provider or task changed. Save dashboard settings or use Sync saved settings to Apify now before applying filters.';
+      await env.DB.prepare("UPDATE kv SET value=? WHERE key='apify:sync' AND json_extract(value,'$.revision')=?").bind(JSON.stringify(s),s.revision).run();
+      return;
+    }
     if (s.status === 'applied' || s.nextAt > Date.now()) return;
     try {
       // Manage task input only. Schedules, actor versions, proxies and other input keys are preserved.
+      if (['ayZDNeptTaU4NUy6M', 'doradoasesino~siv-job-feed-hyperbach'].includes(env.APIFY_TASK_ID) && provider(env) !== 'hyperbach') throw new Error('Set APIFY_PROVIDER to hyperbach before synchronizing this Hyperbach task. No input was changed.');
+      if (provider(env) === 'hyperbach') {
+        const task = object(await apifyJson(env, `actor-tasks/${env.APIFY_TASK_ID}`));
+        if (object(task?.data)?.actId !== 'RDMDCh3d2XZKng8Mz') throw new Error('APIFY_TASK_ID is not a task for hyperbach/upwork-scraper-ai. No input was changed.');
+      }
       const path = `actor-tasks/${env.APIFY_TASK_ID}/input`;
       const existing = object(await apifyJson(env, path));
       if (!existing) throw new Error('Task input is not an object');
-      const desired = mergeDiscoveryInput(existing, s.input);
+      const desired = mergeDiscoveryInput(existing, s.input, provider(env));
       await apifyJson(env, path, { method: 'PUT', body: JSON.stringify(desired) });
       const verified = object(await apifyJson(env, path));
-      if (!verified || verified.rawUrl || Object.keys(s.input).some(k => JSON.stringify(verified[k]) !== JSON.stringify(desired[k]))) throw new Error('Apify did not confirm the saved input');
+      const removed = provider(env) === 'hyperbach' ? [...LEGACY_KEYS, 'page_after', ...(!('buyer_payment_verified' in s.input) ? ['buyer_payment_verified'] : [])] : [];
+      if (!verified || verified.rawUrl || removed.some(k => k in verified) || [...Object.keys(s.input), ...(provider(env) === 'hyperbach' && desired.fields !== undefined ? ['fields'] : [])].some(k => JSON.stringify(verified[k]) !== JSON.stringify(desired[k]))) throw new Error('Apify did not confirm the saved input');
       s.status = 'applied'; s.appliedAt = new Date().toISOString(); s.error = null;
     } catch (e) { s.status = 'error'; s.error = e instanceof Error ? e.message : 'Sync failed'; s.nextAt = Date.now() + 5 * 60_000; }
     // A slow request cannot acknowledge or overwrite a newer desired revision.
