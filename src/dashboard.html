@@ -232,7 +232,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <section class="status" aria-label="Pipeline status">
       <span><span class="dot" id="statusDot"></span><strong id="statusText">Loading</strong></span>
       <span>Active hours: <strong id="activeHours">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="When proposals may be sent. 24/7 means any time of day.">i</button></span>
-      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically and each one is sent as soon as it is written, newest job first. Only Siv switches to Auto-submit.">i</button></span>
+      <span>Mode: <strong id="modeText">Review first</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Review first: every proposal waits for your approval. Auto-submit: proposals are approved automatically and sent newest job first, with a random 5–16 minute wait between sends. Caps and any longer minimum gap still apply. Only Siv switches to Auto-submit.">i</button></span>
       <span>Sending: <strong id="sendState">–</strong><button class="info-btn" type="button" aria-label="What this means" data-tip="Off: nothing goes to Upwork, approved proposals wait. On: approved proposals are sent one at a time. Switch it in Settings, Sending.">i</button></span>
     </section>
 
@@ -642,7 +642,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       .filter(Boolean).join(' · ') || 'No Connects floor or alert';
     $('sFailed').textContent = fmtNum(t.failed);
     $('sFailed').className = 'value' + (t.failed ? ' v-bad' : '');
-    const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', `${c.gapMinutes} min apart`];
+    const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', s.mode === 'auto' ? `random 5–16 min between sends (${c.gapMinutes} min minimum)` : `${c.gapMinutes} min apart`];
     $('rulesLine').textContent = `Guardrails: ${pace.join(' · ')} ${c.connectsFloor ? `· stop below ${c.connectsFloor} Connects ` : ''}· one proposal per job · auto-pause on any Upwork warning.`;
     $('capLine').textContent = pace.join(', ');
     $('boostLine').textContent = s.boost && s.boost.inAuto ? `Proposals scoring ${s.boost.minScore}+ are boosted, up to ${s.boost.maxConnects} Connects each (Settings → Caps and guardrails).` : 'Boosting is off (Settings → Caps and guardrails).';

@@ -1,4 +1,5 @@
 import { dayStartUtc } from '../api';
+import { autoSendWait } from './pace';
 import { emailConfigured, sendEmail } from '../email';
 import { acquireLease, delKv, getKv, putKv, releaseLease, ownsLease } from '../kv';
 import type { McpClient } from '../mcp';
@@ -167,7 +168,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     const at = `${latest.at.replace(' ', 'T')}Z`;
     if (!state.lastSendAt || Date.parse(at) > Date.parse(state.lastSendAt)) state.lastSendAt = at;
   }
-  const gate = sendGate(state, s, await countSent(env, s));
+  const gate = sendGate(state, s, await countSent(env, s)) ?? await autoSendWait(env, state);
   const hasUnknown = await env.DB.prepare("SELECT 1 FROM proposals WHERE status = 'unknown' LIMIT 1").first();
   if (gate && !(hasUnknown && s.sendingEnabled && !state.paused && state.upwork.connected)) { await setNote(env, gate); return null; }
 
@@ -284,7 +285,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     // This attempt is claimed but has not been transmitted; exclude its own reservation.
     counts.sentToday = Math.max(0, counts.sentToday - 1);
     counts.sentLastHour = Math.max(0, counts.sentLastHour - 1);
-    const blocked = sendGate(current, settings, counts)
+    const blocked = sendGate(current, settings, counts) ?? await autoSendWait(env, current)
       ?? (current.controlsVersion !== state.controlsVersion ? 'Controls changed while preparing this send.' : null)
       ?? (JSON.stringify(settings) !== JSON.stringify(s) ? 'Settings changed while preparing this send.' : null)
       ?? (current.mode === 'review' && row.approved_via !== 'dashboard' ? 'Manual approval is required in Review mode.' : null);
