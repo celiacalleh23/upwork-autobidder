@@ -46,6 +46,11 @@ export async function scanAccount(env: Env, scheduledTime: number, purpose: Upwo
     await putKv(env, key('slot'), slot);
     const start = Number(await getKv(env, key('keywordOffset')) ?? 0) % s.keywords.length;
     let imported = 0, queries = 0, truncated = 0;
+    const record = async (error: string | null) => {
+      const run = JSON.stringify({ at: new Date().toISOString(), source: 'Upwork', purpose, queries, imported, truncated, error });
+      await env.DB.batch([key('lastScan'), `discovery:run:${purpose}:${slot}`].map(name =>
+        env.DB.prepare("INSERT INTO kv(key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(name, run)));
+    };
     try {
       const client = await upworkClient(env, purpose);
       for (let i = 0; i < Math.min(MAX_QUERIES, s.keywords.length); i++) {
@@ -70,10 +75,15 @@ export async function scanAccount(env: Env, scheduledTime: number, purpose: Upwo
         await putKv(env, key('keywordOffset'), String((start + i + 1) % s.keywords.length));
       }
       if (purpose === 'bidding') await patchState(env, { lastScanAt: new Date().toISOString() });
-      await putKv(env, key('lastScan'), JSON.stringify({ at: new Date().toISOString(), queries, imported, truncated, error: null }));
+      await record(null);
     } catch (e) {
-      await putKv(env, key('lastScan'), JSON.stringify({ at: new Date().toISOString(), queries, imported, truncated, error: e instanceof Error ? e.message : 'Discovery failed' }));
+      await record(e instanceof Error ? e.message : 'Discovery failed');
       throw e;
     }
   } finally { await releaseLease(env, leaseName, lease); }
+}
+
+export async function discoveryRunHistory(env: Env) {
+  const { results } = await env.DB.prepare("SELECT value FROM kv WHERE key LIKE 'discovery:run:%' ORDER BY json_extract(value,'$.at') DESC, key DESC LIMIT 20").all<{ value: string }>();
+  return results.map(row => JSON.parse(row.value));
 }

@@ -51,3 +51,22 @@ it('rotates accounts at quarter hours and keeps independent search budgets', asy
   for(let i=0;i<15;i++)await putKv(e,`upwork:search:full${i}`,String(Date.now()));
   await expect(permitSearch(e)).rejects.toThrow('quota');await expect(permitSearch(e,true)).resolves.toBeUndefined();
 });
+it('records each Upwork run including empty results and failures, without duplicating cron replays', async () => {
+  const e=env();
+  await patchState(e,{paused:false,upwork:{connected:true,orgUid:'primary',toolNames:{find_jobs:'find_jobs'}}});
+  await saveSettings(e,{...structuredClone(DEFAULT_SETTINGS),keywords:['Email']});
+  const callTool=vi.fn().mockResolvedValueOnce({jobs:[]}).mockRejectedValueOnce(new Error('Upwork unavailable'));
+  vi.spyOn(oauth,'upworkClient').mockResolvedValue({callTool} as unknown as McpClient);
+  const start=Date.UTC(2026,10,2,12,0);
+  await runScan(e,start); await runScan(e,start);
+  await expect(runScan(e,start+1800000)).rejects.toThrow('Upwork unavailable');
+  const {discoveryRunHistory}=await import('../src/pipeline/scan');
+  const history=await discoveryRunHistory(e);
+  expect(history).toHaveLength(2);
+  expect(history).toEqual(expect.arrayContaining([
+    expect.objectContaining({source:'Upwork',purpose:'bidding',imported:0,error:null}),
+    expect.objectContaining({source:'Upwork',purpose:'bidding',error:'Upwork unavailable'}),
+  ]));
+  expect(history.every(r => Number.isFinite(Date.parse(r.at)))).toBe(true);
+  expect(callTool).toHaveBeenCalledTimes(2);
+});

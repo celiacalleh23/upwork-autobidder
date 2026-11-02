@@ -1,3 +1,4 @@
+import { discoveryRunHistory } from './pipeline/scan';
 import { scanConnection, upworkClient } from './oauth';
 import { createPreview } from './pipeline/preview';
 import type { Answer } from './pipeline/letter';
@@ -416,6 +417,7 @@ async function getState(env: Env) {
     ...state,
     apifySync: await apifySyncStatus(env),
     apifyRuns: await apifyRunHistory(env),
+    discoveryRuns: await discoveryRunHistory(env),
     scanConnection: await scanConnection(env),
     scanAccountDisabled: env.SCAN_ACCOUNT_DISABLED === 'true',
     discovery: { bidding: await getDiscovery(env, 'discovery:lastScan'), scan: await getDiscovery(env, 'discovery:lastScan:scan') },

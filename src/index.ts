@@ -209,6 +209,7 @@ export default {
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     if (event.cron === UPKEEP_CRON) await env.DB.prepare(`DELETE FROM kv WHERE key IN (
       SELECT key FROM kv WHERE ((key LIKE 'intake:hour:%' OR key LIKE 'intake:accepted:%' OR key LIKE 'login:%' OR key LIKE 'upwork:search:%' OR key LIKE 'upwork:scanSearch:%') AND updated_at < datetime('now', '-2 days'))
+      OR (key LIKE 'discovery:run:%' AND updated_at < datetime('now', '-30 days'))
       OR (key LIKE 'apify:receipt:%' AND json_extract(value, '$.status') = 'done' AND updated_at < datetime('now', '-30 days')) LIMIT 100
     )`).run();
     if (event.cron === SEND_CRON) {
