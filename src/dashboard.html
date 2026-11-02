@@ -266,8 +266,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
 
     <p class="note info" id="discoveryStatus" role="status">Checking discovery status…</p>
     <details class="panel"><summary><b>Recent discovery runs</b></summary>
-      <p class="small muted">Recent Apify and Upwork runs, including runs that found no new jobs. Apify runs appear when their successful-run notification arrives. Times use this device’s time zone. Upwork history starts with this update.</p>
-      <div style="overflow-x:auto"><table><thead><tr><th>Source</th><th>Run</th><th>Time</th></tr></thead><tbody id="apifyRuns"></tbody></table></div>
+      <p class="small muted">Times use this device’s time zone.</p>
+      <div style="overflow-x:auto"><table><thead><tr><th>Time</th></tr></thead><tbody id="apifyRuns"></tbody></table></div>
     </details>
     <section class="panel" id="jobs" aria-labelledby="jH">
       <div class="row-head">
@@ -589,16 +589,15 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('scanConnect').hidden = !!s.scanAccountDisabled;
     if (s.scanAccountDisabled) $('scanFinish').hidden = true;
     $('scanCheck').hidden = $('scanDisconnect').hidden = !!s.scanAccountDisabled || !scan?.connected;
-    const summary = (r) => !r ? 'no completed attempt recorded' : `${when(r.at)} · ${r.queries} searches · ${r.imported} imported${r.truncated ? ' · result limit reached' : ''}${r.error ? ' · error: ' + r.error : ''}`;
-    $('discoveryStatus').textContent = `Upwork bidding account: :00/:30. ${s.scanAccountDisabled ? '' : 'Additional scan-only account: :15/:45. Each scans every 30 minutes with its own search quota.'} ${s.paused ? 'Paused. ' : ''}Bidding account: ${summary(s.discovery?.bidding)}. ${s.scanAccountDisabled ? '' : 'Additional scan-only account: ' + (scan?.connected ? summary(s.discovery?.scan) : 'not connected') + '. '}Apify: ${sync?.lastImport?.at ? 'last import ' + when(sync.lastImport.at) + (sync.lastImport.error ? ' · ' + sync.lastImport.error : '') : 'no import recorded'}. Apify schedule is managed separately.`;
     const runTime = iso => iso ? new Date(iso).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Unavailable';
     const runs = [
-      ...(s.apifyRuns || []).map(r => ({source:'Apify', at:r.finishedAt || r.receivedAt, label:r.finishedAt ? 'New run executed' : 'Run notification received'})),
-      ...(s.discoveryRuns || []).map(r => ({source:'Upwork', at:r.at, label:r.error ? 'Run failed' : 'New run executed'})),
+      ...(s.apifyRuns || []).map(r => ({at:r.finishedAt || r.receivedAt})),
+      ...(s.discoveryRuns || []).filter(r => !r.error).map(r => ({at:r.at})),
     ].sort((a,b) => Date.parse(b.at) - Date.parse(a.at)).slice(0,40);
+    $('discoveryStatus').textContent = runs.length ? runTime(runs[0].at) : 'No completed runs recorded yet.';
     $('apifyRuns').replaceChildren(...(runs.length ? runs.map(r =>
-      h('tr', {}, ...[r.source, r.label, runTime(r.at)].map(value => h('td', {text:String(value)})))
-    ) : [h('tr', {}, h('td', {colSpan:3,text:'No discovery runs recorded yet.'}))]));
+      h('tr', {}, h('td', {text:runTime(r.at)}))
+    ) : [h('tr', {}, h('td', {text:'No completed runs recorded yet.'}))]));
     renderApifySync(sync);
     $('account').textContent = s.upwork.connected ? `Bidding as ${s.upwork.account || 'connected account'}` : 'Upwork not connected yet';
     $('connects').textContent = fmtNum(s.connectsBalance);
