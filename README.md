@@ -1,4 +1,4 @@
-> Current discovery change: Upwork scans at :00/:30 after deployment; configure Apify separately for :15/:45. See [hybrid discovery rollout](docs/HYBRID-DISCOVERY.md) for limits and required live setup. Older milestone notes below describe historical behavior.
+> Current discovery change: The bidding Upwork account scans at :00/:30; an optional separate scan-only account scans at :15/:45 with independent quotas. Configure Apify separately. See [hybrid discovery rollout](docs/HYBRID-DISCOVERY.md) for limits and required live setup. Older milestone notes below describe historical behavior.
 
 # Upwork Auto-Bidder
 

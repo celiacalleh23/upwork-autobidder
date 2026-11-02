@@ -9,7 +9,7 @@ import schemaSql from '../schema.sql';
 import { handleApi } from './api';
 import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie, timingSafeEqual } from './auth';
 import { MissingKey } from './crypto';
-import { checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
+import { callbackPurpose, checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
 import { runWriter } from './pipeline/write';
 import { syncDue, syncTrackRecord } from './pipeline/profile';
 import { refreshConnects, runSender } from './pipeline/send';
@@ -97,15 +97,17 @@ h1{margin:0;font-size:20px;color:${ok ? 'var(--accent)' : 'var(--bad)'}} p{margi
 
 async function handleUpworkCallback(req: Request, env: Env): Promise<Response> {
   await ensureSchema(env);
+  const params = new URL(req.url).searchParams;
+  const purpose = await callbackPurpose(env, params);
   try {
-    await finishUpworkAuth(env, new URL(req.url).searchParams);
+    await finishUpworkAuth(env, params, purpose);
   } catch (e) {
     console.error('upwork callback failed', e instanceof Error ? e.message : e);
     const msg = e instanceof OAuthError || e instanceof MissingKey ? e.message : 'Something went wrong while connecting. Check the Worker logs and try again.';
     return html(resultPage(false, msg), 400);
   }
   // Signed in; reading the account and Connects can fail separately and shows on the dashboard with a "Check now" button.
-  const msg = await checkUpwork(env).then((s) => `Bidding as ${s.upwork.account ?? 'the freelancer account'} · returning to the dashboard…`, () => 'Signed in. Some account details could not be read yet; see Settings on the dashboard.');
+  const msg = await checkUpwork(env, purpose).then((s) => `${purpose === 'scan' ? 'Scanning only as' : 'Bidding as'} ${s.upwork.account ?? 'the freelancer account'} · returning to the dashboard…`, () => 'Signed in. Some account details could not be read yet; see Settings on the dashboard.');
   return html(resultPage(true, msg));
 }
 
@@ -187,7 +189,7 @@ export default {
     if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname));
     if (url.pathname === '/oauth/upwork/start' && req.method === 'GET') {
       try {
-        return withHeaders(new Response(null, { status: 303, headers: { location: await startUpworkAuth(env, url.origin), 'cache-control': 'no-store' } }));
+        return withHeaders(new Response(null, { status: 303, headers: { location: await startUpworkAuth(env, url.origin, url.searchParams.get('purpose') === 'scan' ? 'scan' : 'bidding'), 'cache-control': 'no-store' } }));
       } catch (e) {
         console.error('upwork start failed', e instanceof Error ? e.message : e);
         const msg = e instanceof OAuthError || e instanceof MissingKey ? e.message : 'Could not reach Upwork. Try again in a minute.';
@@ -198,13 +200,13 @@ export default {
     return withHeaders(new Response('Not found', { status: 404 }));
   },
   // Pipeline: job added by link → read and filter → score → letter → preview (M4) → Loom copy (M5) → submit (M6) →
-  // report (M7). Discovery runs separately at :00 and :30.
+  // report (M7). Bidding-account discovery runs at :00/:30; the separate scanner runs at :15/:45.
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env);
     const log = (what: string) => (e: unknown) => console.error(`${what} failed`, e instanceof Error ? e.message : e);
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     if (event.cron === UPKEEP_CRON) await env.DB.prepare(`DELETE FROM kv WHERE key IN (
-      SELECT key FROM kv WHERE ((key LIKE 'intake:hour:%' OR key LIKE 'intake:accepted:%' OR key LIKE 'login:%' OR key LIKE 'upwork:search:%') AND updated_at < datetime('now', '-2 days'))
+      SELECT key FROM kv WHERE ((key LIKE 'intake:hour:%' OR key LIKE 'intake:accepted:%' OR key LIKE 'login:%' OR key LIKE 'upwork:search:%' OR key LIKE 'upwork:scanSearch:%') AND updated_at < datetime('now', '-2 days'))
       OR (key LIKE 'apify:receipt:%' AND json_extract(value, '$.status') = 'done' AND updated_at < datetime('now', '-30 days')) LIMIT 100
     )`).run();
     if (event.cron === SEND_CRON) {

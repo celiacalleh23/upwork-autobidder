@@ -1,6 +1,6 @@
 import { timingSafeEqual } from './auth';
 import { sha256b64url } from './crypto';
-import { readBody, readResponseBody } from './http';
+import { readBody, readResponseBody, readTextStream } from './http';
 import { acquireLease, getKv, ownsLease, putKv, releaseLease } from './kv';
 import { addJob } from './pipeline/jobs';
 import { InvalidInput, type Env, type Settings } from './settings';
@@ -54,6 +54,7 @@ async function apifyJson(env: Env, path: string, init: RequestInit = {}): Promis
   if (!env.APIFY_TOKEN) throw new Error('APIFY_TOKEN is missing');
   const res = await fetch(`https://api.apify.com/v2/${path}`, { ...init, headers: headers(env), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`Apify request failed (${res.status})`);
+  if (init.method === 'PUT') { if (!res.body) return null; const text = await readTextStream(res.body, 1_000_000); return text.trim() ? JSON.parse(text) : null; }
   return readResponseBody(res);
 }
 
@@ -105,6 +106,7 @@ export function discoveryInput(s: Settings): ObjectValue {
 // Use the hybrid 60-minute window; preserve maximum budgets, job types, cookies and schedule.
 export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue): ObjectValue {
   const desired = { ...existing, ...managed };
+  if ('query' in managed) delete desired.rawUrl;
   for (const key of ['fixedPriceRange', 'hourlyRateRange']) {
     const minimum = (managed[key] as number[] | undefined)?.[0];
     if (minimum === undefined) continue;
@@ -154,7 +156,7 @@ export async function syncApify(env: Env): Promise<void> {
       const desired = mergeDiscoveryInput(existing, s.input);
       await apifyJson(env, path, { method: 'PUT', body: JSON.stringify(desired) });
       const verified = object(await apifyJson(env, path));
-      if (!verified || Object.keys(s.input).some(k => JSON.stringify(verified[k]) !== JSON.stringify(desired[k]))) throw new Error('Apify did not confirm the saved input');
+      if (!verified || verified.rawUrl || Object.keys(s.input).some(k => JSON.stringify(verified[k]) !== JSON.stringify(desired[k]))) throw new Error('Apify did not confirm the saved input');
       s.status = 'applied'; s.appliedAt = new Date().toISOString(); s.error = null;
     } catch (e) { s.status = 'error'; s.error = e instanceof Error ? e.message : 'Sync failed'; s.nextAt = Date.now() + 5 * 60_000; }
     // A slow request cannot acknowledge or overwrite a newer desired revision.

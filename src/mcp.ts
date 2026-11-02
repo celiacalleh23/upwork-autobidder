@@ -55,7 +55,7 @@ export class McpClient {
   private protocol = PROTOCOL_VERSION;
   private nextId = 1;
 
-  constructor(private url: string, private token: string, private timeoutMs = 25_000, private env?: Env) {}
+  constructor(private url: string, private token: string, private timeoutMs = 25_000, private env?: Env, private scanOnly = false) {}
 
   private async post(body: object): Promise<Response> {
     const headers: Record<string, string> = {
@@ -82,7 +82,7 @@ export class McpClient {
     }
     if (this.env && method === 'tools/call') {
       const p = params as { name?: string; arguments?: { action?: string } };
-      if (/(?:^|__)find_jobs$/.test(p.name ?? '') && ['search', 'smart_search'].includes(p.arguments?.action ?? '')) await permitSearch(this.env);
+      if ((p.name ?? '').split(/__|\./).pop() === 'find_jobs' && ['search', 'smart_search'].includes(p.arguments?.action ?? '')) await permitSearch(this.env, this.scanOnly);
     }
     const id = this.nextId++;
     const res = await this.post({ jsonrpc: '2.0', id, method, params });
@@ -130,6 +130,11 @@ export class McpClient {
   // per-minute limit turns a call away, it waits as long as Upwork asks and tries once more (Celia, Oct 29). Never for
   // confirm_preview: a confirm is sent at most once per run, and a refused one waits for the next run (send.ts).
   async callTool(name: string, args: object): Promise<unknown> {
+    if (this.scanOnly) {
+      const base = name.split(/__|\./).pop();
+      const action = (args as { action?: string }).action;
+      if (base !== 'list_accounts' && !(base === 'find_jobs' && action === 'search')) throw new McpError('Scan-only connection cannot call this Upwork tool.');
+    }
     try {
       return await this.callOnce(name, args);
     } catch (e) {

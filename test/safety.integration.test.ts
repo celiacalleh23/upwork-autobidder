@@ -206,6 +206,19 @@ describe('Apify task recovery', () => {
   });
 });
 
+it('explicit Apify sync accepts an empty PUT response and clears overriding rawUrl',async()=>{
+  const e={...env(),APIFY_TOKEN:'synthetic',APIFY_TASK_ID:'task'};
+  let input:Record<string,unknown>={rawUrl:'https://www.upwork.com/nx/search/jobs/?q=wrong'};
+  vi.stubGlobal('fetch',async(url:string,init:RequestInit)=>{
+    expect(url).toBe('https://api.apify.com/v2/actor-tasks/task/input');
+    if(init.method==='PUT'){input=JSON.parse(String(init.body));return new Response(null,{status:204});}
+    return new Response(JSON.stringify(input));
+  });
+  const response=await handleApi(request('/api/apify/sync',{}),e,'/api/apify/sync');
+  expect(response.status).toBe(200);expect(await response.json()).toMatchObject({status:'applied'});
+  expect(input).not.toHaveProperty('rawUrl');expect(input.maxJobAge).toEqual({value:60,unit:'minutes'});
+});
+
 describe('notifications and calendar boundaries',()=>{
   it('sends one daily report under concurrent cron execution',async()=>{
     const e={...env(),RESEND_API_KEY:'synthetic'};const s=structuredClone(DEFAULT_SETTINGS);s.report={email:'test@example.invalid',hour:0};await saveSettings(e,s);

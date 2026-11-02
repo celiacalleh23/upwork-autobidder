@@ -70,3 +70,11 @@ describe('boost settings', () => {
     expect(() => validateSettings({ ...DEFAULT_SETTINGS, caps: { ...DEFAULT_SETTINGS.caps, boostMaxConnects: 0 } })).toThrow('Boost');
   });
 });
+
+it('accepts a configured boost ceiling above 100 without raising the saved default or provider limit', () => {
+  expect(validateSettings(s({boostMaxConnects:1000})).caps.boostMaxConnects).toBe(1000);
+  expect(()=>validateSettings(s({boostMaxConnects:1001}))).toThrow('Boost');
+  expect(DEFAULT_SETTINGS.caps.boostMaxConnects).toBe(20);
+  expect(boostBid(90,{...open,recommended:150},s({boostMaxConnects:1000}),2000,'auto')).toBe(150);
+  expect(boostBid(90,{...open,recommended:150,max:100},s({boostMaxConnects:1000}),2000,'auto')).toBeNull();
+});

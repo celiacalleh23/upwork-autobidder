@@ -1,7 +1,7 @@
-import { upworkClient } from './oauth';
+import { scanConnection, upworkClient } from './oauth';
 import { createPreview } from './pipeline/preview';
 import type { Answer } from './pipeline/letter';
-import { apifySyncStatus } from './apify';
+import { apifySyncStatus, requestApifySync, syncApify } from './apify';
 import { readObject } from './http';
 import {
   Env, InvalidInput, loadSettings, loadState, patchState, saveSettings, validateSettings,
@@ -97,6 +97,11 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
     if (path === '/api/state' && method === 'GET') return json(await getState(env));
 
+    if (path === '/api/apify/sync' && method === 'POST') {
+      await requestApifySync(env, await loadSettings(env));
+      await syncApify(env);
+      return json(await apifySyncStatus(env));
+    }
     if (path === '/api/settings' && method === 'GET') return json(await loadSettings(env));
     if (path === '/api/settings' && method === 'PUT') {
       const before = await loadSettings(env);
@@ -133,6 +138,18 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
       return fail('Mode must be review or auto');
     }
 
+    if (path === '/api/upwork/scan/finish' && method === 'POST') {
+      const body = await readJson(req);
+      await finishUpworkAuth(env, paramsFromPasted(String(body.url ?? '')), 'scan');
+      const st = await checkUpwork(env, 'scan');
+      return json({ok:true,account:st.upwork.account});
+    }
+    if (path === '/api/upwork/scan/check' && method === 'POST') {
+      const st = await checkUpwork(env, 'scan'); return json({ok:true,account:st.upwork.account});
+    }
+    if (path === '/api/upwork/scan/disconnect' && method === 'POST') {
+      await disconnectUpwork(env, 'scan'); return json({ok:true});
+    }
     if (path === '/api/upwork/check' && method === 'POST') {
       try {
         await checkUpwork(env);
@@ -349,7 +366,7 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
     return fail('Not found', 404);
   } catch (e) {
-    if (e instanceof InvalidInput) return fail(e.message);
+    if (e instanceof InvalidInput || e instanceof OAuthError || e instanceof MissingKey) return fail(e.message);
     if (e instanceof SyntaxError) return fail('The request body is not valid JSON');
     console.error(e);
     return fail('Something went wrong on the server. Check the Worker logs.', 500);
@@ -393,6 +410,8 @@ async function getState(env: Env) {
   return {
     ...state,
     apifySync: await apifySyncStatus(env),
+    scanConnection: await scanConnection(env),
+    discovery: { bidding: await getDiscovery(env, 'discovery:lastScan'), scan: await getDiscovery(env, 'discovery:lastScan:scan') },
     lastScanAt: state.lastScanAt,
     lastRun: await env.DB.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT 1").first(),
     activeNow: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone),
@@ -433,3 +452,5 @@ async function csv(env: Env): Promise<Response> {
     },
   });
 }
+
+async function getDiscovery(env: Env, key: string) { const row = await env.DB.prepare('SELECT value FROM kv WHERE key=?').bind(key).first<{value:string}>(); return row ? JSON.parse(row.value) : null; }

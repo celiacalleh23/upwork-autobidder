@@ -88,13 +88,14 @@ export async function clearThrottle(env: Env): Promise<void> {
 }
 
 // Search attempts, including retries, use shared rolling quotas confirmed by the account owner.
-export async function permitSearch(env: Env): Promise<void> {
+export async function permitSearch(env: Env, scanOnly = false): Promise<void> {
   const now = Date.now();
+  const prefix = scanOnly ? 'upwork:scanSearch:' : 'upwork:search:';
   const r = await env.DB.prepare(`INSERT INTO kv(key,value)
     SELECT ?, ? WHERE
-      (SELECT COUNT(*) FROM kv WHERE key LIKE 'upwork:search:%' AND CAST(value AS INTEGER) > ?) < 15
-      AND (SELECT COUNT(*) FROM kv WHERE key LIKE 'upwork:search:%' AND CAST(value AS INTEGER) > ?) < 150
-      AND (SELECT COUNT(*) FROM kv WHERE key LIKE 'upwork:search:%' AND CAST(value AS INTEGER) > ?) < 750`)
-    .bind(`upwork:search:${crypto.randomUUID()}`, String(now), now - 60_000, now - 3600_000, now - 86400_000).run();
+      (SELECT COUNT(*) FROM kv WHERE key LIKE ? AND CAST(value AS INTEGER) > ?) < 15
+      AND (SELECT COUNT(*) FROM kv WHERE key LIKE ? AND CAST(value AS INTEGER) > ?) < 150
+      AND (SELECT COUNT(*) FROM kv WHERE key LIKE ? AND CAST(value AS INTEGER) > ?) < 750`)
+    .bind(`${prefix}${crypto.randomUUID()}`, String(now), `${prefix}%`, now - 60_000, `${prefix}%`, now - 3600_000, `${prefix}%`, now - 86400_000).run();
   if (!r.meta.changes) throw new UpworkBusy('Upwork search quota reached; discovery waits for a later scan.');
 }

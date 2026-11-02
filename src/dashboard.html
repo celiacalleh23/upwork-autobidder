@@ -264,6 +264,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       </aside>
     </div>
 
+    <p class="note info" id="discoveryStatus" role="status">Checking discovery status…</p>
     <section class="panel" id="jobs" aria-labelledby="jH">
       <div class="row-head">
         <h2 id="jH">Jobs found <span class="small muted" id="writerLine"></span></h2>
@@ -340,7 +341,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   <!-- SETTINGS -->
   <form id="viewSettings" class="settings" hidden novalidate>
     <section class="section" aria-labelledby="s1">
-      <p class="note info" id="apifyStatus" role="status">Checking discovery synchronization…</p>
+      <p class="note info" id="apifyStatus" role="status">Checking discovery synchronization…</p><button type="button" class="btn outline" id="apifySyncNow">Sync saved settings to Apify now</button>
       <header><h2 id="s1">Which jobs to bid on</h2><p>Jobs arrive from the external provider or links you add. These filters are checked before proposals are written. Provider settings synchronize in the background; the status above shows whether they are applied.</p></header>
       <div class="field">
         <span class="lbl" id="kwLbl">Keywords</span>
@@ -451,7 +452,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <div class="field"><label for="boostScore">Boost proposals with a match score of at least</label>
           <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches in Auto-submit</span></label>
           <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Only in Auto-submit: proposals sent from Review first are never boosted. Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
-        <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="100"><span class="hint">If a top slot needs more, the proposal goes out without a boost.</span></div>
+        <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="1000"><span class="hint">If a top slot needs more, the proposal goes out without a boost.</span></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
       </div>
       <p class="note info">Always on: one proposal per job, no contact details in letters, and an automatic pause at any rate-limit or account warning from Upwork.</p>
@@ -478,6 +479,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         </ol>
         <div class="addrow" style="max-width:none"><input id="upworkPaste" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:53682/upwork-callback?code=…" aria-label="Address from the Upwork tab"><button type="button" class="btn primary" id="upworkFinishBtn">Finish</button></div>
       </div>
+      <div class="conn"><div><b>Additional Upwork account — scanning only</b><div class="small muted" id="scanStatus">Not connected</div></div>
+        <div class="conn-actions"><a class="btn outline" id="scanConnect" href="/oauth/upwork/start?purpose=scan" target="_blank" rel="noopener">Connect scan-only account</a>
+          <button type="button" class="btn" id="scanCheck">Check connection</button><button type="button" class="btn danger" id="scanDisconnect">Disconnect scan-only</button></div></div>
+      <div class="note info" id="scanFinish" hidden><b>Connect your separate account for discovery</b><p>Sign in to your own Upwork freelancer account in the new tab, allow the connection, then paste the complete localhost callback address below. This connection searches only; proposals and Connects remain on the bidding account.</p>
+        <div class="addrow"><input id="scanPaste" type="url" autocomplete="off" spellcheck="false" aria-label="Scan-only Upwork callback address"><button type="button" class="btn primary" id="scanFinishBtn">Finish scan-only connection</button></div></div>
       <div class="conn" id="examplesRow" hidden><div><b>Example data</b><div class="small muted">Sample proposals shown before the first real ones.</div></div><button type="button" class="btn danger" id="clearExamples2">Remove examples</button></div>
     </section>
 
@@ -555,6 +561,11 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   function renderState() {
     const s = state;
     const sync = s.apifySync;
+    const scan = s.scanConnection;
+    $('scanStatus').textContent = `${scan?.connected ? 'Connected: ' + (scan.account || 'account not checked') : 'Not connected'}${scan?.lastError ? ' · ' + scan.lastError : ''}`;
+    $('scanCheck').hidden = $('scanDisconnect').hidden = !scan?.connected;
+    const summary = (r) => !r ? 'no completed attempt recorded' : `${when(r.at)} · ${r.queries} searches · ${r.imported} imported${r.truncated ? ' · result limit reached' : ''}${r.error ? ' · error: ' + r.error : ''}`;
+    $('discoveryStatus').textContent = `Upwork bidding account: :00/:30. Additional scan-only account: :15/:45. Each scans every 30 minutes with its own search quota. ${s.paused ? 'Paused. ' : ''}Bidding account: ${summary(s.discovery?.bidding)}. Additional scan-only account: ${scan?.connected ? summary(s.discovery?.scan) : 'not connected'}. Apify: ${sync?.lastImport?.at ? 'last import ' + when(sync.lastImport.at) + (sync.lastImport.error ? ' · ' + sync.lastImport.error : '') : 'no import recorded'}. Apify schedule is managed separately.`;
     $('apifyStatus').textContent = !sync?.configured ? `Apify synchronization unavailable: ${sync?.configurationError || 'check APIFY_TOKEN and APIFY_TASK_ID in Worker settings'}. Local filters still apply.`
       : sync.status === 'applied' ? `Discovery settings synchronized${sync.appliedAt ? ' · ' + when(sync.appliedAt) : ''}.`
       : sync.status === 'error' ? `Settings saved locally. Apify synchronization failed: ${sync.error}. It will retry automatically.`
@@ -1101,7 +1112,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     };
   }
   function dirty() { $('saveMsg').textContent = 'Unsaved changes'; $('saveMsg').className = 'msg'; }
-  $('viewSettings').addEventListener('input', (e) => { if (!['upworkPaste', 'loomPaste', 'loomExpires'].includes(e.target.id)) dirty(); });
+  $('viewSettings').addEventListener('input', (e) => { if (!['upworkPaste', 'scanPaste', 'loomPaste', 'loomExpires'].includes(e.target.id)) dirty(); });
   $('viewSettings').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('saveBtn').disabled = true;
@@ -1141,6 +1152,16 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   }
   $('clearExamples').addEventListener('click', clearExamples);
   $('clearExamples2').addEventListener('click', clearExamples);
+  $('scanConnect').addEventListener('click', () => { $('scanFinish').hidden = false; $('scanPaste').value = ''; });
+  $('scanFinishBtn').addEventListener('click', async () => {
+    try { await api('/api/upwork/scan/finish', {method:'POST',body:{url:$('scanPaste').value}}); $('scanPaste').value=''; $('scanFinish').hidden=true; await refresh(); toast('Scan-only Upwork account connected.'); } catch(e) { toast(e.message,true); }
+  });
+  $('scanCheck').addEventListener('click', async () => {try {await api('/api/upwork/scan/check',{method:'POST'}); await refresh();} catch(e){toast(e.message,true);} });
+  $('scanDisconnect').addEventListener('click', async () => {try {await api('/api/upwork/scan/disconnect',{method:'POST'}); await refresh();} catch(e){toast(e.message,true);} });
+  $('apifySyncNow').addEventListener('click', async (ev) => {
+    ev.target.disabled=true;
+    try { const r=await api('/api/apify/sync',{method:'POST'}); toast(r.status==='applied'?'Apify confirmed the saved settings.':r.error || r.configurationError || 'Apify synchronization queued.',r.status==='error'||!r.configured); await refresh(); } catch(e){toast(e.message,true);} finally{ev.target.disabled=false;}
+  });
   $('upworkConnect').addEventListener('click', () => { $('upworkFinish').hidden = false; $('upworkPaste').value = ''; });
   $('upworkFinishBtn').addEventListener('click', async (ev) => {
     const b = ev.currentTarget; b.disabled = true; b.textContent = 'Connecting…';

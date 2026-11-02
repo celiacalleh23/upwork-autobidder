@@ -4,6 +4,24 @@ import { acquireLease, delKv, getKv, putKv, releaseLease } from './kv';
 import { McpAuthError, McpClient } from './mcp';
 import { loadState, patchState, type Env, type State } from './settings';
 
+export type UpworkPurpose = 'bidding' | 'scan';
+const keyFor = (key: string, purpose: UpworkPurpose) => purpose === 'scan' ? `${key}:scan` : key;
+export const emptyScanConnection = { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null } satisfies State['upwork'];
+export async function scanConnection(env: Env): Promise<State['upwork']> {
+  const raw = await getKv(env, 'upwork:scanConnection');
+  return raw ? { ...emptyScanConnection, ...JSON.parse(raw) } : { ...emptyScanConnection };
+}
+async function connectionState(env: Env, purpose: UpworkPurpose): Promise<State> {
+  const st = await loadState(env);
+  return purpose === 'scan' ? { ...st, upwork: await scanConnection(env) } : st;
+}
+async function patchConnection(env: Env, patch: Parameters<typeof patchState>[1], purpose: UpworkPurpose): Promise<State> {
+  if (purpose === 'bidding') return patchState(env, patch);
+  if (patch.upwork) await env.DB.prepare(`INSERT INTO kv(key,value) VALUES ('upwork:scanConnection',?)
+    ON CONFLICT(key) DO UPDATE SET value=json_patch(kv.value,excluded.value)`).bind(JSON.stringify({ ...await scanConnection(env), ...patch.upwork })).run();
+  return connectionState(env, purpose);
+}
+
 // Upwork sign-in: OAuth 2.1 with dynamic client registration and PKCE, as advertised by the MCP server.
 
 const STATE_TTL_MS = 10 * 60_000;
@@ -78,8 +96,8 @@ async function discover(env: Env): Promise<AuthServer> {
   return meta as unknown as AuthServer;
 }
 
-async function getClient(env: Env, as: AuthServer, redirectUri: string): Promise<Client> {
-  const stored = await getKv(env, 'upwork_client');
+async function getClient(env: Env, as: AuthServer, redirectUri: string, purpose: UpworkPurpose): Promise<Client> {
+  const stored = await getKv(env, keyFor('upwork_client', purpose));
   const existing = stored ? await unseal<Client>(env, stored) : null;
   if (existing && existing.redirectUri === redirectUri) return existing;
   if (!as.registration_endpoint) throw new OAuthError('Upwork does not offer client registration.');
@@ -103,18 +121,18 @@ async function getClient(env: Env, as: AuthServer, redirectUri: string): Promise
     clientSecret: body.client_secret || undefined,
     authMethod: body.token_endpoint_auth_method || (body.client_secret ? 'client_secret_post' : 'none'),
   };
-  await putKv(env, 'upwork_client', await seal(env, client));
+  await putKv(env, keyFor('upwork_client', purpose), await seal(env, client));
   return client;
 }
 
-export async function startUpworkAuth(env: Env, origin: string): Promise<string> {
+export async function startUpworkAuth(env: Env, origin: string, purpose: UpworkPurpose = 'bidding'): Promise<string> {
   const as = await discover(env);
   const redirectUri = redirectUriFor(origin);
-  const client = await getClient(env, as, redirectUri);
+  const client = await getClient(env, as, redirectUri, purpose);
   const verifier = randomToken(48);
   const state = randomToken(24);
   await env.DB.prepare("DELETE FROM kv WHERE key LIKE 'oauth_state:%' AND updated_at < datetime('now', '-1 day')").run();
-  await putKv(env, `oauth_state:${state}`, await seal(env, { verifier, redirectUri, exp: Date.now() + STATE_TTL_MS, as }));
+  await putKv(env, `oauth_state:${state}`, await seal(env, { verifier, redirectUri, exp: Date.now() + STATE_TTL_MS, as, purpose }));
   const url = new URL(as.authorization_endpoint);
   url.search = new URLSearchParams({
     response_type: 'code',
@@ -138,37 +156,47 @@ async function tokenRequest(t: Pick<Tokens, 'tokenEndpoint' | 'clientId' | 'clie
   return { ok: res.ok && typeof data.access_token === 'string', status: res.status, data };
 }
 
-async function saveTokens(env: Env, base: Omit<Tokens, 'accessToken' | 'refreshToken' | 'expiresAt'>, data: Record<string, string | number>, previousRefresh: string | null) {
+async function saveTokens(env: Env, base: Omit<Tokens, 'accessToken' | 'refreshToken' | 'expiresAt'>, data: Record<string, string | number>, previousRefresh: string | null, purpose: UpworkPurpose) {
   const tokens: Tokens = {
     ...base,
     accessToken: String(data.access_token),
     refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : previousRefresh,
     expiresAt: Date.now() + (Number(data.expires_in) > 0 ? Number(data.expires_in) : 3600) * 1000,
   };
-  await putKv(env, 'upwork_tokens', await seal(env, tokens));
+  await putKv(env, keyFor('upwork_tokens', purpose), await seal(env, tokens));
   return tokens;
 }
 
-export async function finishUpworkAuth(env: Env, params: URLSearchParams): Promise<void> {
-  const lease = await acquireLease(env, 'upwork-auth', 60_000);
-  if (!lease) throw new OAuthError('Upwork sign-in is busy; retry shortly.');
-  try { await finishAuthLocked(env, params); }
-  finally { await releaseLease(env, 'upwork-auth', lease); }
+export async function callbackPurpose(env: Env, params: URLSearchParams): Promise<UpworkPurpose> {
+  const state = params.get('state') ?? '';
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(state)) return 'bidding';
+  const raw = await getKv(env, `oauth_state:${state}`);
+  const saved = raw ? await unseal<{purpose?:UpworkPurpose}>(env,raw) : null;
+  return saved?.purpose === 'scan' ? 'scan' : 'bidding';
 }
 
-async function finishAuthLocked(env: Env, params: URLSearchParams): Promise<void> {
+export async function finishUpworkAuth(env: Env, params: URLSearchParams, purpose: UpworkPurpose = 'bidding'): Promise<void> {
+  const lease = await acquireLease(env, keyFor('upwork-auth', purpose), 60_000);
+  if (!lease) throw new OAuthError('Upwork sign-in is busy; retry shortly.');
+  try { await finishAuthLocked(env, params, purpose); }
+  finally { await releaseLease(env, keyFor('upwork-auth', purpose), lease); }
+}
+
+async function finishAuthLocked(env: Env, params: URLSearchParams, purpose: UpworkPurpose = 'bidding'): Promise<void> {
   if (params.get('error')) {
     throw new OAuthError(params.get('error') === 'access_denied' ? 'Upwork sign-in was cancelled.' : `Upwork sign-in failed: ${params.get('error_description') || params.get('error')}`);
   }
   const state = params.get('state') ?? '';
   const code = params.get('code') ?? '';
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(state) || !code) throw new OAuthError('This sign-in link is incomplete. Start again from the dashboard.');
-  const consumed = await env.DB.prepare('DELETE FROM kv WHERE key = ? RETURNING value').bind(`oauth_state:${state}`).first<{ value: string }>();
-  const stored = consumed?.value;
-  const s = stored ? await unseal<{ verifier: string; redirectUri: string; exp: number; as: AuthServer }>(env, stored) : null;
+  const stored = await getKv(env, `oauth_state:${state}`);
+  const s = stored ? await unseal<{ verifier: string; redirectUri: string; exp: number; as: AuthServer; purpose?: UpworkPurpose }>(env, stored) : null;
   if (!s || s.exp < Date.now()) throw new OAuthError('This sign-in link expired. Start again from the dashboard.');
 
-  const clientRaw = await getKv(env, 'upwork_client');
+  if ((s.purpose ?? 'bidding') !== purpose) throw new OAuthError('This sign-in was started for a different connection. Use its matching Finish button.');
+  const consumed = await env.DB.prepare('DELETE FROM kv WHERE key = ? AND value = ? RETURNING value').bind(`oauth_state:${state}`, stored).first<{value:string}>();
+  if (!consumed) throw new OAuthError('This sign-in link was already used. Start again from the dashboard.');
+  const clientRaw = await getKv(env, keyFor('upwork_client', purpose));
   const client = clientRaw ? await unseal<Client>(env, clientRaw) : null;
   if (!client) throw new OAuthError('Upwork client registration is missing. Start again from the dashboard.');
   const base = {
@@ -180,61 +208,59 @@ async function finishAuthLocked(env: Env, params: URLSearchParams): Promise<void
   };
   const r = await tokenRequest(base, { grant_type: 'authorization_code', code, redirect_uri: s.redirectUri, code_verifier: s.verifier, resource: env.UPWORK_MCP_URL });
   if (!r.ok) throw new OAuthError(`Upwork did not accept the sign-in (${r.data.error_description || r.data.error || r.status}).`);
-  await saveTokens(env, base, r.data, null);
-  const st = await loadState(env);
-  await patchState(env, { upwork: { connected: true, lastError: null } });
+  await saveTokens(env, base, r.data, null, purpose);
+  await patchConnection(env, { upwork: { connected: true, lastError: null, orgUid: null, toolNames: {}, account: null } }, purpose);
 }
 
-async function markDisconnected(env: Env, reason: string): Promise<void> {
-  await delKv(env, 'upwork_tokens');
-  const st = await loadState(env);
-  await patchState(env, { upwork: { connected: false, lastError: reason } });
+async function markDisconnected(env: Env, reason: string, purpose: UpworkPurpose = 'bidding'): Promise<void> {
+  await delKv(env, keyFor('upwork_tokens', purpose));
+  await patchConnection(env, { upwork: { connected: false, lastError: reason } }, purpose);
 }
 
-async function loadTokens(env: Env): Promise<Tokens | null> {
-  const raw = await getKv(env, 'upwork_tokens');
+async function loadTokens(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<Tokens | null> {
+  const raw = await getKv(env, keyFor('upwork_tokens', purpose));
   return raw ? unseal<Tokens>(env, raw) : null;
 }
 
 // A valid access token, refreshed shortly before expiry. On invalid_grant the connection is marked for reconnecting.
-export async function getAccessToken(env: Env): Promise<string> {
-  if (heldByUpwork(await loadState(env))) throw new OAuthError('Upwork is held after an account warning; review the warning before resuming.');
-  const current = await loadTokens(env);
+export async function getAccessToken(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<string> {
+  if (heldByUpwork(await connectionState(env, purpose))) throw new OAuthError('Upwork is held after an account warning; review the warning before resuming.');
+  const current = await loadTokens(env, purpose);
   if (current && current.expiresAt - REFRESH_EARLY_MS > Date.now()) return current.accessToken;
-  const lease = await acquireLease(env, 'upwork-auth', 60_000);
+  const lease = await acquireLease(env, keyFor('upwork-auth', purpose), 60_000);
   if (!lease) throw new OAuthError('Upwork sign-in is refreshing; retry shortly.');
-  try { return await refreshAccessToken(env); }
-  finally { await releaseLease(env, 'upwork-auth', lease); }
+  try { return await refreshAccessToken(env, purpose); }
+  finally { await releaseLease(env, keyFor('upwork-auth', purpose), lease); }
 }
 
-async function refreshAccessToken(env: Env): Promise<string> {
-  const t = await loadTokens(env);
+async function refreshAccessToken(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<string> {
+  const t = await loadTokens(env, purpose);
   if (!t) throw new OAuthError('Upwork is not connected.');
   if (t.expiresAt - REFRESH_EARLY_MS > Date.now()) return t.accessToken;
   if (!t.refreshToken) {
-    await markDisconnected(env, 'Upwork sign-in expired. Reconnect Upwork.');
+    await markDisconnected(env, 'Upwork sign-in expired. Reconnect Upwork.', purpose);
     throw new OAuthError('Upwork sign-in expired.');
   }
   const r = await tokenRequest(t, { grant_type: 'refresh_token', refresh_token: t.refreshToken, resource: env.UPWORK_MCP_URL });
-  if (r.ok) return (await saveTokens(env, t, r.data, t.refreshToken)).accessToken;
+  if (r.ok) return (await saveTokens(env, t, r.data, t.refreshToken, purpose)).accessToken;
   if (r.data.error === 'invalid_grant') {
     // Another run may have just rotated the refresh token; use its result if so.
-    const latest = await loadTokens(env);
+    const latest = await loadTokens(env, purpose);
     if (latest && latest.refreshToken !== t.refreshToken && latest.expiresAt - REFRESH_EARLY_MS > Date.now()) return latest.accessToken;
-    await markDisconnected(env, 'Upwork sign-in expired. Reconnect Upwork.');
+    await markDisconnected(env, 'Upwork sign-in expired. Reconnect Upwork.', purpose);
     throw new OAuthError('Upwork sign-in expired.');
   }
   throw new OAuthError(`Could not refresh the Upwork sign-in (${r.data.error_description || r.data.error || r.status}).`);
 }
 
-export async function upworkClient(env: Env): Promise<McpClient> {
-  const client = new McpClient(env.UPWORK_MCP_URL, await getAccessToken(env), 25_000, env);
+export async function upworkClient(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<McpClient> {
+  const client = new McpClient(env.UPWORK_MCP_URL, await getAccessToken(env, purpose), 25_000, env, purpose === 'scan');
   try {
     await client.initialize();
   } catch (e) {
     if (!(e instanceof McpAuthError)) throw e;
     const reason = 'Upwork refused the saved sign-in. Reconnect Upwork.';
-    await markDisconnected(env, reason);
+    await markDisconnected(env, reason, purpose);
     throw new OAuthError(reason);
   }
   return client;
@@ -266,10 +292,10 @@ export function findKey(obj: unknown, key: string, depth = 6): unknown {
 interface Account { name?: string; org_uid?: string; role?: string }
 
 // After connecting (and on "Check now"): resolve tool names, pick Rafa's TALENT account, read the Connects balance.
-export async function checkUpwork(env: Env): Promise<State> {
-  const st = await loadState(env);
+export async function checkUpwork(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<State> {
+  const st = await connectionState(env, purpose);
   try {
-    const client = await upworkClient(env);
+    const client = await upworkClient(env, purpose);
     const names = await client.listTools();
     console.log('upwork tools', names);
     const toolNames = resolveToolNames(names);
@@ -281,37 +307,37 @@ export async function checkUpwork(env: Env): Promise<State> {
     // Shape only (keys and roles), to diagnose an unexpected response without logging account details.
     console.log('upwork list_accounts shape', typeof raw, raw && typeof raw === 'object' ? Object.keys(raw) : '', Array.isArray(accounts) ? accounts.map((a) => a.role) : typeof accounts);
     const talent = Array.isArray(accounts) ? accounts.find((a) => a.role === 'TALENT' && a.org_uid) : undefined;
-    if (!talent?.org_uid) throw new OAuthError('This Upwork login has no freelancer (TALENT) account. Sign in with Rafa\'s freelancer account.');
+    if (!talent?.org_uid) throw new OAuthError(purpose === 'scan' ? 'This login has no freelancer (TALENT) account. Use your separate freelancer login for scanning.' : 'This Upwork login has no freelancer (TALENT) account. Sign in with Rafa\'s freelancer account.');
+    if (talent.org_uid === (purpose === 'scan' ? (await loadState(env)).upwork.orgUid : (await scanConnection(env)).orgUid)) throw new OAuthError('This account is already connected in the other role. Use a separate account; disconnect its other connection first if changing roles.');
     let connectsBalance = st.connectsBalance;
-    if (toolNames.get_freelancer_dashboard) {
+    if (purpose === 'bidding' && toolNames.get_freelancer_dashboard) {
       const dash = await client.callTool(toolNames.get_freelancer_dashboard, { action: 'check', org_uid: talent.org_uid });
       const bal = Number(findKey(dash, 'connectsBalance'));
       if (Number.isFinite(bal)) connectsBalance = bal;
     }
-    return await patchState(env, {
+    return await patchConnection(env, {
       connectsBalance,
-      upwork: { connected: true, account: talent.name ?? null, orgUid: talent.org_uid, toolNames, lastError: null, checkedAt: new Date().toISOString() },
-    });
+      upwork: { connected: true, account: talent.name ?? null, orgUid: talent.org_uid, toolNames: purpose === 'scan' ? {find_jobs:toolNames.find_jobs,list_accounts:toolNames.list_accounts} : toolNames, lastError: null, checkedAt: new Date().toISOString() },
+    }, purpose);
   } catch (e) {
-    const fresh = await loadState(env);
     const msg = e instanceof Error ? e.message : String(e);
-    await patchState(env, { upwork: { lastError: msg, checkedAt: new Date().toISOString() } });
+    await patchConnection(env, { upwork: { lastError: msg, checkedAt: new Date().toISOString() } }, purpose);
     throw e;
   }
 }
 
-export async function disconnectUpwork(env: Env): Promise<State> {
-  const lease = await acquireLease(env, 'upwork-auth', 60_000);
+export async function disconnectUpwork(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<State> {
+  const lease = await acquireLease(env, keyFor('upwork-auth', purpose), 60_000);
   if (!lease) throw new OAuthError('Upwork sign-in is busy; retry disconnect shortly.');
-  try { return await disconnectLocked(env); }
-  finally { await releaseLease(env, 'upwork-auth', lease); }
+  try { return await disconnectLocked(env, purpose); }
+  finally { await releaseLease(env, keyFor('upwork-auth', purpose), lease); }
 }
 
-async function disconnectLocked(env: Env): Promise<State> {
-  const t = await loadTokens(env).catch(() => null);
+async function disconnectLocked(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<State> {
+  const t = await loadTokens(env, purpose).catch(() => null);
   if (t?.revocationEndpoint && t.refreshToken) {
     await tokenRequest({ ...t, tokenEndpoint: t.revocationEndpoint }, { token: t.refreshToken, token_type_hint: 'refresh_token' }).catch(() => null);
   }
-  await delKv(env, 'upwork_tokens');
-  return patchState(env, { upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null } });
+  await delKv(env, keyFor('upwork_tokens', purpose));
+  return patchConnection(env, { upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null } }, purpose);
 }

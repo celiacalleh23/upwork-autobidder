@@ -6,7 +6,7 @@ compatibility_date = "2025-09-01"
 keep_vars = true
 
 # Three separate runs. Search access restored per account owner; discovery uses shared rolling quotas.
-#   every minute       discover at :00/:30, then send one approved proposal. Review: minute 0, 5, 10…; Auto: every minute (src/pipeline/pace.ts)
+#   every minute       discover on alternating accounts at :00/:15/:30/:45, then send one approved proposal. Review: minute 0, 5, 10…; Auto: every minute (src/pipeline/pace.ts)
 #   minutes 1–59       score and write proposals for jobs added by link (nothing to do: no Upwork call)
 #   minute 3, 8, 13…   upkeep: Connects balance, Loom cleanup/keep-alive/alerts, daily report (3 pm Pacific)
 [triggers]

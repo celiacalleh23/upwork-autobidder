@@ -311,7 +311,7 @@ export function validateSettings(input: unknown): Settings {
       maxConnectsPerJob: num(caps.maxConnectsPerJob, 1, 50, 'Max Connects per job'),
       boostInAuto: bool(caps.boostInAuto),
       boostMinScore: num(caps.boostMinScore, 0, 100, 'Boost: minimum match score'),
-      boostMaxConnects: num(caps.boostMaxConnects, 1, 100, 'Boost: max Connects per job'),
+      boostMaxConnects: num(caps.boostMaxConnects, 1, 1000, 'Boost: max Connects per job'),
       stopAfterErrors: num(caps.stopAfterErrors, 1, 10, 'Stop after errors'),
     },
     scanEveryMinutes: num(i.scanEveryMinutes, 5, 30, 'Scan interval'),
