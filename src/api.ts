@@ -1,7 +1,7 @@
 import { scanConnection, upworkClient } from './oauth';
 import { createPreview } from './pipeline/preview';
 import type { Answer } from './pipeline/letter';
-import { apifySyncStatus, requestApifySync, syncApify } from './apify';
+import { apifyRunHistory, apifySyncStatus, requestApifySync, syncApify } from './apify';
 import { readObject } from './http';
 import {
   Env, InvalidInput, loadSettings, loadState, patchState, saveSettings, validateSettings,
@@ -415,6 +415,7 @@ async function getState(env: Env) {
   return {
     ...state,
     apifySync: await apifySyncStatus(env),
+    apifyRuns: await apifyRunHistory(env),
     scanConnection: await scanConnection(env),
     discovery: { bidding: await getDiscovery(env, 'discovery:lastScan'), scan: await getDiscovery(env, 'discovery:lastScan:scan') },
     lastScanAt: state.lastScanAt,

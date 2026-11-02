@@ -10,7 +10,7 @@ const object = (v: unknown): ObjectValue | null => v && typeof v === 'object' &&
 const validId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(v);
 const validTaskId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,80}(?:~[A-Za-z0-9_-]{1,80})?$/.test(v);
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-interface Receipt { dataset: string | null; items: unknown[]; offset: number; imported: number; duplicates: number; rejected: number; status: 'pending' | 'done' | 'error'; nextAt: number; error: string | null }
+interface Receipt { runId?: string | null; startedAt?: string | null; finishedAt?: string | null; receivedAt?: string; importedAt?: string; dataset: string | null; items: unknown[]; offset: number; imported: number; duplicates: number; rejected: number; status: 'pending' | 'done' | 'error'; nextAt: number; error: string | null }
 
 // Accept only supported variants, rather than searching arbitrarily nested untrusted objects.
 export function parseDelivery(payload: unknown): Pick<Receipt, 'dataset' | 'items'> {
@@ -27,6 +27,22 @@ export function parseDelivery(payload: unknown): Pick<Receipt, 'dataset' | 'item
   return { dataset: null, items };
 }
 
+const isoTime = (v: unknown): string | null => typeof v === 'string' && Number.isFinite(Date.parse(v)) ? new Date(v).toISOString() : null;
+export function apifyRunTiming(payload: unknown) {
+  const p = object(payload), run = object(p?.resource) ?? p;
+  return {runId: run?.defaultDatasetId && validId(run?.id) ? run.id : null, startedAt: isoTime(run?.startedAt), finishedAt: isoTime(run?.finishedAt), receivedAt: new Date().toISOString()};
+}
+export async function apifyRunHistory(env: Env) {
+  const {results} = await env.DB.prepare("SELECT json_object('runId',json_extract(value,'$.runId'), 'startedAt',json_extract(value,'$.startedAt'), 'finishedAt',json_extract(value,'$.finishedAt'), 'receivedAt',json_extract(value,'$.receivedAt'), 'importedAt',json_extract(value,'$.importedAt'), 'status',json_extract(value,'$.status'), 'imported',json_extract(value,'$.imported'), 'duplicates',json_extract(value,'$.duplicates'), 'rejected',json_extract(value,'$.rejected'), 'error',json_extract(value,'$.error')) AS value FROM kv WHERE key LIKE 'apify:receipt:%' ORDER BY COALESCE(json_extract(value,'$.receivedAt'),updated_at) DESC, key DESC LIMIT 20").all<{value:string}>();
+  return results.map(row => {
+    const r = JSON.parse(row.value) as Receipt;
+    const start = Date.parse(r.startedAt ?? ''), finish = Date.parse(r.finishedAt ?? '');
+    return {runId:r.runId ?? null, startedAt:r.startedAt ?? null, finishedAt:r.finishedAt ?? null, receivedAt:r.receivedAt ?? null, importedAt:r.importedAt ?? null,
+      durationMs:Number.isFinite(start) && Number.isFinite(finish) && finish >= start ? finish-start : null,
+      status:r.status, imported:r.imported, duplicates:r.duplicates, rejected:r.rejected, error:r.error};
+  });
+}
+
 export async function receiveApify(req: Request, env: Env, initialize: () => Promise<void>): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   if (!env.APIFY_WEBHOOK_SECRET || env.APIFY_WEBHOOK_SECRET.length < 32) return json({ error: 'Webhook authentication is not configured' }, 503);
@@ -39,7 +55,7 @@ export async function receiveApify(req: Request, env: Env, initialize: () => Pro
     const identity = parsed.dataset ? `${resource?.id ?? ''}:${parsed.dataset}` : JSON.stringify(payload);
     const key = `apify:receipt:${await sha256b64url(identity)}`;
     await initialize();
-    const receipt: Receipt = { ...parsed, offset: 0, imported: 0, duplicates: 0, rejected: 0, status: 'pending', nextAt: 0, error: null };
+    const receipt: Receipt = { ...parsed, ...apifyRunTiming(payload), offset: 0, imported: 0, duplicates: 0, rejected: 0, status: 'pending', nextAt: 0, error: null };
     const inserted = await env.DB.prepare("INSERT OR IGNORE INTO kv (key, value) VALUES (?, ?)").bind(key, JSON.stringify(receipt)).run();
     return json({ accepted: true, duplicate: !inserted.meta.changes, receipt: key.slice('apify:receipt:'.length) }, 202);
   } catch (e) {
@@ -87,7 +103,7 @@ export async function drainApify(env: Env): Promise<void> {
         await putKv(env, row.key, JSON.stringify(receipt));
       }
       receipt.status = page.length < 20 || (!receipt.dataset && receipt.offset >= receipt.items.length) ? 'done' : 'pending';
-      if (receipt.status === 'done') receipt.items = [];
+      if (receipt.status === 'done') { receipt.items = []; receipt.importedAt = new Date().toISOString(); }
       receipt.error = null; receipt.nextAt = 0;
     } catch (e) {
       receipt.status = 'error'; receipt.error = e instanceof Error ? e.message : 'Import failed'; receipt.nextAt = Date.now() + 5 * 60_000;
