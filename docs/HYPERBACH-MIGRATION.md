@@ -11,7 +11,7 @@ Neatrat remains the default provider. Select Hyperbach explicitly using `APIFY_P
 
 Hyperbach input derives from the dashboard's actual saved filters:
 
-- `keywords`: quoted phrases joined with OR; `keywords_match: strict`.
+- `keywords`: quoted phrases joined with OR; `keywords_match: strict`. When title-only is enabled, also send the documented `title` text filter with OR alternatives. Do not use `title_search`, whose entries are ANDed. Remove the managed title restriction when title-only is disabled. The writer still checks title keywords against Upwork details, since provider substring matching may be broader than local word matching.
 - `client_location`: countries joined with OR, SWE normalized to Sweden. Empty countries mean no country restriction.
 - `buyer_payment_verified: true` only when requested; otherwise remove the field entirely. False means unverified-only, not any client.
 - `date_posted: 60m` maintains the agreed one-hour window.

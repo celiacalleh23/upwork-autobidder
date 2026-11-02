@@ -106,6 +106,7 @@ export function discoveryInput(s: Settings, actor: Provider = 'neatrat'): Object
     return {
       keywords: s.keywords.map(k => `"${k.replaceAll('"', '').trim()}"`).join(' OR '),
       keywords_match: 'strict',
+      ...(s.titleOnly ? { title: s.keywords.map(k => k.replaceAll('"', '').trim()).join(' OR ') } : {}),
       client_location: s.allowedCountries.map(c => c === 'SWE' ? 'Sweden' : c).join(' OR '),
       notifications_only: true, date_posted: '60m', estimate: false,
       ...(s.verifiedOnly ? { buyer_payment_verified: true } : {}),
@@ -121,6 +122,9 @@ export function mergeDiscoveryInput(existing: ObjectValue, managed: ObjectValue,
     const desired: ObjectValue = { ...existing, ...managed };
     for (const key of LEGACY_KEYS) delete desired[key];
     if (!('buyer_payment_verified' in managed)) delete desired.buyer_payment_verified;
+    if (!('title' in managed)) delete desired.title;
+    // title_search entries are ANDed; the title text filter supports the required OR alternatives.
+    delete desired.title_search;
     // A page cursor changes this into a historic replay; the scheduled feed owns its position.
     delete desired.page_after;
     if (existing.fields !== undefined) {
@@ -190,7 +194,7 @@ export async function syncApify(env: Env): Promise<void> {
       const desired = mergeDiscoveryInput(existing, s.input, provider(env));
       await apifyJson(env, path, { method: 'PUT', body: JSON.stringify(desired) });
       const verified = object(await apifyJson(env, path));
-      const removed = provider(env) === 'hyperbach' ? [...LEGACY_KEYS, 'page_after', ...(!('buyer_payment_verified' in s.input) ? ['buyer_payment_verified'] : [])] : [];
+      const removed = provider(env) === 'hyperbach' ? [...LEGACY_KEYS, 'page_after', 'title_search', ...(!('title' in s.input) ? ['title'] : []), ...(!('buyer_payment_verified' in s.input) ? ['buyer_payment_verified'] : [])] : [];
       if (!verified || verified.rawUrl || removed.some(k => k in verified) || [...Object.keys(s.input), ...(provider(env) === 'hyperbach' && desired.fields !== undefined ? ['fields'] : [])].some(k => JSON.stringify(verified[k]) !== JSON.stringify(desired[k]))) throw new Error('Apify did not confirm the saved input');
       s.status = 'applied'; s.appliedAt = new Date().toISOString(); s.error = null;
     } catch (e) { s.status = 'error'; s.error = e instanceof Error ? e.message : 'Sync failed'; s.nextAt = Date.now() + 5 * 60_000; }

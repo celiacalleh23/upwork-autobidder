@@ -8,7 +8,7 @@ afterEach(()=>{vi.unstubAllGlobals();dbs.splice(0).forEach(e=>e.sqlite.close());
 it('maps OR phrases, countries, age and feed mode without restricting to unverified-only clients',()=>{
  const settings={...structuredClone(DEFAULT_SETTINGS),keywords:['Klaviyo','Email Marketer'],allowedCountries:['SWE','Canada'],verifiedOnly:false};
  const desired=discoveryInput(settings,'hyperbach');
- expect(desired).toEqual({keywords:'"Klaviyo" OR "Email Marketer"',keywords_match:'strict',client_location:'Sweden OR Canada',date_posted:'60m',notifications_only:true,estimate:false});
+ expect(desired).toEqual({keywords:'"Klaviyo" OR "Email Marketer"',keywords_match:'strict',title:'Klaviyo OR Email Marketer',client_location:'Sweden OR Canada',date_posted:'60m',notifications_only:true,estimate:false});
  expect(discoveryInput({...settings,verifiedOnly:true},'hyperbach')).toHaveProperty('buyer_payment_verified',true);
  const merged=mergeDiscoveryInput({query:'old',page:1,sort:'newest',maxJobAge:{},buyer_payment_verified:false,page_after:'old-cursor',clientId:'keep-feed',limit:25,fields:['id']},desired,'hyperbach');
  expect(merged).toMatchObject({...desired,clientId:'keep-feed',limit:25,fields:['id','url','title','date_posted']});
@@ -44,4 +44,12 @@ it('refuses to send Hyperbach input to a task owned by another actor',async()=>{
  const e={...env(),APIFY_TOKEN:'synthetic',APIFY_TASK_ID:'old-task',APIFY_PROVIDER:'hyperbach' as const};await requestApifySync(e,structuredClone(DEFAULT_SETTINGS));
  const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({data:{actId:'other-actor'}})));vi.stubGlobal('fetch',fetch);
  await syncApify(e);expect(fetch).toHaveBeenCalledTimes(1);expect(await apifySyncStatus(e)).toMatchObject({status:'error',error:expect.stringContaining('No input was changed')});
+});
+
+it('removes the upstream title restriction when title-only is unchecked and avoids an AND title_search',()=>{
+ const settings={...structuredClone(DEFAULT_SETTINGS),titleOnly:false};
+ const managed=discoveryInput(settings,'hyperbach');expect(managed).not.toHaveProperty('title');
+ const merged=mergeDiscoveryInput({title:'Klaviyo',title_search:['Klaviyo','Email Marketer']},managed,'hyperbach');
+ expect(merged).not.toHaveProperty('title');expect(merged).not.toHaveProperty('title_search');
+ expect(merged).toHaveProperty('keywords',managed.keywords);
 });
