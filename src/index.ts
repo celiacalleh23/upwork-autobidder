@@ -161,7 +161,7 @@ const WRITE_CRON = '1-59 * * * *';
 const UPKEEP_CRON = '3,8,13,18,23,28,33,38,43,48,53,58 * * * *';
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const secure = url.protocol === 'https:';
 
@@ -186,7 +186,7 @@ export default {
     }
 
     await ensureSchema(env);
-    if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname));
+    if (url.pathname.startsWith('/api/')) return withHeaders(await handleApi(req, env, url.pathname, ctx));
     if (url.pathname === '/oauth/upwork/start' && req.method === 'GET') {
       try {
         return withHeaders(new Response(null, { status: 303, headers: { location: await startUpworkAuth(env, url.origin, url.searchParams.get('purpose') === 'scan' ? 'scan' : 'bidding'), 'cache-control': 'no-store' } }));

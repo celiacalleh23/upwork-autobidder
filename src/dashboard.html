@@ -512,11 +512,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   let state = null, settings = null, logOffset = 0, editing = new Set(), toastTimer = null;
 
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
+    let res;
+    try { res = await fetch(path, {
       method: opts.method || 'GET',
       headers: { 'x-dashboard': '1', ...(opts.body ? { 'content-type': 'application/json' } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    }); } catch { throw new Error('Connection interrupted. Refresh to check whether your changes were saved.'); }
     let data = null;
     try { data = await res.json(); } catch { /* empty */ }
     if (res.status === 401) { location.href = '/login'; throw new Error('Signed out'); }
@@ -557,6 +558,24 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     submitted: ['Submitted', 'good'], failed: ['Failed', 'bad'], skipped: ['Skipped', ''], unknown: ['Check on Upwork', 'warn'],
   };
 
+  let syncPending = false, syncPollBusy = false;
+  function renderApifySync(sync) {
+    syncPending = Boolean(sync?.configured && sync.status === 'pending');
+    $('apifyStatus').textContent = !sync?.configured ? `Apify synchronization unavailable: ${sync?.configurationError || 'check APIFY_TOKEN and APIFY_TASK_ID in Worker settings'}. Local filters still apply.`
+      : sync.status === 'applied' ? `Discovery settings synchronized${sync.appliedAt ? ' · ' + when(sync.appliedAt) : ''}.`
+      : sync.status === 'error' ? `Settings saved locally. Apify synchronization failed: ${sync.error}. It will retry automatically.`
+      : sync.status === 'not-requested' ? 'Save settings to synchronize the Apify task. The schedule is managed separately in Apify.' : 'Settings saved locally. Apify synchronization is pending; the next background run will apply it.';
+    if (sync?.lastImport?.error) $('apifyStatus').textContent += ` Import waiting: ${sync.lastImport.error}.`;
+  }
+  async function refreshApifyStatus() {
+    if (syncPollBusy) return;
+    syncPollBusy = true;
+    try { renderApifySync(await api('/api/apify/status')); }
+    catch(e) { toast(e.message,true); }
+    finally { syncPollBusy = false; }
+  }
+  setInterval(() => { if (syncPending && !document.hidden) refreshApifyStatus(); }, 3000);
+
   // ---------- State / header ----------
   function renderState() {
     const s = state;
@@ -566,11 +585,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('scanCheck').hidden = $('scanDisconnect').hidden = !scan?.connected;
     const summary = (r) => !r ? 'no completed attempt recorded' : `${when(r.at)} · ${r.queries} searches · ${r.imported} imported${r.truncated ? ' · result limit reached' : ''}${r.error ? ' · error: ' + r.error : ''}`;
     $('discoveryStatus').textContent = `Upwork bidding account: :00/:30. Additional scan-only account: :15/:45. Each scans every 30 minutes with its own search quota. ${s.paused ? 'Paused. ' : ''}Bidding account: ${summary(s.discovery?.bidding)}. Additional scan-only account: ${scan?.connected ? summary(s.discovery?.scan) : 'not connected'}. Apify: ${sync?.lastImport?.at ? 'last import ' + when(sync.lastImport.at) + (sync.lastImport.error ? ' · ' + sync.lastImport.error : '') : 'no import recorded'}. Apify schedule is managed separately.`;
-    $('apifyStatus').textContent = !sync?.configured ? `Apify synchronization unavailable: ${sync?.configurationError || 'check APIFY_TOKEN and APIFY_TASK_ID in Worker settings'}. Local filters still apply.`
-      : sync.status === 'applied' ? `Discovery settings synchronized${sync.appliedAt ? ' · ' + when(sync.appliedAt) : ''}.`
-      : sync.status === 'error' ? `Settings saved locally. Apify synchronization failed: ${sync.error}. It will retry automatically.`
-      : sync.status === 'not-requested' ? 'Save settings to synchronize the Apify task. The schedule is managed separately in Apify.' : 'Settings saved locally. Apify synchronization is pending; the next background run will apply it.';
-    if (sync?.lastImport?.error) $('apifyStatus').textContent += ` Import waiting: ${sync.lastImport.error}.`;
+    renderApifySync(sync);
     $('account').textContent = s.upwork.connected ? `Bidding as ${s.upwork.account || 'connected account'}` : 'Upwork not connected yet';
     $('connects').textContent = fmtNum(s.connectsBalance);
     $('modeReview').setAttribute('aria-pressed', String(s.mode === 'review'));
@@ -1118,8 +1133,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('saveBtn').disabled = true;
     try {
       settings = await api('/api/settings', { method: 'PUT', body: readForm() });
-      fillForm(settings); $('saveMsg').textContent = 'Saved locally. Check discovery synchronization above.'; $('saveMsg').className = 'msg good';
-      loadState();
+      fillForm(settings); $('saveMsg').textContent = 'Saved. Apify synchronization starts automatically; see status above.'; $('saveMsg').className = 'msg good';
+      syncPending = true; refreshApifyStatus(); loadState();
     } catch (err) { $('saveMsg').textContent = err.message; $('saveMsg').className = 'msg bad'; }
     $('saveBtn').disabled = false;
   });
@@ -1160,7 +1175,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   $('scanDisconnect').addEventListener('click', async () => {try {await api('/api/upwork/scan/disconnect',{method:'POST'}); await refresh();} catch(e){toast(e.message,true);} });
   $('apifySyncNow').addEventListener('click', async (ev) => {
     ev.target.disabled=true;
-    try { const r=await api('/api/apify/sync',{method:'POST'}); toast(r.status==='applied'?'Apify confirmed the saved settings.':r.error || r.configurationError || 'Apify synchronization queued.',r.status==='error'||!r.configured); await refresh(); } catch(e){toast(e.message,true);} finally{ev.target.disabled=false;}
+    try { const r=await api('/api/apify/sync',{method:'POST'}); toast(r.status==='applied'?'Apify confirmed the saved settings.':r.error || r.configurationError || 'Apify synchronization queued.',r.status==='error'||!r.configured); syncPending = r.status === 'pending'; await refreshApifyStatus(); } catch(e){toast(e.message,true);} finally{ev.target.disabled=false;}
   });
   $('upworkConnect').addEventListener('click', () => { $('upworkFinish').hidden = false; $('upworkPaste').value = ''; });
   $('upworkFinishBtn').addEventListener('click', async (ev) => {

@@ -88,7 +88,7 @@ export function isActiveNow(start: string, end: string, timeZone: string, now = 
   return start <= end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
-export async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
+export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
   const method = req.method;
 
   try {
@@ -97,16 +97,21 @@ export async function handleApi(req: Request, env: Env, path: string): Promise<R
 
     if (path === '/api/state' && method === 'GET') return json(await getState(env));
 
+    if (path === '/api/apify/status' && method === 'GET') return json(await apifySyncStatus(env));
+
     if (path === '/api/apify/sync' && method === 'POST') {
       await requestApifySync(env, await loadSettings(env));
-      await syncApify(env);
-      return json(await apifySyncStatus(env));
+      const work = syncApify(env);
+      if (ctx) ctx.waitUntil(work.catch(() => console.error('Apify background sync failed; persisted request will retry')));
+      else await work;
+      return json(await apifySyncStatus(env), ctx ? 202 : 200);
     }
     if (path === '/api/settings' && method === 'GET') return json(await loadSettings(env));
     if (path === '/api/settings' && method === 'PUT') {
       const before = await loadSettings(env);
       const s = validateSettings(await readJson(req));
       await saveSettings(env, s);
+      if (ctx) ctx.waitUntil(syncApify(env).catch(() => console.error('Apify background sync failed; persisted request will retry')));
 
       if (s.sendingEnabled !== before.sendingEnabled) {
         await patchState(env, { senderNote: s.sendingEnabled ? 'the next approved proposal goes out within 5 minutes' : null });

@@ -31,3 +31,7 @@ Import prefers date_posted over Neatrat's date aliases. The supplied sample is a
 5. Keep the old Neatrat schedule and webhook disabled. The old webhook cannot be assumed inert merely because its schedule is disabled: manual runs still trigger it.
 6. A paid test needs the user's explicit approval; none was started here. Verify a real webhook delivery, dataset import/deduplication, actual job dates and writer filters while Sending remains off. Notifications-only feed cursor behavior and live actor search results still require verification.
 7. Enable a single schedule only after successful verification and a spending decision. Keep the existing monthly limit; reported remaining balance is not independently verified by this patch.
+
+## Automatic save synchronization
+
+Saving dashboard settings durably queues the desired input and starts synchronization using the Worker's waitUntil background lifecycle. The explicit Sync button also acknowledges its queued request without waiting for remote Apify calls on the browser connection. The cron retains retry responsibility if the immediate background attempt is interrupted or fails. A lightweight status endpoint refreshes pending sync status every three seconds while the page is visible; Applied still requires provider readback. Network failures advise checking saved state rather than implying the settings were necessarily lost. This does not start an actor, change a schedule or alter the search filters.
