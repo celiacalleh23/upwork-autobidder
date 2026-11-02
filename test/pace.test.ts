@@ -21,13 +21,13 @@ it('keeps the chosen wait stable across ticks and selects a new interval after a
   const e=env(); const at=Date.parse('2026-11-02T12:00:00Z');
   const st={...structuredClone(DEFAULT_STATE),mode:'auto' as const,lastSendAt:new Date(at).toISOString()};
   const random=vi.spyOn(Math,'random').mockReturnValueOnce(0.999).mockReturnValueOnce(0);
-  expect(await autoSendWait(e,st,at+5*60000)).toContain('11 min');
-  expect(await autoSendWait(e,st,at+15*60000)).toContain('1 min');
-  expect(await autoSendWait(e,st,at+16*60000)).toBeNull();
+  expect(await autoSendWait(e,st,at+3*60000)).toContain('6 min');
+  expect(await autoSendWait(e,st,at+8*60000)).toContain('1 min');
+  expect(await autoSendWait(e,st,at+9*60000)).toBeNull();
   expect(random).toHaveBeenCalledTimes(1);
-  st.lastSendAt=new Date(at+16*60000).toISOString();
-  expect(await autoSendWait(e,st,at+20*60000)).toContain('1 min');
-  expect(await autoSendWait(e,st,at+21*60000)).toBeNull();
+  st.lastSendAt=new Date(at+9*60000).toISOString();
+  expect(await autoSendWait(e,st,at+11*60000)).toContain('1 min');
+  expect(await autoSendWait(e,st,at+12*60000)).toBeNull();
   expect(random).toHaveBeenCalledTimes(2);
 });
 it('does not delay Review or the first ever send',async()=>{
@@ -47,5 +47,5 @@ it('blocks the actual sender before any Upwork request during its random wait',a
   expect(await runSender(e)).toBeNull();
   expect(client).not.toHaveBeenCalled();
   const state=JSON.parse(String(e.sqlite.prepare("SELECT value FROM kv WHERE key='state'").get()?.value));
-  expect(state.senderNote).toContain('10 min');
+  expect(state.senderNote).toContain('3 min');
 });

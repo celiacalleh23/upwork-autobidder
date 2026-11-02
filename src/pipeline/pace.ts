@@ -14,10 +14,10 @@ export async function autoSendWait(env: Env, state: State, now = Date.now()): Pr
   const raw = await getKv(env, 'send:autoInterval');
   let saved: { last: number; minutes: number } | null = null;
   try { saved = raw ? JSON.parse(raw) : null; } catch { /* replace invalid schedule */ }
-  if (!saved || saved.last !== last || !Number.isInteger(saved.minutes) || saved.minutes < 5 || saved.minutes > 16) {
-    saved = { last, minutes: 5 + Math.floor(Math.random() * 12) };
+  if (!saved || saved.last !== last || !Number.isInteger(saved.minutes) || saved.minutes < 3 || saved.minutes > 9) {
+    saved = { last, minutes: 3 + Math.floor(Math.random() * 7) };
     await putKv(env, 'send:autoInterval', JSON.stringify(saved));
   }
   const remaining = last + saved.minutes * 60_000 - now;
-  return remaining > 0 ? `Next auto proposal in ${Math.ceil(remaining / 60_000)} min (random 5–16 min spacing).` : null;
+  return remaining > 0 ? `Next auto proposal in ${Math.ceil(remaining / 60_000)} min (random / humanized 3–9 min spacing).` : null;
 }
