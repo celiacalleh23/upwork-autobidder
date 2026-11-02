@@ -1,0 +1,25 @@
+# Staging only. Provision a NEW D1 and replace the placeholder before deployment.
+name = "rafadataapp-scanner-staging"
+main = "src/scanner/index.ts"
+compatibility_date = "2025-09-01"
+keep_vars = true
+workers_dev = true
+
+[triggers]
+crons = ["15,45 * * * *", "* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "autobidder-scanner-staging"
+database_id = "REPLACE_WITH_NEW_SCANNER_D1_ID"
+
+[observability]
+enabled = true
+
+[vars]
+SCAN_ACCOUNT_DISABLED = "true"
+CLAUDE_MODEL = "unused"
+UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
+# JOB_DELIVERY_URL = "https://YOUR-STAGING-RECEIVER/api/jobs/scan-intake"
+# Independent secrets: TOKEN_KEY, SCANNER_ADMIN_SECRET, JOB_DELIVERY_SECRET.
+# No primary DB, Upwork tokens, dashboard password, Claude, Loom, or Resend credentials.

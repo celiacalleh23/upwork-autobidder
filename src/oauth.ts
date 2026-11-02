@@ -126,6 +126,7 @@ async function getClient(env: Env, as: AuthServer, redirectUri: string, purpose:
 }
 
 export async function startUpworkAuth(env: Env, origin: string, purpose: UpworkPurpose = 'bidding'): Promise<string> {
+  if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') throw new OAuthError('Scan-only account is temporarily unavailable.');
   const as = await discover(env);
   const redirectUri = redirectUriFor(origin);
   const client = await getClient(env, as, redirectUri, purpose);
@@ -224,6 +225,7 @@ async function loadTokens(env: Env, purpose: UpworkPurpose = 'bidding'): Promise
 
 // A valid access token, refreshed shortly before expiry. On invalid_grant the connection is marked for reconnecting.
 export async function getAccessToken(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<string> {
+  if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') throw new OAuthError('Scan-only account is temporarily unavailable.');
   if (heldByUpwork(await connectionState(env, purpose))) throw new OAuthError('Upwork is held after an account warning; review the warning before resuming.');
   const current = await loadTokens(env, purpose);
   if (current && current.expiresAt - REFRESH_EARLY_MS > Date.now()) return current.accessToken;

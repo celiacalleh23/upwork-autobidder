@@ -417,6 +417,7 @@ async function getState(env: Env) {
     apifySync: await apifySyncStatus(env),
     apifyRuns: await apifyRunHistory(env),
     scanConnection: await scanConnection(env),
+    scanAccountDisabled: env.SCAN_ACCOUNT_DISABLED === 'true',
     discovery: { bidding: await getDiscovery(env, 'discovery:lastScan'), scan: await getDiscovery(env, 'discovery:lastScan:scan') },
     lastScanAt: state.lastScanAt,
     lastRun: await env.DB.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT 1").first(),

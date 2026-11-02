@@ -1,3 +1,4 @@
+import { receiveScanJob } from './scanner/delivery';
 import { discoveryDue, runScan } from './pipeline/scan';
 import { sha256b64url } from './crypto';
 import { deliverSafetyAlerts } from './notifications';
@@ -170,6 +171,7 @@ export default {
     // OAuth state (created by a signed-in /oauth/upwork/start) is what ties this request to the dashboard.
     if (url.pathname === '/oauth/upwork/callback' && req.method === 'GET') return withHeaders(await handleUpworkCallback(req, env));
     // Its own secret, not the dashboard session: called by other services.
+    if (url.pathname === '/api/jobs/scan-intake') return withHeaders(await receiveScanJob(req, env, () => ensureSchema(env)));
     if (url.pathname === '/api/jobs/intake') return withHeaders(await handleIntake(req, env));
     if (url.pathname === '/api/apify-webhook') {
       return withHeaders(await receiveApify(req, env, () => ensureSchema(env)));

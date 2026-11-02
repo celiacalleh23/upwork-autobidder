@@ -11,6 +11,9 @@ export interface Env {
   ANTHROPIC_BASE_URL?: string; // local testing only (a stand-in API); unset in production
   RESEND_API_KEY?: string;
   INTAKE_SECRET?: string; // POST /api/jobs/intake (index.ts); 32+ characters
+  SCAN_INTAKE_SECRET?: string;
+  SCAN_ACCOUNT_DISABLED?: string;
+  EXTERNAL_SCAN_ONLY?: string; // 'true' disables only the legacy additional-account scan
   REPORT_FROM?: string; // e.g. "Upwork Auto-Bidder <reports@ltv-labs.com>" on a Resend-verified domain
   CLAUDE_MODEL: string;
   UPWORK_MCP_URL: string;

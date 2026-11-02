@@ -20,13 +20,15 @@ export function discoveryJob(value: unknown, now = Date.now()) {
 export async function runScan(env: Env, scheduledTime: number): Promise<void> {
   let failure: unknown;
   for (const purpose of ['bidding', 'scan'] as const) {
+    if (purpose === 'scan' && env.EXTERNAL_SCAN_ONLY === 'true') continue;
     if (new Date(scheduledTime).getUTCMinutes() % 30 !== (purpose === 'scan' ? 15 : 0)) continue;
     try { await scanAccount(env, scheduledTime, purpose); } catch(e) { failure = e; }
   }
   if (failure) throw failure;
 }
 
-async function scanAccount(env: Env, scheduledTime: number, purpose: UpworkPurpose): Promise<void> {
+export async function scanAccount(env: Env, scheduledTime: number, purpose: UpworkPurpose, accept = addJob): Promise<void> {
+  if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') return;
   const scope = purpose === 'scan' ? ':scan' : '';
   const key = (name: string) => `discovery:${name}${scope}`;
   const leaseName = `discovery${scope}`;
@@ -61,7 +63,7 @@ async function scanAccount(env: Env, scheduledTime: number, purpose: UpworkPurpo
           if (!(await ownsLease(env, leaseName, lease)) || (await loadState(env)).paused) break;
           const job = discoveryJob(raw);
           if (!job) continue;
-          const added = await addJob(env, job);
+          const added = await accept(env, job);
           if (!added.ok && added.retryable) throw new Error(added.reason);
           if (added.ok) imported++;
         }

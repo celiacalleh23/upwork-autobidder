@@ -483,7 +483,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         </ol>
         <div class="addrow" style="max-width:none"><input id="upworkPaste" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:53682/upwork-callback?code=…" aria-label="Address from the Upwork tab"><button type="button" class="btn primary" id="upworkFinishBtn">Finish</button></div>
       </div>
-      <div class="conn"><div><b>Additional Upwork account — scanning only</b><div class="small muted" id="scanStatus">Not connected</div></div>
+      <div class="conn"><div><b>Additional Upwork account — scanning only</b><div class="small muted" id="scanStatus"></div></div>
         <div class="conn-actions"><a class="btn outline" id="scanConnect" href="/oauth/upwork/start?purpose=scan" target="_blank" rel="noopener">Connect scan-only account</a>
           <button type="button" class="btn" id="scanCheck">Check connection</button><button type="button" class="btn danger" id="scanDisconnect">Disconnect scan-only</button></div></div>
       <div class="note info" id="scanFinish" hidden><b>Connect your separate account for discovery</b><p>Sign in to your own Upwork freelancer account in the new tab, allow the connection, then paste the complete localhost callback address below. This connection searches only; proposals and Connects remain on the bidding account.</p>
@@ -585,10 +585,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const s = state;
     const sync = s.apifySync;
     const scan = s.scanConnection;
-    $('scanStatus').textContent = scan?.connected ? 'Connected' : 'Not connected';
-    $('scanCheck').hidden = $('scanDisconnect').hidden = !scan?.connected;
+    $('scanStatus').textContent = s.scanAccountDisabled ? '' : (scan?.connected ? 'Connected' : 'Not connected');
+    $('scanConnect').hidden = !!s.scanAccountDisabled;
+    if (s.scanAccountDisabled) $('scanFinish').hidden = true;
+    $('scanCheck').hidden = $('scanDisconnect').hidden = !!s.scanAccountDisabled || !scan?.connected;
     const summary = (r) => !r ? 'no completed attempt recorded' : `${when(r.at)} · ${r.queries} searches · ${r.imported} imported${r.truncated ? ' · result limit reached' : ''}${r.error ? ' · error: ' + r.error : ''}`;
-    $('discoveryStatus').textContent = `Upwork bidding account: :00/:30. Additional scan-only account: :15/:45. Each scans every 30 minutes with its own search quota. ${s.paused ? 'Paused. ' : ''}Bidding account: ${summary(s.discovery?.bidding)}. Additional scan-only account: ${scan?.connected ? summary(s.discovery?.scan) : 'not connected'}. Apify: ${sync?.lastImport?.at ? 'last import ' + when(sync.lastImport.at) + (sync.lastImport.error ? ' · ' + sync.lastImport.error : '') : 'no import recorded'}. Apify schedule is managed separately.`;
+    $('discoveryStatus').textContent = `Upwork bidding account: :00/:30. ${s.scanAccountDisabled ? '' : 'Additional scan-only account: :15/:45. Each scans every 30 minutes with its own search quota.'} ${s.paused ? 'Paused. ' : ''}Bidding account: ${summary(s.discovery?.bidding)}. ${s.scanAccountDisabled ? '' : 'Additional scan-only account: ' + (scan?.connected ? summary(s.discovery?.scan) : 'not connected') + '. '}Apify: ${sync?.lastImport?.at ? 'last import ' + when(sync.lastImport.at) + (sync.lastImport.error ? ' · ' + sync.lastImport.error : '') : 'no import recorded'}. Apify schedule is managed separately.`;
     const runTime = iso => iso ? new Date(iso).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Unavailable';
     $('apifyRuns').replaceChildren(...(s.apifyRuns?.length ? s.apifyRuns.map(r => {
       const label = r.status === 'done' ? 'Imported' : r.status === 'error' ? 'Import retry pending' : 'Waiting for import';

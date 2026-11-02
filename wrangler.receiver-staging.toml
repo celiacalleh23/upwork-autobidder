@@ -1,0 +1,17 @@
+# Isolated receiver for end-to-end tests. No cron, production DB, or production secrets.
+name = "rafadataapp-receiver-staging"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+keep_vars = true
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.sql"]
+fallthrough = true
+[[d1_databases]]
+binding = "DB"
+database_name = "autobidder-receiver-staging"
+database_id = "REPLACE_WITH_NEW_RECEIVER_D1_ID"
+[vars]
+CLAUDE_MODEL = "unused"
+UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
