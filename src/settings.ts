@@ -48,7 +48,7 @@ export interface Settings {
     connectsFloor: number;
     maxConnectsEnabled: boolean; // off = apply to jobs whatever they cost in Connects (Siv, Oct 21)
     maxConnectsPerJob: number;
-    boostInAuto: boolean;     // boost strong matches, in Auto-submit only (Celia, Oct 29: on as soon as Auto is on)
+    boostInAuto: boolean;     // shared switch for Auto-submit and approved Review proposals (legacy field name)
     boostMinScore: number;    // only proposals with at least this match score
     boostMaxConnects: number; // never bid more than this per job
     stopAfterErrors: number;

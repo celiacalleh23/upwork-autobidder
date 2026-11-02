@@ -40,16 +40,20 @@ async function connected(e: Env, auto = false) {
   } } });
   await putKv(e, 'upwork_tokens', await seal(e, { accessToken: 'synthetic', expiresAt: Date.now()+3600_000 }));
 }
-async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean } = {}) {
+async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean } = {}) {
   vi.useFakeTimers();
   const e = env(); await connected(e);
   const settings = structuredClone(DEFAULT_SETTINGS); settings.sendingEnabled = true; settings.caps.activeStart = settings.caps.activeEnd = '00:00';
   settings.caps.connectsFloorEnabled = true; settings.caps.connectsFloor = 20; settings.caps.maxConnectsEnabled = true; settings.caps.maxConnectsPerJob = 16;
+  if (opts.boostOff) settings.caps.boostInAuto = false;
   await saveSettings(e, settings);
   e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,bid,job_type,status,approved_via,create_params) VALUES ('2115559352186121361','Synthetic','Synthetic letter',40,'hourly','approved',?,?)")
     .run(opts.autoApproval ? 'auto-submit' : 'dashboard', JSON.stringify({ answers: opts.answers ?? [] }));
+  if (opts.score !== undefined) e.sqlite.prepare('UPDATE proposals SET score = ? WHERE id=1').run(opts.score);
+  if (opts.pending) e.sqlite.exec("UPDATE proposals SET status='pending',approved_via=NULL WHERE id=1");
   if (opts.unknown) e.sqlite.exec("INSERT INTO proposals(job_id,title,cover_letter,status,submitted_at) VALUES ('2115559352186121362','Unclear','Letter','unknown',datetime('now','-2 days'))");
   let confirms = 0;
+  const boostBids: number[] = [];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     expect(String(url)).toBe(e.UPWORK_MCP_URL);
     const m = JSON.parse(String(init.body)); let result: unknown = {};
@@ -60,10 +64,11 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
       if (name === 'find_jobs') data = { connects_cost: 8, connects_balance: 30, can_apply: true, applied: false };
       if (name === 'list_freelancer_proposals') data = m.params.arguments.action === 'invitations' ? { invitations: [] } : { proposals: [] };
       if (name === 'manage_proposals') {
+        if (m.params.arguments.params?.boost_connects) boostBids.push(m.params.arguments.params.boost_connects);
         if (opts.pauseDuringDispatch) setTimeout(() => patchState(e, { paused: true, pausedReason: 'Paused from the dashboard' }), 5000);
         if (opts.pause) await patchState(e, { paused: true, pausedReason: 'Paused from the dashboard' });
         if (opts.off) await saveSettings(e, { ...settings, sendingEnabled: false });
-        data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, questions: opts.questions ?? [] };
+        data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, questions: opts.questions ?? [], ...(opts.boost !== undefined ? { boost: { available: true, recommended_connects: opts.boost, max_boost_connects: 600 } } : {}) };
       }
       if (name === 'confirm_preview') { confirms++; data = opts.response ?? { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: 'synthetic', error: null } } }; }
       result = name === 'get_freelancer_dashboard' && opts.warning ? { isError: true, content: [{ type: 'text', text: 'Your account is restricted due to violations of our Terms of Service' }] } : { structuredContent: data };
@@ -72,10 +77,34 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
   });
   await finishPipeline(runSender(e));
   vi.useRealTimers();
-  return { e, confirms, row: e.sqlite.prepare('SELECT status,connects FROM proposals WHERE id=1').get() };
+  return { e, confirms, boostBids, row: e.sqlite.prepare('SELECT status,connects,boost_connects FROM proposals WHERE id=1').get() };
 }
 
 describe('submission boundary (mocked upstream only)', () => {
+  it('boosts a manually approved strong match in Review with the recommended bid', async () => {
+    const r = await sender({ score: 90, boost: 2 });
+    expect(r.confirms).toBe(1);
+    expect(r.boostBids).toEqual([2]);
+    expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
+  });
+  it.each([
+    { score: 74, boost: 2 },
+    { score: 90, boost: 2, boostOff: true },
+    { score: 90, boost: 21 },
+    { score: 90, boost: 3 }, // Leaves less than the configured Connects floor.
+  ])('sends Review proposals without boosting when ineligible: %j', async opts => {
+    const r = await sender(opts);
+    expect(r.confirms).toBe(1);
+    expect(r.boostBids).toEqual([]);
+    expect(r.row).toMatchObject({ status: 'submitted', boost_connects: null });
+  });
+  it('does not boost or send an unapproved Review proposal', async () => {
+    const r = await sender({ score: 90, boost: 2, pending: true });
+    expect(r.confirms).toBe(0);
+    expect(r.boostBids).toEqual([]);
+    expect(r.row?.status).toBe('pending');
+  });
+
   it('allows a valid, manually approved proposal and records its final cost', async () => {
     const r = await sender({ cost: 9 }); expect(r.confirms).toBe(1); expect(r.row).toMatchObject({ status: 'submitted', connects: 9 });
     expect(r.e.sqlite.prepare("SELECT count(*) n FROM kv WHERE key LIKE 'send:attempt:%'").get()?.n).toBe(1);

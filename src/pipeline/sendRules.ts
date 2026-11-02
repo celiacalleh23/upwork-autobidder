@@ -1,6 +1,6 @@
 import { isActiveNow } from '../api';
 import { isAccountWarning, McpAuthError, McpToolError } from '../mcp';
-import type { Mode, Settings, State } from '../settings';
+import type { Settings, State } from '../settings';
 import { findKey } from '../oauth';
 
 // Pure rules for the sender (M6): when it may send, and how to read Upwork's answers. No network, no storage.
@@ -80,13 +80,12 @@ export function readBoost(b: unknown): BoostInfo | null {
   return { available: o.available === true, recommended: n(o.recommended_connects), max: n(o.max_boost_connects), skip: String(o.recommendation ?? '').toLowerCase() === 'skip' };
 }
 
-// Connects to bid on a boost (Siv, Oct 27: strong matches only; Celia, Oct 29: in Auto-submit only, never for proposals
-// sent from Review), or null for no boost. The bid is Upwork's recommended one, the smallest that takes a top slot,
-// within the per-job maximum, the balance left after the job's own cost and the Connects floor when it is on. `left` is
-// the balance minus the job's cost, when known.
-export function boostBid(score: number | null, b: BoostInfo | null, s: Settings, left: number | null, mode: Mode): number | null {
+// Recommended boost bid for strong matches in Auto-submit and manually approved Review proposals.
+// The bid stays within the per-job maximum, remaining balance and optional Connects floor.
+// boostInAuto is the persisted legacy name of the shared boosting switch.
+export function boostBid(score: number | null, b: BoostInfo | null, s: Settings, left: number | null): number | null {
   const c = s.caps;
-  if (mode !== 'auto' || !c.boostInAuto || score === null || score < c.boostMinScore) return null;
+  if (!c.boostInAuto || score === null || score < c.boostMinScore) return null;
   if (!b || !b.available || b.skip || b.recommended === null) return null;
   const bid = Math.max(1, Math.ceil(b.recommended));
   if (bid > c.boostMaxConnects || (b.max !== null && bid > b.max)) return null;

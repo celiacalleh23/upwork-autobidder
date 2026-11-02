@@ -454,8 +454,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
           <label class="check" for="maxConnectsOn"><input type="checkbox" id="maxConnectsOn"><span>Limit Connects per job</span></label>
           <input type="number" id="maxConnects" min="1" max="50" aria-describedby="maxConnectsHint"><span class="hint" id="maxConnectsHint">Off = apply to any job, whatever it costs.</span></div>
         <div class="field"><label for="boostScore">Boost proposals with a match score of at least</label>
-          <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches in Auto-submit</span></label>
-          <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Only in Auto-submit: proposals sent from Review first are never boosted. Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
+          <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches in Auto-submit and Review first</span></label>
+          <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Applies in both modes. Review-first proposals are boosted only after you approve them. Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
         <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="1000"><span class="hint">If a top slot needs more, the proposal goes out without a boost.</span></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
       </div>
@@ -645,7 +645,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     const pace = [c.daily ? `${c.daily} a day` : 'no daily cap', c.hourly ? `${c.hourly} an hour` : 'no hourly cap', s.mode === 'auto' ? `Random / humanized sending · 3–9 min (${c.gapMinutes} min minimum)` : `${c.gapMinutes} min apart`];
     $('rulesLine').textContent = `Guardrails: ${pace.join(' · ')} ${c.connectsFloor ? `· stop below ${c.connectsFloor} Connects ` : ''}· one proposal per job · auto-pause on any Upwork warning.`;
     $('capLine').textContent = pace.join(', ');
-    $('boostLine').textContent = s.boost && s.boost.inAuto ? `Proposals scoring ${s.boost.minScore}+ are boosted, up to ${s.boost.maxConnects} Connects each (Settings → Caps and guardrails).` : 'Boosting is off (Settings → Caps and guardrails).';
+    $('boostLine').textContent = s.boost && s.boost.inAuto ? `In both modes, approved proposals scoring ${s.boost.minScore}+ are eligible for boosting, up to ${s.boost.maxConnects} Connects each (Settings → Caps and guardrails).` : 'Boosting is off (Settings → Caps and guardrails).';
 
     $('upworkChip').textContent = s.upwork.connected ? 'Connected' : 'Not connected';
     $('upworkChip').className = 'chip ' + (s.upwork.connected ? 'good' : 'warn');
@@ -747,6 +747,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
           p.is_example ? h('span', { class: 'chip info', text: 'Example' }) : null,
           p.score !== null ? h('span', { class: 'chip good', text: `Match ${p.score}/100` }) : null,
           p.connects !== null ? h('span', { class: 'chip', text: `${p.connects} Connects` }) : null,
+          state && state.boost && state.boost.inAuto && p.score !== null && p.score >= state.boost.minScore
+            ? h('span', { class: 'chip info', text: `Boost eligible · up to ${state.boost.maxConnects} Connects extra`, title: 'After approval, bids Upwork’s recommended Connects within your limits. If no eligible boost is available, sends without one.' }) : null,
           bidChip)),
       p.keywords.length ? h('div', { class: 'chips' }, p.keywords.map((k) => h('span', { class: 'kw', text: k }))) : null,
       whyBox(p.analysis),

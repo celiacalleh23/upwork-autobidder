@@ -3,7 +3,7 @@ import { boostBid, isBoostRefusal, readBoost, type BoostInfo } from '../src/pipe
 import { DEFAULT_SETTINGS, validateSettings, type Settings } from '../src/settings';
 
 // Siv, Oct 27: boost proposals with a match score of 75+, at Upwork's recommended bid, up to a max per job.
-// Celia, Oct 29: in Auto-submit only, on as soon as Auto is on.
+// The shared boost switch applies in both sending modes.
 const s = (caps: Partial<Settings['caps']> = {}): Settings => {
   const base = structuredClone(DEFAULT_SETTINGS);
   return { ...base, caps: { ...base.caps, boostInAuto: true, boostMinScore: 75, boostMaxConnects: 20, ...caps } };
@@ -23,30 +23,30 @@ describe('readBoost (the preview\'s boost block)', () => {
 
 describe('boostBid', () => {
   it('bids the recommended Connects on strong matches only', () => {
-    expect(boostBid(80, open, s(), 600, 'auto')).toBe(3);
-    expect(boostBid(75, open, s(), 600, 'auto')).toBe(3);
-    expect(boostBid(74, open, s(), 600, 'auto')).toBeNull();
-    expect(boostBid(null, open, s(), 600, 'auto')).toBeNull();
+    expect(boostBid(80, open, s(), 600)).toBe(3);
+    expect(boostBid(75, open, s(), 600)).toBe(3);
+    expect(boostBid(74, open, s(), 600)).toBeNull();
+    expect(boostBid(null, open, s(), 600)).toBeNull();
   });
-  it('boosts in Auto-submit only, and not when switched off', () => {
-    expect(DEFAULT_SETTINGS.caps.boostInAuto).toBe(true); // on as soon as Auto is on
-    expect(boostBid(95, open, s(), 600, 'review')).toBeNull(); // proposals sent from Review first are never boosted
-    expect(boostBid(95, open, s({ boostInAuto: false }), 600, 'auto')).toBeNull();
+  it('uses the shared boosting switch', () => {
+    expect(DEFAULT_SETTINGS.caps.boostInAuto).toBe(true);
+    expect(boostBid(95, open, s(), 600)).toBe(3);
+    expect(boostBid(95, open, s({ boostInAuto: false }), 600)).toBeNull();
   });
   it('skips when Upwork says no boost or the top slot costs more than allowed', () => {
-    expect(boostBid(90, { ...open, available: false }, s(), 600, 'auto')).toBeNull();
-    expect(boostBid(90, { ...open, skip: true }, s(), 600, 'auto')).toBeNull();
-    expect(boostBid(90, { ...open, recommended: null }, s(), 600, 'auto')).toBeNull();
-    expect(boostBid(90, { ...open, recommended: 21 }, s(), 600, 'auto')).toBeNull();
-    expect(boostBid(90, { ...open, recommended: 20 }, s(), 600, 'auto')).toBe(20);
-    expect(boostBid(90, { ...open, recommended: 0 }, s(), 600, 'auto')).toBe(1); // Upwork's minimum bid is 1
+    expect(boostBid(90, { ...open, available: false }, s(), 600)).toBeNull();
+    expect(boostBid(90, { ...open, skip: true }, s(), 600)).toBeNull();
+    expect(boostBid(90, { ...open, recommended: null }, s(), 600)).toBeNull();
+    expect(boostBid(90, { ...open, recommended: 21 }, s(), 600)).toBeNull();
+    expect(boostBid(90, { ...open, recommended: 20 }, s(), 600)).toBe(20);
+    expect(boostBid(90, { ...open, recommended: 0 }, s(), 600)).toBe(1); // Upwork's minimum bid is 1
   });
   it('stays within the balance left after the job and the Connects floor', () => {
-    expect(boostBid(90, { ...open, max: 2 }, s(), 600, 'auto')).toBeNull();
-    expect(boostBid(90, open, s(), 2, 'auto')).toBeNull();
-    expect(boostBid(90, open, s(), null, 'auto')).toBe(3);
-    expect(boostBid(90, open, s({ connectsFloorEnabled: true, connectsFloor: 20 }), 22, 'auto')).toBeNull(); // 22 - 20 leaves room for 2, the bid is 3
-    expect(boostBid(90, open, s({ connectsFloorEnabled: true, connectsFloor: 20 }), 23, 'auto')).toBe(3);
+    expect(boostBid(90, { ...open, max: 2 }, s(), 600)).toBeNull();
+    expect(boostBid(90, open, s(), 2)).toBeNull();
+    expect(boostBid(90, open, s(), null)).toBe(3);
+    expect(boostBid(90, open, s({ connectsFloorEnabled: true, connectsFloor: 20 }), 22)).toBeNull(); // 22 - 20 leaves room for 2, the bid is 3
+    expect(boostBid(90, open, s({ connectsFloorEnabled: true, connectsFloor: 20 }), 23)).toBe(3);
   });
 });
 
@@ -75,6 +75,6 @@ it('accepts a configured boost ceiling above 100 without raising the saved defau
   expect(validateSettings(s({boostMaxConnects:1000})).caps.boostMaxConnects).toBe(1000);
   expect(()=>validateSettings(s({boostMaxConnects:1001}))).toThrow('Boost');
   expect(DEFAULT_SETTINGS.caps.boostMaxConnects).toBe(20);
-  expect(boostBid(90,{...open,recommended:150},s({boostMaxConnects:1000}),2000,'auto')).toBe(150);
-  expect(boostBid(90,{...open,recommended:150,max:100},s({boostMaxConnects:1000}),2000,'auto')).toBeNull();
+  expect(boostBid(90,{...open,recommended:150},s({boostMaxConnects:1000}),2000)).toBe(150);
+  expect(boostBid(90,{...open,recommended:150,max:100},s({boostMaxConnects:1000}),2000)).toBeNull();
 });

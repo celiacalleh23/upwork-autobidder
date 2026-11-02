@@ -240,10 +240,10 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
         await holdRetries(env); return summary;
       }
-      // Boost strong matches in Auto-submit (Siv, Oct 27; Celia, Oct 29): a second preview carries the bid. After two
+      // Boost strong matches in Auto-submit and approved Review proposals: a second preview carries the bid. After two
       // refused bids, no boost.
       const left = balance !== null && p.connectsCost !== null ? balance - p.connectsCost : null;
-      boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left, state.mode) : null;
+      boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left) : null;
       if (boost) p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra: p.extra, answers, boostConnects: boost });
       previewId = p.previewId;
       finalCost = p.connectsCost;
