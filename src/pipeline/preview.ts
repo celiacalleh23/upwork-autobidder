@@ -15,6 +15,7 @@ export interface Preview {
   questions: string[];
   extra: Record<string, string>; // application_method / payment_mode / estimated_duration that Upwork asked for
   boost: BoostInfo | null;
+  boostDiagnostics?: { fields: string[]; availableType: string; recommendedType: string; reason: string | null };
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -47,7 +48,10 @@ export async function createPreview(
       .map((q) => stripUntrusted(q)).filter(Boolean);
     const cost = finiteNumber(findKey(r, 'connects_cost'));
     const can = findKey(r, 'can_apply');
-    return { previewId, connectsCost: cost, canApply: typeof can === 'boolean' ? can : null, questions, extra, boost: readBoost(findKey(r, 'boost')) };
+    const rawBoost = findKey(r, 'boost');
+    const block = rawBoost && typeof rawBoost === 'object' && !Array.isArray(rawBoost) ? rawBoost as Record<string, unknown> : null;
+    const boostDiagnostics = { fields: block ? Object.keys(block).slice(0, 30) : [], availableType: typeof block?.available, recommendedType: typeof block?.recommended_connects, reason: typeof block?.reason === 'string' ? block.reason.slice(0, 300) : null };
+    return { boostDiagnostics, previewId, connectsCost: cost, canApply: typeof can === 'boolean' ? can : null, questions, extra, boost: readBoost(rawBoost) };
   }
   throw new McpError('Upwork preview kept asking for more details.');
 }

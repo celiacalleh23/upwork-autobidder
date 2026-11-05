@@ -86,6 +86,12 @@ describe('submission boundary (mocked upstream only)', () => {
     expect(r.confirms).toBe(1);
     expect(r.boostBids).toEqual([2]);
     expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
+    expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:2,reason:null,mode:'review'});
+  });
+  it('records missing upstream boost data instead of leaving an unexplained unboosted submission', async () => {
+    const r = await sender({score:95});
+    expect(r.row).toMatchObject({status:'submitted',boost_connects:null});
+    expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:null,reason:'upwork_boost_metadata_missing',metadata:{fields:[],availableType:'undefined'}});
   });
   it.each([
     { score: 74, boost: 2 },

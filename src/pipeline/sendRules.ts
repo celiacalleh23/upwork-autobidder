@@ -93,6 +93,23 @@ export function boostBid(score: number | null, b: BoostInfo | null, s: Settings,
   return bid;
 }
 
+// Explain skipped bids without changing bidding eligibility or spending limits.
+export function boostSkipReason(score: number | null, b: BoostInfo | null, s: Settings, left: number | null): string | null {
+  const c = s.caps;
+  if (!c.boostInAuto) return 'boosting_disabled';
+  if (score === null) return 'missing_score';
+  if (score < c.boostMinScore) return 'score_below_minimum';
+  if (!b) return 'upwork_boost_metadata_missing';
+  if (!b.available) return 'upwork_boost_not_available';
+  if (b.skip) return 'upwork_recommends_skip';
+  if (b.recommended === null) return 'upwork_recommended_bid_missing';
+  const bid = Math.max(1, Math.ceil(b.recommended));
+  if (bid > c.boostMaxConnects) return 'bid_above_configured_limit';
+  if (b.max !== null && bid > b.max) return 'bid_above_upwork_limit';
+  if (left !== null && bid > left - (c.connectsFloorEnabled ? c.connectsFloor : 0)) return 'insufficient_connects_after_application';
+  return null;
+}
+
 // Upwork re-reads the bids at confirm and refuses (sends nothing) when the boost no longer takes a paid slot.
 export const isBoostRefusal = (message: string) => /paid slot|bids? to beat|outbid|boost/i.test(message);
 

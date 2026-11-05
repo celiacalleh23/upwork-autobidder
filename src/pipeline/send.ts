@@ -8,7 +8,7 @@ import { loadSettings, loadState, patchState, reportEmails, type Env, type Setti
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import { checkAnswers, checkLetter, type Answer } from './letter';
 import { createPreview } from './preview';
-import { alertAction, boostBid, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
+import { alertAction, boostBid, boostSkipReason, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
 
@@ -244,6 +244,13 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       // refused bids, no boost.
       const left = balance !== null && p.connectsCost !== null ? balance - p.connectsCost : null;
       boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left) : null;
+      // Record the actual decision before submission; no credentials or full preview body.
+      await putKv(env, `boost:decision:${row.id}`, JSON.stringify({
+        at: new Date().toISOString(), proposalId: row.id, mode: state.mode,
+        bid: boost, reason: boostRefusals >= 2 ? 'two_boost_bids_refused' : boostSkipReason(row.score, p.boost, s, left),
+        score: row.score, minScore: s.caps.boostMinScore, maxBid: s.caps.boostMaxConnects,
+        remainingConnects: left, upwork: p.boost, metadata: p.boostDiagnostics ?? null,
+      }));
       if (boost) p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra: p.extra, answers, boostConnects: boost });
       previewId = p.previewId;
       finalCost = p.connectsCost;
