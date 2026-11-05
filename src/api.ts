@@ -23,6 +23,7 @@ const fail = (message: string, status = 400) => json({ error: message }, status)
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
   connects, boost_connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params, approved_at, approved_via,
+  (SELECT json_extract(value, '$.note') FROM kv WHERE key = 'boost:decision:' || proposals.id) AS boost_note,
   (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason,
   (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at,
   (SELECT seen_at FROM jobs WHERE jobs.id = proposals.job_id) AS found_at,
@@ -31,7 +32,7 @@ const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country,
 interface ProposalRow {
   id: number; job_id: string; title: string; url: string | null; job_type: string | null; budget: string | null;
   client_country: string | null; keywords: string | null; cover_letter: string; bid: number | null; loom_url: string | null;
-  connects: number | null; boost_connects: number | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
+  connects: number | null; boost_connects: number | null; boost_note: string | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
   is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null; analysis: string | null;
   posted_at: string | null; found_at: string | null; approved_at: string | null; approved_via: string | null;
 }

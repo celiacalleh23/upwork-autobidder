@@ -456,7 +456,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         <div class="field"><label for="boostScore">Boost proposals with a match score of at least</label>
           <label class="check" for="boostOn"><input type="checkbox" id="boostOn"><span>Boost strong matches in Auto-submit and Review first</span></label>
           <input type="number" id="boostScore" min="0" max="100" aria-describedby="boostHint"><span class="hint" id="boostHint">Applies in both modes. Review-first proposals are boosted only after you approve them. Bids Upwork's recommended Connects for a top slot on the client's list. Upwork charges the bid only if the proposal lands in a paid slot.</span></div>
-        <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="1000"><span class="hint">If the score requires a boost but a bid cannot be prepared within your limits, the proposal waits for review and is not sent.</span></div>
+        <div class="field"><label for="boostMax">Boost: never bid more than (Connects per job)</label><input type="number" id="boostMax" min="1" max="1000"><span class="hint">If boosting is unavailable or exceeds your limits, the proposal is sent normally and the activity log shows why it was not boosted.</span></div>
         <div class="field"><label for="stopErrors">Pause itself after this many errors in a row</label><input type="number" id="stopErrors" min="1" max="10"></div>
       </div>
       <p class="note info">Always on: one proposal per job, no contact details in letters, and an automatic pause at any rate-limit or account warning from Upwork.</p>
@@ -810,6 +810,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       const via = r.approved_via === 'auto-submit' ? 'by Auto-submit' : r.approved_via === 'dashboard' ? 'with the Approve button' : null;
       const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }),
         r.boost_connects ? h('span', { class: 'chip pink', title: 'Boosted: Upwork charges the bid only if the proposal lands in a paid spot', text: `Boosted · ${r.boost_connects} Connects` }) : null,
+        !r.boost_connects && r.boost_note ? h('span', { class: 'small muted', text: `Not boosted: ${r.boost_note}` }) : null,
         r.error ? h('span', { class: 'err', text: r.error }) : null,
         r.approved_at && via ? h('span', { class: 'sub-time', style: 'flex-basis:100%', text: `approved ${when(r.approved_at)} ${via}` }) : null);
       if (r.status === 'unknown') {

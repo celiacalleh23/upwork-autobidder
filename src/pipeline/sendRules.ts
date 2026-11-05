@@ -118,3 +118,22 @@ export function finiteNumber(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
+
+export function boostReasonText(reason: string | null): string | null {
+  if (!reason) return null;
+  const reasons: Record<string, string> = {
+    boosting_disabled: 'Boosting is turned off.',
+    missing_score: 'No match score was available.',
+    score_below_minimum: 'The score is below your boost threshold.',
+    upwork_boost_metadata_missing: 'Upwork did not provide boost information.',
+    upwork_boost_not_available: 'Upwork did not mark boosting as available.',
+    upwork_recommends_skip: 'Upwork recommended skipping the boost.',
+    upwork_recommended_bid_missing: 'Upwork did not provide a recommended boost bid.',
+    bid_above_configured_limit: 'The boost bid exceeds your configured limit.',
+    bid_above_upwork_limit: 'The boost bid exceeds Upwork’s limit.',
+    insufficient_connects_after_application: 'Not enough Connects for the boost within your balance and reserve limits.',
+    two_boost_bids_refused: 'Upwork rejected two boost bids.',
+    upwork_boost_preview_refused: 'Upwork rejected the boost while preparing the proposal.',
+  };
+  return reasons[reason] ?? 'A boost bid could not be prepared.';
+}

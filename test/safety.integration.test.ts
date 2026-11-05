@@ -40,7 +40,7 @@ async function connected(e: Env, auto = false) {
   } } });
   await putKv(e, 'upwork_tokens', await seal(e, { accessToken: 'synthetic', expiresAt: Date.now()+3600_000 }));
 }
-async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number } = {}) {
+async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number; boostPreviewRefused?: boolean } = {}) {
   vi.useFakeTimers();
   const e = env(); await connected(e, opts.autoMode);
   const settings = structuredClone(DEFAULT_SETTINGS); settings.sendingEnabled = true; settings.caps.activeStart = settings.caps.activeEnd = '00:00';
@@ -72,7 +72,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
         data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, questions: opts.questions ?? [], ...(opts.boost !== undefined ? { boost: { available: true, recommended_connects: opts.boost, max_boost_connects: 600 } } : {}) };
       }
       if (name === 'confirm_preview') { confirms++; data = opts.response ?? { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: 'synthetic', error: null } } }; }
-      result = name === 'get_freelancer_dashboard' && opts.warning ? { isError: true, content: [{ type: 'text', text: 'Your account is restricted due to violations of our Terms of Service' }] } : { structuredContent: data };
+      result = name === 'manage_proposals' && opts.boostPreviewRefused && m.params.arguments.params?.boost_connects ? { isError: true, content: [{ type: 'text', text: 'The boost bid was rejected: outbid for paid slot' }] } : name === 'get_freelancer_dashboard' && opts.warning ? { isError: true, content: [{ type: 'text', text: 'Your account is restricted due to violations of our Terms of Service' }] } : { structuredContent: data };
     }
     return new Response(m.id === undefined ? null : JSON.stringify({ jsonrpc: '2.0', id: m.id, result }), { status: m.id === undefined ? 202 : 200, headers: { 'content-type': 'application/json' } });
   });
@@ -89,10 +89,10 @@ describe('submission boundary (mocked upstream only)', () => {
     expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
     expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:2,reason:null,mode:'review'});
   });
-  it.each([false,true])('holds a qualifying proposal with missing boost data, auto=%s', async autoMode => {
+  it.each([false,true])('sends normally and records why when boost data is missing, auto=%s', async autoMode => {
     const r = await sender({score:95,autoMode});
-    expect(r.confirms).toBe(0);
-    expect(r.row).toMatchObject({status:'pending',boost_connects:null});
+    expect(r.confirms).toBe(1);
+    expect(r.row).toMatchObject({status:'submitted',boost_connects:null});
     expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:null,reason:'upwork_boost_metadata_missing',metadata:{fields:[],availableType:'undefined'}});
   });
   it.each([
@@ -107,15 +107,23 @@ describe('submission boundary (mocked upstream only)', () => {
   it.each([
     {score:90,boost:21}, // Above the configured maximum.
     {score:90,boost:3}, // Insufficient balance above the reserve.
-    {score:90,boost:2,boostRefusals:2}, // No unboosted fallback after rejected bids.
-  ])('holds qualifying proposals instead of sending without a required boost: %j', async opts => {
+    {score:90,boost:2,boostRefusals:2}, // Fall back after rejected bids.
+  ])('sends qualifying proposals normally with an explanation when boosting cannot proceed: %j', async opts => {
     const r=await sender(opts);
-    expect(r.confirms).toBe(0);
+    expect(r.confirms).toBe(1);
     expect(r.boostBids).toEqual([]);
-    expect(r.row).toMatchObject({status:'pending',boost_connects:null});
-    const approval=r.e.sqlite.prepare('SELECT approved_at,approved_via,error FROM proposals WHERE id=1').get();
-    expect(approval).toMatchObject({approved_at:null,approved_via:null});
-    expect(String(approval?.error)).toContain('Not sent: this score requires a boost.');
+    expect(r.row).toMatchObject({status:'submitted',boost_connects:null});
+    const decision=JSON.parse((await getKv(r.e,'boost:decision:1'))!);
+    expect(decision.note).toBeTruthy();
+    const log=await handleApi(new Request('https://local.invalid/api/log'),r.e,'/api/log');
+    expect((await log.json() as {rows:{boost_note:string}[]}).rows[0].boost_note).toBe(decision.note);
+  });
+  it('falls back to a normal preview and records an explicit boost-preview refusal', async () => {
+    const r=await sender({score:95,boost:2,boostPreviewRefused:true});
+    expect(r.confirms).toBe(1);
+    expect(r.boostBids).toEqual([2]);
+    expect(r.row).toMatchObject({status:'submitted',boost_connects:null});
+    expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({reason:'upwork_boost_preview_refused',bid:null});
   });
   it('does not boost or send an unapproved Review proposal', async () => {
     const r = await sender({ score: 90, boost: 2, pending: true });
