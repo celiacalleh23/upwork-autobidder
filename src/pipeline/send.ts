@@ -240,17 +240,33 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
         await holdRetries(env); return summary;
       }
-      // Boost strong matches in Auto-submit and approved Review proposals: a second preview carries the bid. After two
-      // refused bids, no boost.
+      // Boost strong matches in either mode. Required boosts must never silently fall back to an unboosted send.
       const left = balance !== null && p.connectsCost !== null ? balance - p.connectsCost : null;
       boost = boostRefusals < 2 ? boostBid(row.score, p.boost, s, left) : null;
+      const boostRequired = s.caps.boostInAuto && row.score !== null && row.score >= s.caps.boostMinScore;
+      const boostReason = boostRefusals >= 2 ? 'two_boost_bids_refused' : boostSkipReason(row.score, p.boost, s, left);
       // Record the actual decision before submission; no credentials or full preview body.
       await putKv(env, `boost:decision:${row.id}`, JSON.stringify({
         at: new Date().toISOString(), proposalId: row.id, mode: state.mode,
-        bid: boost, reason: boostRefusals >= 2 ? 'two_boost_bids_refused' : boostSkipReason(row.score, p.boost, s, left),
+        bid: boost, required: boostRequired, reason: boostReason,
         score: row.score, minScore: s.caps.boostMinScore, maxBid: s.caps.boostMaxConnects,
         remainingConnects: left, upwork: p.boost, metadata: p.boostDiagnostics ?? null,
       }));
+      if (boostRequired && boost === null) {
+        const reasons: Record<string, string> = {
+          upwork_boost_metadata_missing: 'Upwork did not provide boost information.',
+          upwork_boost_not_available: 'Upwork did not mark boosting as available.',
+          upwork_recommends_skip: 'Upwork recommended skipping the boost.',
+          upwork_recommended_bid_missing: 'Upwork did not provide a recommended boost bid.',
+          bid_above_configured_limit: 'The boost bid exceeds your configured limit.',
+          bid_above_upwork_limit: 'The boost bid exceeds Upwork’s limit.',
+          insufficient_connects_after_application: 'There are not enough Connects for the application and boost within your limits.',
+          two_boost_bids_refused: 'Upwork rejected two boost bids.',
+        };
+        summary.note = `Not sent: this score requires a boost. ${reasons[boostReason ?? ''] ?? 'A boost bid could not be prepared.'} Review the boost before approving again.`;
+        await setProposal(env, row.id, { status: 'pending', submitted_at: null, approved_at: null, approved_via: null, error: summary.note });
+        return summary;
+      }
       if (boost) p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra: p.extra, answers, boostConnects: boost });
       previewId = p.previewId;
       finalCost = p.connectsCost;
@@ -276,7 +292,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       summary.note = `Preview failed: ${errText(e)}`; return summary;
     }
 
-    // Upwork re-read the bids at confirm and sent nothing: back to approved; the next run bids again or sends unboosted.
+    // A rejected boost sent nothing: retry the bid; after two refusals the next run holds for review.
     const boostRefused = async (message: string) => {
       await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
       await putKv(env, boostKey, String(boostRefusals + 1));

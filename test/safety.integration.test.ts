@@ -40,15 +40,16 @@ async function connected(e: Env, auto = false) {
   } } });
   await putKv(e, 'upwork_tokens', await seal(e, { accessToken: 'synthetic', expiresAt: Date.now()+3600_000 }));
 }
-async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean } = {}) {
+async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number } = {}) {
   vi.useFakeTimers();
-  const e = env(); await connected(e);
+  const e = env(); await connected(e, opts.autoMode);
   const settings = structuredClone(DEFAULT_SETTINGS); settings.sendingEnabled = true; settings.caps.activeStart = settings.caps.activeEnd = '00:00';
   settings.caps.connectsFloorEnabled = true; settings.caps.connectsFloor = 20; settings.caps.maxConnectsEnabled = true; settings.caps.maxConnectsPerJob = 16;
   if (opts.boostOff) settings.caps.boostInAuto = false;
   await saveSettings(e, settings);
   e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,bid,job_type,status,approved_via,create_params) VALUES ('2115559352186121361','Synthetic','Synthetic letter',40,'hourly','approved',?,?)")
     .run(opts.autoApproval ? 'auto-submit' : 'dashboard', JSON.stringify({ answers: opts.answers ?? [] }));
+  if (opts.boostRefusals) await putKv(e, 'boostRefused:1', String(opts.boostRefusals));
   if (opts.score !== undefined) e.sqlite.prepare('UPDATE proposals SET score = ? WHERE id=1').run(opts.score);
   if (opts.pending) e.sqlite.exec("UPDATE proposals SET status='pending',approved_via=NULL WHERE id=1");
   if (opts.unknown) e.sqlite.exec("INSERT INTO proposals(job_id,title,cover_letter,status,submitted_at) VALUES ('2115559352186121362','Unclear','Letter','unknown',datetime('now','-2 days'))");
@@ -88,21 +89,33 @@ describe('submission boundary (mocked upstream only)', () => {
     expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
     expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:2,reason:null,mode:'review'});
   });
-  it('records missing upstream boost data instead of leaving an unexplained unboosted submission', async () => {
-    const r = await sender({score:95});
-    expect(r.row).toMatchObject({status:'submitted',boost_connects:null});
+  it.each([false,true])('holds a qualifying proposal with missing boost data, auto=%s', async autoMode => {
+    const r = await sender({score:95,autoMode});
+    expect(r.confirms).toBe(0);
+    expect(r.row).toMatchObject({status:'pending',boost_connects:null});
     expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:null,reason:'upwork_boost_metadata_missing',metadata:{fields:[],availableType:'undefined'}});
   });
   it.each([
     { score: 74, boost: 2 },
     { score: 90, boost: 2, boostOff: true },
-    { score: 90, boost: 21 },
-    { score: 90, boost: 3 }, // Leaves less than the configured Connects floor.
   ])('sends Review proposals without boosting when ineligible: %j', async opts => {
     const r = await sender(opts);
     expect(r.confirms).toBe(1);
     expect(r.boostBids).toEqual([]);
     expect(r.row).toMatchObject({ status: 'submitted', boost_connects: null });
+  });
+  it.each([
+    {score:90,boost:21}, // Above the configured maximum.
+    {score:90,boost:3}, // Insufficient balance above the reserve.
+    {score:90,boost:2,boostRefusals:2}, // No unboosted fallback after rejected bids.
+  ])('holds qualifying proposals instead of sending without a required boost: %j', async opts => {
+    const r=await sender(opts);
+    expect(r.confirms).toBe(0);
+    expect(r.boostBids).toEqual([]);
+    expect(r.row).toMatchObject({status:'pending',boost_connects:null});
+    const approval=r.e.sqlite.prepare('SELECT approved_at,approved_via,error FROM proposals WHERE id=1').get();
+    expect(approval).toMatchObject({approved_at:null,approved_via:null});
+    expect(String(approval?.error)).toContain('Not sent: this score requires a boost.');
   });
   it('does not boost or send an unapproved Review proposal', async () => {
     const r = await sender({ score: 90, boost: 2, pending: true });
