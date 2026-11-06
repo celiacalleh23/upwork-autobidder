@@ -21,6 +21,23 @@ describe('readBoost (the preview\'s boost block)', () => {
   });
 });
 
+describe('live boost response without an availability field', () => {
+  it('recognizes the recommended 32-Connect bid from the reported live response', () => {
+    const b=readBoost({recommended_connects:32,max_boost_connects:3084,your_balance:3098});
+    expect(b).toEqual({available:true,recommended:32,max:3084,skip:false});
+    expect(boostBid(88,b,s({boostMinScore:85,boostMaxConnects:500}),3084)).toBe(32);
+    expect(boostBid(88,b,s({boostMinScore:85,boostMaxConnects:20}),3084)).toBeNull();
+  });
+  it('honors explicit unavailability and skip despite a recommended bid', () => {
+    expect(readBoost({available:false,recommended_connects:32})?.available).toBe(false);
+    const b=readBoost({recommendation:'skip',recommended_connects:32});
+    expect(boostBid(90,b,s(),3000)).toBeNull();
+  });
+  it.each([undefined,null,0,-1,true,[],{},'bad',Infinity])('does not infer availability from an invalid or absent recommended bid: %j', recommended_connects => {
+    expect(readBoost({recommended_connects})?.available).toBe(false);
+  });
+});
+
 describe('boostBid', () => {
   it('bids the recommended Connects on strong matches only', () => {
     expect(boostBid(80, open, s(), 600)).toBe(3);

@@ -40,12 +40,14 @@ async function connected(e: Env, auto = false) {
   } } });
   await putKv(e, 'upwork_tokens', await seal(e, { accessToken: 'synthetic', expiresAt: Date.now()+3600_000 }));
 }
-async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number; boostPreviewRefused?: boolean } = {}) {
+async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number; boostPreviewRefused?: boolean; boostInfo?: Record<string, unknown>; balance?: number; boostMax?: number; boostMin?: number } = {}) {
   vi.useFakeTimers();
   const e = env(); await connected(e, opts.autoMode);
   const settings = structuredClone(DEFAULT_SETTINGS); settings.sendingEnabled = true; settings.caps.activeStart = settings.caps.activeEnd = '00:00';
   settings.caps.connectsFloorEnabled = true; settings.caps.connectsFloor = 20; settings.caps.maxConnectsEnabled = true; settings.caps.maxConnectsPerJob = 16;
   if (opts.boostOff) settings.caps.boostInAuto = false;
+  if (opts.boostMax !== undefined) settings.caps.boostMaxConnects=opts.boostMax;
+  if (opts.boostMin !== undefined) settings.caps.boostMinScore=opts.boostMin;
   await saveSettings(e, settings);
   e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,bid,job_type,status,approved_via,create_params) VALUES ('2115559352186121361','Synthetic','Synthetic letter',40,'hourly','approved',?,?)")
     .run(opts.autoApproval ? 'auto-submit' : 'dashboard', JSON.stringify({ answers: opts.answers ?? [] }));
@@ -61,7 +63,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
     if (m.method === 'initialize') result = { protocolVersion: '2025-06-18' };
     if (m.method === 'tools/call') {
       const name = m.params.name; let data: unknown = {};
-      if (name === 'get_freelancer_dashboard') data = { connectsBalance: 30 };
+      if (name === 'get_freelancer_dashboard') data = { connectsBalance: opts.balance ?? 30 };
       if (name === 'find_jobs') data = { connects_cost: 8, connects_balance: 30, can_apply: true, applied: false };
       if (name === 'list_freelancer_proposals') data = m.params.arguments.action === 'invitations' ? { invitations: [] } : { proposals: [] };
       if (name === 'manage_proposals') {
@@ -69,7 +71,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
         if (opts.pauseDuringDispatch) setTimeout(() => patchState(e, { paused: true, pausedReason: 'Paused from the dashboard' }), 5000);
         if (opts.pause) await patchState(e, { paused: true, pausedReason: 'Paused from the dashboard' });
         if (opts.off) await saveSettings(e, { ...settings, sendingEnabled: false });
-        data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, questions: opts.questions ?? [], ...(opts.boost !== undefined ? { boost: { available: true, recommended_connects: opts.boost, max_boost_connects: 600 } } : {}) };
+        data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, questions: opts.questions ?? [], ...(opts.boostInfo ? {boost:opts.boostInfo} : opts.boost !== undefined ? { boost: { available: true, recommended_connects: opts.boost, max_boost_connects: 600 } } : {}) };
       }
       if (name === 'confirm_preview') { confirms++; data = opts.response ?? { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: 'synthetic', error: null } } }; }
       result = name === 'manage_proposals' && opts.boostPreviewRefused && m.params.arguments.params?.boost_connects ? { isError: true, content: [{ type: 'text', text: 'The boost bid was rejected: outbid for paid slot' }] } : name === 'get_freelancer_dashboard' && opts.warning ? { isError: true, content: [{ type: 'text', text: 'Your account is restricted due to violations of our Terms of Service' }] } : { structuredContent: data };
@@ -88,6 +90,14 @@ describe('submission boundary (mocked upstream only)', () => {
     expect(r.boostBids).toEqual([2]);
     expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
     expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:2,reason:null,mode:'review'});
+  });
+  it.each([false,true])('submits the 32-Connect boost with live-style metadata, auto=%s', async autoMode => {
+    const r=await sender({autoMode,score:88,cost:14,balance:3098,boostMax:500,boostMin:85,
+      boostInfo:{recommended_connects:32,max_boost_connects:3084,your_balance:3098}});
+    expect(r.confirms).toBe(1);
+    expect(r.boostBids).toEqual([32]);
+    expect(r.row).toMatchObject({status:'submitted',boost_connects:32});
+    expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:32,reason:null,note:null});
   });
   it.each([false,true])('sends normally and records why when boost data is missing, auto=%s', async autoMode => {
     const r = await sender({score:95,autoMode});

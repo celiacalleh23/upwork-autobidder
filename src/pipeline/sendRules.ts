@@ -76,8 +76,13 @@ export interface BoostInfo { available: boolean; recommended: number | null; max
 export function readBoost(b: unknown): BoostInfo | null {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
   const o = b as Record<string, unknown>;
-  const n = (v: unknown) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
-  return { available: o.available === true, recommended: n(o.recommended_connects), max: n(o.max_boost_connects), skip: String(o.recommendation ?? '').toLowerCase() === 'skip' };
+  const recommended = finiteNumber(o.recommended_connects);
+  const skip = String(o.recommendation ?? '').toLowerCase() === 'skip';
+  // The live API can omit `available` while supplying a recommended auction bid.
+  // Absence is not an explicit refusal. A valid positive recommendation establishes
+  // availability in that response format; explicit false and skip still take precedence.
+  const available = o.available === true || (o.available === undefined && recommended !== null && recommended > 0 && !skip);
+  return { available, recommended, max: finiteNumber(o.max_boost_connects), skip };
 }
 
 // Recommended boost bid for strong matches in Auto-submit and manually approved Review proposals.
