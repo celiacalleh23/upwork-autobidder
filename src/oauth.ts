@@ -275,6 +275,29 @@ export async function upworkClient(env: Env, purpose: UpworkPurpose = 'bidding')
 const NEEDED_TOOLS = ['list_accounts', 'get_freelancer_dashboard', 'find_jobs', 'list_freelancer_proposals', 'manage_proposals', 'confirm_preview', 'get_tool_help'] as const;
 
 // Upstream names may carry a prefix such as "upwork__"; map each base name to the real one.
+const toolCacheKey = (base: string) => `upwork:tool:${base}`;
+const TOOL_CACHE_MS = 24 * 3600_000;
+
+// One tools/list can answer later profile, contract, and ledger steps. A stale name expires after a day.
+export async function cachedToolName(env: Env, client: McpClient, base: string): Promise<string | null> {
+  const raw = await getKv(env, toolCacheKey(base));
+  if (raw) {
+    try {
+      const saved = JSON.parse(raw) as { name?: string; at?: number };
+      if (typeof saved.name === 'string' && saved.name && typeof saved.at === 'number' && Date.now() - saved.at < TOOL_CACHE_MS) return saved.name;
+    } catch { /* list again */ }
+  }
+  const names = await client.listTools();
+  const at = Date.now();
+  let found: string | null = null;
+  for (const name of names) {
+    const short = name.split(/__|\./).pop() ?? name;
+    await putKv(env, toolCacheKey(short), JSON.stringify({ name, at }));
+    if (short === base) found = name;
+  }
+  return found;
+}
+
 export function resolveToolNames(names: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const base of NEEDED_TOOLS) {

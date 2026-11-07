@@ -16,6 +16,7 @@ export interface Env {
   EXTERNAL_SCAN_ONLY?: string; // 'true' disables only the legacy additional-account scan
   INDEPENDENT_DRAFTS?: string; // 'true' drafts from saved public snapshots with no Upwork calls. Unset or any other value keeps the previous writer.
   PREVIEW_ISOLATION?: string; // 'true' only on a branch preview. Production must leave this unset.
+  UPWORK_DISCOVERY?: string; // 'false' skips Upwork job search. Unset keeps the :00/:30 searches. Not a default change.
   REPORT_FROM?: string; // e.g. "Upwork Auto-Bidder <reports@ltv-labs.com>" on a Resend-verified domain
   CLAUDE_MODEL: string;
   UPWORK_MCP_URL: string;
