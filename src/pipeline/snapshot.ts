@@ -21,7 +21,10 @@ export interface PublicJobSnapshot {
   descriptionTruncated: boolean;
   jobType: 'fixed' | 'hourly' | null;
   budgetText: string | null;
-  amountSource: 'price' | null; // 'price' is the feed's bare number. It is not a currency.
+  amountSource: 'price' | 'hourly-band' | null;
+  explicitCurrency: string | null; // currency the feed itself named. Never invented.
+  listedCurrency: 'USD' | null; // Upwork's published listing currency, only for the Hyperbach public fields.
+  budgetFault: 'malformed' | 'currency-conflict' | null;
   currency: null;
   country: string | null;
   verification: string | null;
@@ -57,6 +60,7 @@ interface PersistInput {
   raw: unknown;
   partial: boolean;
   provenance: Record<string, unknown>;
+  contract?: BudgetContract | null;
 }
 
 const object = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
@@ -112,23 +116,70 @@ function moneyText(v: unknown): string | null {
   return n !== null && n > 0 ? n.toFixed(2) : null;
 }
 
-function budgetText(raw: Record<string, unknown>, jobType: 'fixed' | 'hourly' | null): { text: string | null; fromPrice: boolean } {
+export type BudgetContract = 'hyperbach-public-upwork';
+
+// A single positive amount. Operators, ranges, zero, and blank values are not an amount.
+function plainAmount(v: unknown): { text: string | null; empty: boolean; malformed: boolean } {
+  if (v == null || v === '') return { text: null, empty: true, malformed: false };
+  if (typeof v !== 'number' && typeof v !== 'string') return { text: null, empty: false, malformed: true };
+  const s = typeof v === 'number' ? String(v) : v.trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) return { text: null, empty: false, malformed: true };
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return { text: null, empty: false, malformed: true };
+  return { text: n.toFixed(2), empty: false, malformed: false };
+}
+
+function explicitCode(raw: Record<string, unknown>): { code: string | null; malformed: boolean } {
+  const v = raw.currency;
+  if (v == null || v === '') return { code: null, malformed: false };
+  if (typeof v !== 'string' || !/^[A-Za-z]{3}$/.test(v.trim())) return { code: null, malformed: true };
+  return { code: v.trim().toUpperCase(), malformed: false };
+}
+
+// Hyperbach's published fields for a public Upwork posting. Upwork lists those costs in USD.
+// An explicit currency on the row is never replaced. Any other feed is not this contract.
+function hyperbachListing(raw: Record<string, unknown>): {
+  jobType: 'fixed' | 'hourly'; budgetText: string | null; amountSource: 'price' | 'hourly-band' | null;
+  explicitCurrency: string | null; listedCurrency: 'USD' | null; budgetFault: 'malformed' | 'currency-conflict' | null;
+} | null {
+  const kind = String(raw.price_type ?? '').trim().toLowerCase();
+  if (kind !== 'fixed-price' && kind !== 'hourly') return null;
+  const jobType: 'fixed' | 'hourly' = kind === 'hourly' ? 'hourly' : 'fixed';
+  const explicit = explicitCode(raw);
+  const deny = (budgetFault: 'malformed' | 'currency-conflict', budgetText: string | null, amountSource: 'price' | 'hourly-band' | null) => ({
+    jobType, budgetText, amountSource, explicitCurrency: explicit.code, listedCurrency: null as 'USD' | null, budgetFault,
+  });
+  if (explicit.malformed) return deny('malformed', null, null);
+  const mark = (budgetText: string, amountSource: 'price' | 'hourly-band') => explicit.code && explicit.code !== 'USD'
+    ? deny('currency-conflict', budgetText, amountSource)
+    : { jobType, budgetText, amountSource, explicitCurrency: explicit.code, listedCurrency: explicit.code === 'USD' ? null : 'USD' as const, budgetFault: null };
+  if (jobType === 'fixed') {
+    const price = plainAmount(raw.price);
+    const min = plainAmount(raw.price_min);
+    const max = plainAmount(raw.price_max);
+    if (!min.empty || !max.empty || price.malformed || price.empty || !price.text) return deny('malformed', null, null);
+    return mark(price.text, 'price');
+  }
+  const price = plainAmount(raw.price);
+  const min = plainAmount(raw.price_min);
+  const max = plainAmount(raw.price_max);
+  if (!price.empty || min.malformed || max.malformed || (min.empty && max.empty)) return deny('malformed', null, null);
+  const budgetText = min.text && max.text ? `${min.text}–${max.text}/hr` : max.text ? `up to ${max.text}/hr` : `${min.text}+/hr`;
+  return mark(budgetText, 'hourly-band');
+}
+
+function budgetText(raw: Record<string, unknown>, jobType: 'fixed' | 'hourly' | null): string | null {
   const direct = text(raw.budget ?? raw.budget_text ?? raw.budgetText, 120);
-  if (direct) return { text: direct, fromPrice: false };
+  if (direct) return direct;
   if (jobType === 'hourly') {
     const min = moneyText(raw.hourly_budget_min ?? raw.hourlyBudgetMin ?? raw.hourly_min);
     const max = moneyText(raw.hourly_budget_max ?? raw.hourlyBudgetMax ?? raw.hourly_max);
-    if (min && max) return { text: `${min}–${max}/hr`, fromPrice: false };
-    if (max) return { text: `up to ${max}/hr`, fromPrice: false };
-    if (min) return { text: `${min}+/hr`, fromPrice: false };
-    const rate = moneyText(raw.price);
-    return { text: rate ? `${rate}/hr` : null, fromPrice: !!rate };
+    if (min && max) return `${min}–${max}/hr`;
+    if (max) return `up to ${max}/hr`;
+    if (min) return `${min}+/hr`;
+    return null;
   }
-  const stated = moneyText(raw.fixed_budget ?? raw.fixed_price ?? raw.amount ?? raw.fixedPrice);
-  if (stated) return { text: stated, fromPrice: false };
-  if (jobType !== 'fixed') return { text: null, fromPrice: false };
-  const price = moneyText(raw.price);
-  return { text: price, fromPrice: !!price };
+  return jobType === 'fixed' ? moneyText(raw.fixed_budget ?? raw.fixed_price ?? raw.amount ?? raw.fixedPrice) : null;
 }
 
 function jobTypeOf(raw: Record<string, unknown>): 'fixed' | 'hourly' | null {
@@ -157,13 +208,17 @@ function countryOf(raw: Record<string, unknown>): string | null {
 }
 
 // Feed questions that are missing or an empty list stay unknown. AI-written fields are hints, not questions.
-export function normalizePublicJob(jobId: string, raw: unknown): PublicJobSnapshot {
+export function normalizePublicJob(jobId: string, raw: unknown, contract?: BudgetContract | null): PublicJobSnapshot {
   const src = object(raw) ?? {};
   const descriptionSource = passage(src.description ?? src.description_text ?? src.job_description ?? src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
   const descriptionTruncated = !!descriptionSource && descriptionSource.length > DESCRIPTION_STORE_LIMIT;
   const description = descriptionSource ? descriptionSource.slice(0, DESCRIPTION_STORE_LIMIT) : null;
-  const jobType = jobTypeOf(src);
-  const budget = budgetText(src, jobType);
+  const directBudget = text(src.budget ?? src.budget_text ?? src.budgetText, 120);
+  const shaped = directBudget ? null : hyperbachListing(src);
+  const listing = shaped && contract === 'hyperbach-public-upwork' ? shaped : null;
+  const unscoped = shaped && !listing ? shaped : null;
+  const jobType = (listing ?? unscoped)?.jobType ?? jobTypeOf(src);
+  const budget = (listing ?? unscoped)?.budgetText ?? budgetText(src, jobType);
   const skillsRaw = src.skills;
   const skills = Array.isArray(skillsRaw) ? skillsRaw.map((s) => text(typeof s === 'string' ? s : object(s)?.name, 80)).filter((s): s is string => !!s).slice(0, 40) : null;
   const hint = [text(src.ai_specific_requirements_before_applying, 500), text(src.ai_anti_bot_phrase, 200)].filter(Boolean).join(' · ') || null;
@@ -171,7 +226,12 @@ export function normalizePublicJob(jobId: string, raw: unknown): PublicJobSnapsh
   return {
     v: 1, id: jobId, sourceId, title: text(src.title ?? src.jobTitle, 300),
     url: text(typeof src.url === 'object' ? object(src.url)?.href ?? object(src.url)?.url : src.url ?? src.link ?? src.jobUrl, 400) ?? snapshotUrl(jobId),
-    description, descriptionTruncated, jobType, budgetText: budget.text, amountSource: budget.fromPrice ? 'price' : null, currency: null,
+    description, descriptionTruncated, jobType, budgetText: budget,
+    amountSource: (listing ?? unscoped)?.amountSource ?? null,
+    explicitCurrency: (listing ?? unscoped)?.explicitCurrency ?? null,
+    listedCurrency: listing?.listedCurrency ?? null,
+    budgetFault: (listing ?? unscoped)?.budgetFault ?? null,
+    currency: null,
     country: countryOf(src), verification: verificationOf(src),
     proposalCount: asNumber(src.proposal_count ?? src.proposalCount ?? src.applicants),
     proposalsTier: text(src.proposals_tier ?? src.proposalsTier, 40),
@@ -211,6 +271,9 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
     jobType: partial ? (prev.jobType ?? next.jobType) : (next.jobType ?? prev.jobType),
     budgetText: partial ? (prev.budgetText ?? next.budgetText) : (next.budgetText ?? prev.budgetText),
     amountSource: partial ? (prev.amountSource ?? next.amountSource) : next.amountSource,
+    explicitCurrency: partial ? (prev.explicitCurrency ?? next.explicitCurrency) : next.explicitCurrency,
+    listedCurrency: partial ? (prev.listedCurrency ?? next.listedCurrency) : next.listedCurrency,
+    budgetFault: partial ? (prev.budgetFault ?? next.budgetFault) : next.budgetFault,
     currency: null,
     country: partial ? (prev.country ?? next.country) : (next.country ?? prev.country),
     verification: partial ? (prev.verification ?? next.verification) : (next.verification ?? prev.verification),
@@ -224,19 +287,13 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
   };
 }
 
-// A bare feed price is a number, not a bid. No currency contract is inferred, including USD.
-export function unverifiedPriceHold(snap: PublicJobSnapshot, s: Settings): string | null {
-  if (snap.amountSource !== 'price') return null;
-  const stated = snap.budgetText ?? 'a number';
-  const min = s.minFixedBudget;
-  if (snap.jobType === 'fixed' && min > 0) {
-    const amount = Number(stated);
-    const comparison = Number.isFinite(amount) && amount < min
-      ? `${stated} is numerically below the minimum fixed budget of ${min}, but that minimum is not applied without a verified same-currency contract. `
-      : `The minimum fixed budget of ${min} is not applied without a verified same-currency contract. `;
-    return `Held: the feed stated a fixed price of ${stated} and no currency. ${comparison}Nothing is drafted or sent.`;
-  }
-  return `Held: the feed stated ${stated} and no currency. Nothing is drafted or sent.`;
+// Listed USD is applied only by hyperbachListing. This refuses a conflict, a bad amount, and any other feed.
+export function unverifiedPriceHold(snap: PublicJobSnapshot, _s: Settings): string | null {
+  if (snap.budgetFault === 'currency-conflict') return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
+  if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero, blank, or not a single positive amount. Nothing is drafted or sent.';
+  if (snap.listedCurrency === 'USD' || snap.explicitCurrency === 'USD') return null;
+  if (snap.amountSource) return `Held: ${snap.budgetText ?? 'this price'} is not from the documented Hyperbach public Upwork listing. Nothing is drafted or sent.`;
+  return null;
 }
 
 export function snapshotHoldReason(snap: PublicJobSnapshot, s: Settings): string | null {
@@ -244,8 +301,10 @@ export function snapshotHoldReason(snap: PublicJobSnapshot, s: Settings): string
   if (!snap.description) return 'Held: the saved snapshot has no job description.';
   if (s.verifiedOnly && !snap.verification) return 'Held: client payment verification was not in the saved snapshot.';
   if (s.maxExistingProposals > 0 && snap.proposalCount === null && !snap.proposalsTier) return 'Held: the current proposal count was not in the saved snapshot.';
+  const priceHold = unverifiedPriceHold(snap, s);
+  if (priceHold) return priceHold;
   if (computeBid(snap.jobType, snap.budgetText, s) === null) return 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.';
-  return unverifiedPriceHold(snap, s);
+  return null;
 }
 
 function readRow(row: Record<string, unknown> | null): SnapshotRow | null {
@@ -281,7 +340,7 @@ export async function persistSnapshot(env: Env, input: PersistInput, now = new D
   try {
     const existing = await loadSnapshot(env, input.jobId);
     if (existing && await frozen(env, input.jobId)) return;
-    const incoming = normalizePublicJob(input.jobId, input.raw);
+    const incoming = normalizePublicJob(input.jobId, input.raw, input.contract);
     const normalized = mergeSnapshots(existing?.normalized ?? null, incoming, input.partial);
     const raw = boundRawPayload(input.raw);
     const keepRaw = !!existing && (input.partial || (raw.truncated && !existing.rawTruncated));

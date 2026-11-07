@@ -31,6 +31,7 @@ enabled = true
 SCAN_ACCOUNT_DISABLED = "true"
 CLAUDE_MODEL = "claude-sonnet-5-5"
 UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
+INDEPENDENT_DRAFTS = "true"
 
 # Secrets (set with `wrangler secret put NAME`, or in .dev.vars for local dev):
 #   DASH_PASSWORD              dashboard login (password only)

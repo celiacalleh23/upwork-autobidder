@@ -101,7 +101,8 @@ export async function drainApify(env: Env): Promise<void> {
         // Store the public payload before the receipt offset moves or the item list is cleared.
         if (jobId && j) await persistSnapshot(env, {
           jobId, source: 'apify', partial: false, raw: j,
-          provenance: { source: 'apify', receipt: row.key, runId: receipt.runId ?? null, dataset: receipt.dataset, offset: receipt.offset },
+          contract: provider(env) === 'hyperbach' ? 'hyperbach-public-upwork' : null,
+          provenance: { source: 'apify', provider: provider(env), receipt: row.key, runId: receipt.runId ?? null, dataset: receipt.dataset, offset: receipt.offset },
         });
         const result = await addJob(env, { jobUrl: url ?? (jobId ? jobUrl(jobId) : url), title: j?.title ?? j?.jobTitle, postedAt, automatic: true });
         if (!result.ok && result.retryable) throw new Error(result.reason);
