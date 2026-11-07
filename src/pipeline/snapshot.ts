@@ -59,6 +59,12 @@ interface PersistInput {
 }
 
 const object = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+// Descriptions keep internal newlines. Titles and other short fields stay single-line.
+const passage = (v: unknown, max: number): string | null => {
+  if (typeof v !== 'string') return null;
+  const s = stripUntrusted(v).trim();
+  return s ? s.slice(0, max) : null;
+};
 const text = (v: unknown, max = 500): string | null => {
   if (typeof v !== 'string' && typeof v !== 'number') return null;
   const s = stripUntrusted(String(v)).replace(/\s+/g, ' ').trim();
@@ -147,7 +153,7 @@ function countryOf(raw: Record<string, unknown>): string | null {
 // Feed questions that are missing or an empty list stay unknown. AI-written fields are hints, not questions.
 export function normalizePublicJob(jobId: string, raw: unknown): PublicJobSnapshot {
   const src = object(raw) ?? {};
-  const descriptionSource = text(src.description ?? src.description_text ?? src.job_description ?? src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
+  const descriptionSource = passage(src.description ?? src.description_text ?? src.job_description ?? src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
   const descriptionTruncated = !!descriptionSource && descriptionSource.length > DESCRIPTION_STORE_LIMIT;
   const description = descriptionSource ? descriptionSource.slice(0, DESCRIPTION_STORE_LIMIT) : null;
   const jobType = jobTypeOf(src);

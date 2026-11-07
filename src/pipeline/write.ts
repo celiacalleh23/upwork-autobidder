@@ -218,7 +218,47 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   return 'queued';
 }
 
+export const draftReadyKey = (jobId: string) => `draft:ready:${jobId}`;
+
+interface ReadyDraft {
+  v: 1;
+  letter: string;
+  bid: number;
+  score: number;
+  win: number | null;
+  profile: number;
+  scoreText: string;
+  analysis: string;
+  keywords: string[];
+  answers: Answer[];
+  questionsState: 'hints' | 'unknown';
+  note: string;
+  loomUrl: string | null;
+  loomId: string | null;
+  title: string;
+  url: string | null;
+  jobType: string | null;
+  budget: string | null;
+  country: string | null;
+  proposalsTier: string | null;
+}
+
+async function loadReadyDraft(env: Env, jobId: string): Promise<ReadyDraft | null> {
+  const raw = await getKv(env, draftReadyKey(jobId));
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw) as ReadyDraft;
+    if (d?.v !== 1 || typeof d.letter !== 'string' || typeof d.bid !== 'number' || typeof d.score !== 'number') return null;
+    return d;
+  } catch { return null; }
+}
+
 async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, job: JobRow, lease: string): Promise<Outcome> {
+  // A committed proposal is not generated again. This also heals a job left matched after the insert landed.
+  if (await env.DB.prepare('SELECT 1 AS n FROM proposals WHERE job_id = ?').bind(job.id).first()) {
+    await env.DB.prepare("UPDATE jobs SET status = 'proposed' WHERE id = ? AND status = 'matched'").bind(job.id).run();
+    return 'queued';
+  }
   const snap = await loadSnapshot(env, job.id);
   if (!snap) { await setJob(env, job.id, 'error', 'Held: no saved public snapshot. Independent drafts do not call Upwork.'); return 'errors'; }
   const n = snap.normalized;
@@ -237,67 +277,82 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     ...(n.proposalCount !== null ? { proposal_count: n.proposalCount } : {}), proposals_tier: job.proposals_tier ?? undefined,
   }, s, new Set());
   if (verdict.status === 'filtered') { await setJob(env, job.id, 'filtered', verdict.reason); return 'filtered'; }
-  const forClaude: JobForClaude = {
-    title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
-    description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, clientFeedbackNames: [],
-  };
-  const { profileFit, winSimilarity, reason: why, pros, cons } = await scoreJob(env, who.profile, who.wins, forClaude);
-  const keywords = verdict.keywords;
-  const analysis = JSON.stringify(jobAnalysis({
-    title: job.title, keywords, proposalsTier: job.proposals_tier, postedAt: job.posted_at, jobType: job.job_type,
-    budget: job.budget, connectsCost: null, winScore: winSimilarity, profileScore: profileFit,
-  }, { pros, cons }));
-  await env.DB.prepare('UPDATE jobs SET analysis = ? WHERE id = ?').bind(analysis, job.id).run();
-  const score = weightedScore(profileFit, winSimilarity, s);
-  const breakdown = winSimilarity === null ? `profile ${profileFit}, no past wins yet` : `past wins ${winSimilarity} · profile ${profileFit}`;
-  const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
-  const sc: Scores = { score, win: winSimilarity, profile: profileFit };
-  if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); return 'lowScore'; }
-  const bid = computeBid(job.job_type, job.budget, s);
-  if (bid === null) { await setJob(env, job.id, 'error', 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.', sc); return 'errors'; }
-  const sourceUrl = s.loom.sourceUrl || null;
-  const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
-  const withOpening = s.letter.opening !== 'off';
-  let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
-  let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-  if (problem && withOpening) {
-    opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
-    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+  let ready = await loadReadyDraft(env, job.id);
+  if (!ready) {
+    const forClaude: JobForClaude = {
+      title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
+      description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, clientFeedbackNames: [],
+    };
+    const { profileFit, winSimilarity, reason: why, pros, cons } = await scoreJob(env, who.profile, who.wins, forClaude);
+    const keywords = verdict.keywords;
+    const analysis = JSON.stringify(jobAnalysis({
+      title: job.title, keywords, proposalsTier: job.proposals_tier, postedAt: job.posted_at, jobType: job.job_type,
+      budget: job.budget, connectsCost: null, winScore: winSimilarity, profileScore: profileFit,
+    }, { pros, cons }));
+    const score = weightedScore(profileFit, winSimilarity, s);
+    const breakdown = winSimilarity === null ? `profile ${profileFit}, no past wins yet` : `past wins ${winSimilarity} · profile ${profileFit}`;
+    const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
+    const sc: Scores = { score, win: winSimilarity, profile: profileFit };
+    if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); await env.DB.prepare('UPDATE jobs SET analysis = ? WHERE id = ?').bind(analysis, job.id).run(); return 'lowScore'; }
+    const bid = computeBid(job.job_type, job.budget, s);
+    if (bid === null) { await setJob(env, job.id, 'error', 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.', sc); return 'errors'; }
+    const sourceUrl = s.loom.sourceUrl || null;
+    const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
+    const withOpening = s.letter.opening !== 'off';
+    let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
+    let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+    if (problem && withOpening) {
+      opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
+      problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+    }
+    if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
+    const hints = n.questions;
+    let answers: Answer[] = [];
+    if (hints?.length) {
+      answers = await answerQuestions(env, who.profile, forClaude, hints);
+      let bad = checkAnswers(hints, answers);
+      if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
+      if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
+    }
+    let note = 'Saved from the public snapshot. Applied status, Connects, balance, boost, and final screening questions are checked on Upwork before anything is sent.';
+    if (!hints) note += ' Feed screening questions were missing or empty, so they stay unknown.';
+    else note += ' Feed screening questions are hints until the live preview confirms them.';
+    if (n.questionHint) note += ' An AI hint from the feed was stored and was not used as a question.';
+    ready = {
+      v: 1, letter: assembleLetter(s.letter.template, opening, sourceUrl, disclosure), bid, score, win: winSimilarity, profile: profileFit,
+      scoreText, analysis, keywords, answers, questionsState: hints?.length ? 'hints' : 'unknown', note,
+      loomUrl: sourceUrl, loomId: null, title: stripUntrusted(job.title), url: job.url, jobType: job.job_type, budget: job.budget,
+      country: job.client_country, proposalsTier: job.proposals_tier,
+    };
+    // Durable before the queue insert, so a crash after Claude does not call Claude or Loom again.
+    await putKv(env, draftReadyKey(job.id), JSON.stringify(ready));
   }
-  if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
-  let letter = assembleLetter(s.letter.template, opening, sourceUrl, disclosure);
-  const hints = n.questions;
-  let answers: Answer[] = [];
-  if (hints?.length) {
-    answers = await answerQuestions(env, who.profile, forClaude, hints);
-    let bad = checkAnswers(hints, answers);
-    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
-    if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
-  }
-  let note = 'Saved from the public snapshot. Applied status, Connects, balance, boost, and final screening questions are checked on Upwork before anything is sent.';
-  if (!hints) note += ' Feed screening questions were missing or empty, so they stay unknown.';
-  else note += ' Feed screening questions are hints until the live preview confirms them.';
-  if (n.questionHint) note += ' An AI hint from the feed was stored and was not used as a question.';
-  let loomUrl = sourceUrl;
-  let loomId: string | null = null;
-  if (sourceUrl && state.loom.connected) {
+  if (ready.score < s.minScore) { await setJob(env, job.id, 'low_score', ready.scoreText, { score: ready.score, win: ready.win, profile: ready.profile }); return 'lowScore'; }
+  if (!ready.loomId && ready.loomUrl && state.loom.connected) {
     try {
-      const copy = await copyForJob(env, sourceUrl, stripUntrusted(job.title));
-      if (copy) { loomUrl = copy.url; loomId = copy.id; letter = swapLoomLink(letter, copy.url); }
+      const copy = await copyForJob(env, ready.loomUrl, ready.title);
+      if (copy) {
+        ready.loomId = copy.id;
+        ready.letter = swapLoomLink(ready.letter, copy.url);
+        ready.loomUrl = copy.url;
+        await putKv(env, draftReadyKey(job.id), JSON.stringify(ready));
+      }
     } catch (e) {
       if (!(e instanceof LoomAuthError)) await markLoomError(env, e);
-      note = [note, `Loom copy failed, the letter uses the source video: ${errText(e)}`].filter(Boolean).join(' · ');
+      ready.note = [ready.note, `Loom copy failed, the letter uses the source video: ${errText(e)}`].filter(Boolean).join(' · ');
+      await putKv(env, draftReadyKey(job.id), JSON.stringify(ready));
     }
   }
-  const fixed = job.job_type === 'fixed';
+  const fixed = ready.jobType === 'fixed';
   const createParams = {
-    charged_amount: bid, ...(fixed ? FIXED_DEFAULTS : {}),
-    questions_state: hints?.length ? 'hints' : 'unknown',
-    ...(answers.length ? { answers } : {}),
+    charged_amount: ready.bid, ...(fixed ? FIXED_DEFAULTS : {}),
+    questions_state: ready.questionsState,
+    ...(ready.answers.length ? { answers: ready.answers } : {}),
   };
   const current = await loadState(env);
   if (!(await ownsLease(env, 'write', lease)) || current.paused || current.controlsVersion !== state.controlsVersion || JSON.stringify(await loadSettings(env)) !== JSON.stringify(s)) {
-    if (loomId) await deleteCopy(env, loomId).catch(() => undefined);
+    if (ready.loomId) await deleteCopy(env, ready.loomId).catch(() => undefined);
+    await delKv(env, draftReadyKey(job.id));
     throw new McpError('Controls changed while preparing the proposal; retry after review.');
   }
   // Review stays pending. Auto is only eligible for the sender, which still runs the live checks before confirm.
@@ -306,12 +361,16 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     env.DB.prepare(
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
-      JSON.stringify(createParams), loomUrl, loomId, null, score, winSimilarity, profileFit, status, note,
+    ).bind(job.id, ready.title, ready.url, ready.jobType, ready.budget, ready.country, JSON.stringify(ready.keywords), ready.letter, ready.bid,
+      JSON.stringify(createParams), ready.loomUrl, ready.loomId, null, ready.score, ready.win, ready.profile, status, ready.note,
       status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
-    env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
+    env.DB.prepare('UPDATE jobs SET analysis = ?, status = \'proposed\', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?').bind(ready.analysis, ready.scoreText, ready.score, ready.win, ready.profile, job.id),
   ]);
-  if (loomId && !inserted.meta.changes) await deleteCopy(env, loomId).catch((e) => console.error('loom: unused copy not deleted', loomId, errText(e)));
+  if (!inserted.meta.changes) {
+    const owner = await env.DB.prepare('SELECT loom_video_id FROM proposals WHERE job_id = ?').bind(job.id).first<{ loom_video_id: string | null }>();
+    if (ready.loomId && owner?.loom_video_id !== ready.loomId) await deleteCopy(env, ready.loomId).catch((e) => console.error('loom: unused copy not deleted', ready.loomId, errText(e)));
+  }
+  await delKv(env, draftReadyKey(job.id));
   return 'queued';
 }
 
@@ -357,6 +416,11 @@ export async function runIndependentWriter(env: Env): Promise<WriteSummary | nul
         if (e instanceof ClaudeConfigError) { summary.note = e.message; break; }
         const msg = errText(e);
         console.error('writer: snapshot draft failed', job.id, msg);
+        if (await getKv(env, draftReadyKey(job.id)) || /Controls changed while preparing/.test(msg)) {
+          // A saved generation is inserted next time. A settings change is generated again. The job stays matched.
+          summary.note = 'Drafting will continue on the next run.';
+          break;
+        }
         summary.errors++;
         await setJob(env, job.id, 'error', e instanceof ClaudeDeclined ? msg : `Could not prepare: ${msg}`);
       }

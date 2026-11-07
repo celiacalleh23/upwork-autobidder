@@ -27,7 +27,9 @@ The table stores:
 
 Apify drain writes the snapshot before it advances the receipt offset and before it clears the receipt item list. A replay merges into the same row. A partial or thin import cannot replace a description, question list, or raw payload that is already richer. A job that already has a proposal, or whose status is `proposed`, is not updated. The 30-jobs-per-hour intake cap is unchanged.
 
-Claude prompts still receive at most 12,000 characters of the description. When that is shorter than the stored text, the prompt contains an explicit truncation line. The raw payload is not sent to Claude.
+Claude prompts still receive at most 12,000 characters of the description. When that is shorter than the stored text, the prompt contains an explicit truncation line. The raw payload is not sent to Claude. Description newlines are kept in the snapshot.
+
+After Claude and Loom finish, the draft is stored under `draft:ready:<job id>` before the proposal row is inserted. If that insert is interrupted, the next writer run inserts the saved draft and does not call Claude or Loom again. A question mismatch or a missing live question list sets the proposal back to `pending` and clears `approved_at` and `approved_via`, so Auto does not approve it again.
 
 ## What still calls Upwork
 

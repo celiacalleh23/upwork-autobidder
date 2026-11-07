@@ -133,6 +133,13 @@ async function verifyUnknown(env: Env, client: McpClient, state: State) {
 }
 
 // null means the live preview omitted the list. An explicit empty list is a real "no questions" answer.
+// A question hold drops the previous approval. Auto must not pick the same row up again.
+async function holdForReview(env: Env, id: number, message: string, summary: SendSummary): Promise<SendSummary> {
+  await setProposal(env, id, { status: 'pending', submitted_at: null, approved_at: null, approved_via: null, error: message });
+  summary.note = message;
+  return summary;
+}
+
 function screeningHold(questions: string[] | null, answers: Answer[]): string | null {
   if (questions === null) return 'Upwork did not return screening questions. Nothing was sent.';
   if (checkAnswers(questions, answers) || questions.some((q, i) => answers[i]?.question !== q)) {
@@ -242,10 +249,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       let p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra, answers });
       if (cannotApply(p.canApply, p.connectsCost, balance) === 'closed') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: CLOSED_REASON }); return summary; }
       const screening = screeningHold(p.questions, answers);
-      if (screening) {
-        await setProposal(env, row.id, { status: 'pending', submitted_at: null, error: screening });
-        summary.note = screening; return summary;
-      }
+      if (screening) return await holdForReview(env, row.id, screening, summary);
       if (p.connectsCost !== null && balance !== null && p.connectsCost > balance) {
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
         await holdRetries(env); return summary;
@@ -276,10 +280,11 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       }
       previewId = p.previewId;
       finalCost = p.connectsCost;
+      const finalScreening = screeningHold(p.questions, answers);
+      if (finalScreening) return await holdForReview(env, row.id, finalScreening, summary);
       const violation = cannotApply(p.canApply, p.connectsCost, balance) ? 'The final preview is not eligible.'
         : connectsOverLimit(p.connectsCost, s)
         ?? connectsGate(balance, p.connectsCost === null ? null : p.connectsCost + (boost ?? 0), s)
-        ?? screeningHold(p.questions, answers)
         ?? checkLetter(row.cover_letter.replace(/https:\/\/(?:www\.)?loom\.com\/share\/\S+/g, ''), null);
       if (violation) {
         await setProposal(env, row.id, { status: 'pending', submitted_at: null, error: violation });

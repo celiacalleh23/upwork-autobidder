@@ -7,7 +7,7 @@ import * as claude from '../src/claude';
 import { getKv, putKv } from '../src/kv';
 import * as loom from '../src/loom';
 import { addJob } from '../src/pipeline/jobs';
-import { runWriter } from '../src/pipeline/write';
+import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
 import { boundRawPayload, mergeSnapshots, normalizePublicJob, persistSnapshot } from '../src/pipeline/snapshot';
 import { DEFAULT_SETTINGS, loadState, patchState, saveSettings, type Env } from '../src/settings';
@@ -60,6 +60,7 @@ it('keeps public facts unknown and preserves a leading-zero id as text', () => {
   expect(snap.currency).toBeNull();
   expect(snap.questions).toBeNull();
   expect(snap.country).toBeNull();
+  expect(normalizePublicJob(id, { description: 'Line one\n\nLine two' }).description).toBe('Line one\n\nLine two');
   expect(normalizePublicJob(id, { questions: ['Share two flows'] }).questions).toEqual(['Share two flows']);
   expect(normalizePublicJob(id, { ai_anti_bot_phrase: 'type blue', questions: [] }).questionHint).toBe('type blue');
   const clipped = boundRawPayload({ description: 'x'.repeat(RAW_OVER) });
@@ -230,5 +231,33 @@ it('holds a live question mismatch in Review and does not confirm', async () => 
   });
   await finishPipeline(runSender(e));
   expect(confirms).toBe(0);
-  expect(e.sqlite.prepare('SELECT status FROM proposals').get()?.status).toBe('pending');
+  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
+  await finishPipeline(runSender(e));
+  expect(confirms).toBe(0);
+  expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_via: null });
+});
+
+it('inserts a finished Claude draft after an interrupted queue write without generating again', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'review');
+  await persistSnapshot(e, { jobId: id, source: 'apify', partial: false, raw: rich(), provenance: { source: 'apify' } });
+  await addJob(e, { jobUrl: `https://www.upwork.com/jobs/~02${id}`, title: rich().title, postedAt: rich().date_posted, automatic: true });
+  const score = vi.spyOn(claude, 'scoreJob').mockResolvedValue({ profileFit: 90, winSimilarity: null, reason: 'Synthetic fit', pros: [], cons: [] });
+  const copy = vi.spyOn(loom, 'copyForJob').mockResolvedValue({ id: 'copy1', url: 'https://www.loom.com/share/copy1' });
+  const original = e.DB.batch.bind(e.DB);
+  let failed = false;
+  e.DB.batch = (async (queries) => {
+    if (!failed) { failed = true; throw new Error('insert interrupted'); }
+    return original(queries);
+  }) as typeof e.DB.batch;
+  await runWriter(e);
+  expect(score).toHaveBeenCalledTimes(1);
+  expect(copy).toHaveBeenCalledTimes(1);
+  expect(e.sqlite.prepare('SELECT status FROM jobs').get()?.status).toBe('matched');
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+  expect(await getKv(e, draftReadyKey(id))).toBeTruthy();
+  await runWriter(e);
+  expect(score).toHaveBeenCalledTimes(1);
+  expect(copy).toHaveBeenCalledTimes(1);
+  expect(e.sqlite.prepare('SELECT status, loom_video_id FROM proposals').get()).toMatchObject({ status: 'pending', loom_video_id: 'copy1' });
 });
