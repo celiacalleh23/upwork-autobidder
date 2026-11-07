@@ -1,7 +1,7 @@
 import { acquireLease, releaseLease } from '../kv';
 import type { Env, Settings } from '../settings';
 import { containsTerm, recheckStored, reopenable, stripUntrusted, type StoredJob } from './filters';
-import { persistSnapshot } from './snapshot';
+import { loadSnapshot, persistSnapshot } from './snapshot';
 
 // Jobs arrive by manual link, Upwork discovery, or Apify. Automatic sources share canonical
 // deduplication and the intake cap; the writer fetches full details and applies current filters.
@@ -53,6 +53,22 @@ export async function addJob(env: Env, input: { jobUrl?: unknown; title?: unknow
       raw: { url: jobUrl(id), title: input.title, date_posted: posted },
       provenance: { source: input.automatic ? 'automatic' : 'manual' },
     });
+    // Pasting the link is the explicit retry. It re-reads the saved public payload and does not run on a cron import.
+    if (!input.automatic) {
+      const saved = await loadSnapshot(env, id);
+      if (saved?.rawPayload) {
+        try {
+          const stored = JSON.parse(saved.rawPayload) as unknown;
+          if (stored && typeof stored === 'object') {
+            await persistSnapshot(env, {
+              jobId: id, source: saved.source, partial: false, raw: stored,
+              contract: env.APIFY_PROVIDER === 'hyperbach' ? 'hyperbach-public-upwork' : null,
+              provenance: { source: 'manual-retry' },
+            });
+          }
+        } catch { /* a damaged saved payload stays as it was */ }
+      }
+    }
     const change = existing
       ? env.DB.prepare("UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status NOT IN ('matched', 'proposed')").bind(ADDED_REASON, id)
       : env.DB.prepare("INSERT OR IGNORE INTO jobs (id, title, url, status, reason, posted_at) VALUES (?, ?, ?, 'matched', ?, ?)").bind(id, title, jobUrl(id), ADDED_REASON, posted);

@@ -25,6 +25,8 @@ The table stores:
 - `raw_payload`: the feed object, cut at 100,000 characters when larger. A cut payload is valid JSON and includes `_truncated: true`.
 - `normalized`: public fields only. `applied`, `canApply`, `connectsCost`, `connectsBalance`, `boost`, and `currency` are always null. A scraper `questions` value that is missing or `[]` stays unknown (`null`). A non-empty list is a hint, not a confirmed question list.
 
+Hyperbach's published public-posting fields are the only numbers given Upwork's listing currency. `price_type` `Fixed-price` uses `price`. `Hourly` uses `price_min` and `price_max`. That basis is `listedCurrency: "USD"`, separate from an `explicitCurrency` the row itself names. A different explicit currency is kept and not replaced. Zero, blank, and non-numeric prices fail closed. The same fields from any other feed are not treated as USD. A later import updates the snapshot and does not move a held or filtered job back to `matched`. Pasting the job link is the explicit retry: it re-reads the saved payload when `APIFY_PROVIDER` is `hyperbach`. The hourly profile rate is not used as a fixed-price bid.
+
 Apify drain writes the snapshot before it advances the receipt offset and before it clears the receipt item list. A replay merges into the same row. A partial or thin import cannot replace a description, question list, or raw payload that is already richer. A job that already has a proposal, or whose status is `proposed`, is not updated. The 30-jobs-per-hour intake cap is unchanged.
 
 Claude prompts still receive at most 12,000 characters of the description. When that is shorter than the stored text, the prompt contains an explicit truncation line. The raw payload is not sent to Claude. Description newlines are kept in the snapshot.

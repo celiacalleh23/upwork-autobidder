@@ -9,6 +9,7 @@ import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import { checkAnswers, checkLetter, type Answer } from './letter';
 import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
+import { loadSnapshot, unverifiedPriceHold } from './snapshot';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
 
@@ -206,6 +207,11 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
   const summary: SendSummary = { sent: 0, note: gate ?? (row ? null : 'Nothing approved to send.') };
   let confirmAttempted = false;
   try {
+    if (row) {
+      const snap = await loadSnapshot(env, row.job_id);
+      const blocked = snap ? unverifiedPriceHold(snap.normalized, s) : null;
+      if (blocked) return await holdForReview(env, row.id, blocked, summary);
+    }
     const client = await upworkClient(env);
     if (hasUnknown) await verifyUnknown(env, client, state);
     if (!row || gate) return summary;

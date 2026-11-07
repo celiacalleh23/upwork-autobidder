@@ -9,7 +9,8 @@ import * as loom from '../src/loom';
 import { addJob } from '../src/pipeline/jobs';
 import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
-import { boundRawPayload, mergeSnapshots, normalizePublicJob, persistSnapshot } from '../src/pipeline/snapshot';
+import { computeBid } from '../src/pipeline/letter';
+import { boundRawPayload, mergeSnapshots, normalizePublicJob, persistSnapshot, snapshotHoldReason } from '../src/pipeline/snapshot';
 import { DEFAULT_SETTINGS, loadState, patchState, saveSettings, type Env } from '../src/settings';
 import { seal } from '../src/crypto';
 import * as oauth from '../src/oauth';
@@ -235,6 +236,128 @@ it('holds a live question mismatch in Review and does not confirm', async () => 
   await finishPipeline(runSender(e));
   expect(confirms).toBe(0);
   expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_via: null });
+});
+
+const heldJobId = '2118988132749471492';
+const fixedPricePayload = () => ({
+  id: `02${heldJobId}`, url: `https://www.upwork.com/jobs/~02${heldJobId}`,
+  title: 'Klaviyo Email Designer Needed for Fashion Shopify Store',
+  description: 'Design the Klaviyo emails for the store.',
+  price_type: 'Fixed-price', price: 5, buyer_payment_verified: true, proposal_count: 4,
+});
+
+const hyperbach = 'hyperbach-public-upwork' as const;
+
+it('lists a Hyperbach fixed price of 5 as Upwork USD and keeps every other price unresolved', () => {
+  const snap = normalizePublicJob(heldJobId, fixedPricePayload(), hyperbach);
+  expect(snap.jobType).toBe('fixed');
+  expect(snap.budgetText).toBe('5.00');
+  expect(snap.amountSource).toBe('price');
+  expect(snap.listedCurrency).toBe('USD');
+  expect(snap.explicitCurrency).toBeNull();
+  expect(snap.currency).toBeNull();
+  expect(snap.budgetFault).toBeNull();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  settings.minFixedBudget = 20;
+  expect(computeBid(snap.jobType, snap.budgetText, settings)).toBe(5);
+  expect(snapshotHoldReason(snap, settings)).toBeNull();
+  expect(computeBid('fixed', null, settings)).toBeNull();
+  expect(computeBid('hourly', null, settings)).toBe(30);
+  for (const price of [0, '0', '0.00', '', '>=5', '5-10', 'abc']) {
+    const bad = normalizePublicJob(heldJobId, { ...fixedPricePayload(), price }, hyperbach);
+    expect(bad.listedCurrency).toBeNull();
+    expect(bad.budgetFault).toBe('malformed');
+    expect(snapshotHoldReason(bad, settings)).toMatch(/zero, blank, or not a single positive amount/);
+  }
+  for (const price of ['5', '5.00', 5]) {
+    expect(normalizePublicJob(heldJobId, { ...fixedPricePayload(), price }, hyperbach).budgetText).toBe('5.00');
+  }
+  const unnamed = normalizePublicJob(heldJobId, fixedPricePayload());
+  expect(unnamed.listedCurrency).toBeNull();
+  expect(unnamed.budgetText).toBe('5.00');
+  expect(snapshotHoldReason(unnamed, settings)).toMatch(/not from the documented Hyperbach public Upwork listing/);
+  const conflict = normalizePublicJob(heldJobId, { ...fixedPricePayload(), currency: 'EUR' }, hyperbach);
+  expect(conflict.listedCurrency).toBeNull();
+  expect(conflict.explicitCurrency).toBe('EUR');
+  expect(snapshotHoldReason(conflict, settings)).toMatch(/not replaced with USD/);
+  const named = normalizePublicJob(heldJobId, { ...fixedPricePayload(), currency: 'usd' }, hyperbach);
+  expect(named.explicitCurrency).toBe('USD');
+  expect(named.listedCurrency).toBeNull();
+  expect(snapshotHoldReason(named, settings)).toBeNull();
+  const hourly = normalizePublicJob(id, { price_type: 'Hourly', price_min: '10', price_max: 35 }, hyperbach);
+  expect(hourly.budgetText).toBe('10.00–35.00/hr');
+  expect(hourly.amountSource).toBe('hourly-band');
+  expect(hourly.listedCurrency).toBe('USD');
+  expect(normalizePublicJob(id, { price_type: 'Hourly', price: 25, budget: '40.00–50.00/hr' }).budgetText).toBe('40.00–50.00/hr');
+});
+
+it('filters the public $5 fixed-price job at the live minimum of 20 and does not requeue it', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic', APIFY_PROVIDER: 'hyperbach' as const };
+  await ready(e, 'auto');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  s.minFixedBudget = 20;
+  s.fixedPriceTermsAcknowledged = true;
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  await saveSettings(e, s);
+  await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), contract: hyperbach, provenance: { source: 'apify', runId: '7OHpRQhzrCbFHhLOj' } });
+  e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, ?, ?, 'error', ?)").run(
+    heldJobId, fixedPricePayload().title, fixedPricePayload().url, 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.',
+  );
+  await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), contract: hyperbach, provenance: { source: 'apify-replay' } });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
+  const kept = JSON.parse(String(e.sqlite.prepare('SELECT normalized FROM job_snapshots WHERE job_id = ?').get(heldJobId)?.normalized));
+  expect(kept.listedCurrency).toBe('USD');
+  expect(kept.budgetText).toBe('5.00');
+  await persistSnapshot(e, { jobId: heldJobId, source: 'manual', partial: true, raw: { title: 'Only a title' }, provenance: { source: 'manual' } });
+  const partial = JSON.parse(String(e.sqlite.prepare('SELECT normalized FROM job_snapshots WHERE job_id = ?').get(heldJobId)?.normalized));
+  expect(partial.budgetText).toBe('5.00');
+  expect(partial.listedCurrency).toBe('USD');
+  expect((await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title, automatic: true })).ok).toBe(false);
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
+  const client = vi.spyOn(oauth, 'upworkClient');
+  await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title });
+  await runWriter(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(heldJobId)).toMatchObject({
+    status: 'filtered', reason: 'Budget $5 below $20',
+  });
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+});
+
+it('holds a price from an undocumented feed and does not confirm it', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'auto');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  s.minFixedBudget = 20;
+  s.fixedPriceTermsAcknowledged = true;
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  await saveSettings(e, s);
+  await patchState(e, { upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs', confirm_preview: 'confirm_preview', manage_proposals: 'manage_proposals' } } });
+  const aboveId = '2118988132749471493';
+  const raw = { ...fixedPricePayload(), id: `02${aboveId}`, url: `https://www.upwork.com/jobs/~02${aboveId}`, price: 25 };
+  await persistSnapshot(e, { jobId: aboveId, source: 'apify', partial: false, raw, provenance: { source: 'apify' } });
+  await addJob(e, { jobUrl: raw.url, title: raw.title, automatic: true });
+  const client = vi.spyOn(oauth, 'upworkClient');
+  vi.stubGlobal('fetch', () => { throw new Error('network'); });
+  await runWriter(e);
+  const held = e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(aboveId) as { status: string; reason: string };
+  expect(held.status).toBe('error');
+  expect(held.reason).toContain('25.00');
+  expect(held.reason).toContain('not from the documented Hyperbach public Upwork listing');
+  expect(held.reason).not.toMatch(/\$|USD/);
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, create_params) VALUES (?, ?, ?, 25, 'fixed', 'approved', 'auto-submit', datetime('now'), '{}')")
+    .run(aboveId, raw.title, 'Hi there,\n\nThe fixed letter.');
+  await runSender(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
 });
 
 it('inserts a finished Claude draft after an interrupted queue write without generating again', async () => {
