@@ -1,7 +1,7 @@
 import { dayStartUtc } from '../api';
 import { acquireLease, delKv, getKv, putKv, releaseLease } from '../kv';
 import type { McpClient } from '../mcp';
-import { findKey, upworkClient } from '../oauth';
+import { cachedToolName, findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
 import { heldByUpwork, paced } from '../upworkPace';
 
@@ -328,11 +328,10 @@ async function refreshStatsLocked(env: Env, range: Range, resume: boolean, slot:
     if (prog && (prog.rangeId !== range.id || !prog.phase || Date.now() - prog.startedAt > ttl)) prog = null;
   }
   prog ??= { rangeId: range.id, cutoff: range.from, until: range.to, startedAt: Date.now(), phase: 'head', head: null, ledgerPages: 0, idx: 0, cursor: null, statusPages: 0, cur: { n: 0, viewed: 0 }, proposals: {}, unreadable: 0 };
-  const names = prog.phase !== 'statuses' ? await client.listTools() : [];
-  const tool = (base: string) => names.find((n) => n === base || n.endsWith(`__${base}`));
+  const tool = (base: string) => prog!.phase === 'statuses' ? Promise.resolve(null) : cachedToolName(env, client, base);
 
   if (prog.phase === 'head') {
-    const profileTool = tool('get_profile'), contractsTool = tool('list_contracts'), boostTool = tool('boost_profile');
+    const profileTool = await tool('get_profile'), contractsTool = await tool('list_contracts'), boostTool = await tool('boost_profile');
     const profile = profileTool ? await paced(env, () => client.callTool(profileTool, { action: 'get', org_uid: org })) : null;
     const agg = findKey(profile, 'profileAggregates') as Record<string, unknown> | undefined;
     const contracts = contractsTool
@@ -351,7 +350,7 @@ async function refreshStatsLocked(env: Env, range: Range, resume: boolean, slot:
     };
     prog.phase = 'ledger';
   } else if (prog.phase === 'ledger') {
-    const profileTool = tool('get_profile');
+    const profileTool = await tool('get_profile');
     let next = true;
     // Another run (the background catch-up) holding the history lease is reading it already.
     const lease = profileTool ? await acquireLease(env, 'ledger', 5 * 60_000) : null;
@@ -408,8 +407,7 @@ export async function accountUpkeep(env: Env, tz: string, now = Date.now()): Pro
     if (lease) {
       try {
         const client = await upworkClient(env);
-        const names = await client.listTools();
-        const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
+        const profileTool = await cachedToolName(env, client, 'get_profile');
         if (profileTool) await syncLedger(env, client, profileTool, state.upwork.orgUid, 2, now);
       } finally { await releaseLease(env, 'ledger', lease); }
     }
