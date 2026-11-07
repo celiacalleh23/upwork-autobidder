@@ -9,6 +9,7 @@ import * as loom from '../src/loom';
 import { addJob } from '../src/pipeline/jobs';
 import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
+import { computeBid } from '../src/pipeline/letter';
 import { boundRawPayload, mergeSnapshots, normalizePublicJob, persistSnapshot } from '../src/pipeline/snapshot';
 import { DEFAULT_SETTINGS, loadState, patchState, saveSettings, type Env } from '../src/settings';
 import { seal } from '../src/crypto';
@@ -235,6 +236,58 @@ it('holds a live question mismatch in Review and does not confirm', async () => 
   await finishPipeline(runSender(e));
   expect(confirms).toBe(0);
   expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_via: null });
+});
+
+const heldJobId = '2118988132749471492';
+const fixedPricePayload = () => ({
+  id: `02${heldJobId}`, url: `https://www.upwork.com/jobs/~02${heldJobId}`,
+  title: 'Klaviyo Email Designer Needed for Fashion Shopify Store',
+  description: 'Design the Klaviyo emails for the store.',
+  price_type: 'Fixed-price', price: 5, buyer_payment_verified: true, proposal_count: 4,
+});
+
+it('reads a Fixed-price amount without inventing a currency or using the hourly rate', () => {
+  const snap = normalizePublicJob(heldJobId, fixedPricePayload());
+  expect(snap.jobType).toBe('fixed');
+  expect(snap.budgetText).toBe('5.00');
+  expect(snap.currency).toBeNull();
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  expect(computeBid(snap.jobType, snap.budgetText, settings)).toBe(5);
+  expect(computeBid('fixed', null, settings)).toBeNull();
+  expect(computeBid('hourly', null, settings)).toBe(30);
+  expect(normalizePublicJob(heldJobId, { ...fixedPricePayload(), price: 0 }).budgetText).toBeNull();
+  expect(normalizePublicJob(id, { price_type: 'Hourly', price: 25, budget: '40.00–50.00/hr' }).budgetText).toBe('40.00–50.00/hr');
+  expect(normalizePublicJob(id, { price_type: 'Hourly', price: 25 }).budgetText).toBe('25.00/hr');
+});
+
+it('filters the fixed-price job and does not requeue or send the held row', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'auto');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  s.minFixedBudget = 150;
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  await saveSettings(e, s);
+  await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), provenance: { source: 'apify', runId: '7OHpRQhzrCbFHhLOj' } });
+  e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, ?, ?, 'error', ?)").run(
+    heldJobId, fixedPricePayload().title, fixedPricePayload().url, 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.',
+  );
+  await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), provenance: { source: 'apify-replay' } });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
+  const client = vi.spyOn(oauth, 'upworkClient');
+  await runWriter(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+  await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title });
+  await runWriter(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(heldJobId)).toMatchObject({
+    status: 'filtered', reason: 'Budget $5 below $150',
+  });
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
 });
 
 it('inserts a finished Claude draft after an interrupted queue write without generating again', async () => {

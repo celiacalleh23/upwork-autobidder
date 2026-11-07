@@ -23,7 +23,9 @@ The table stores:
 - `fetched_at`: when this app first stored the row.
 - `source_posted_at` and `source_seen_at`: the feed's publication time and its own ingestion time. They are not rewritten to `fetched_at`.
 - `raw_payload`: the feed object, cut at 100,000 characters when larger. A cut payload is valid JSON and includes `_truncated: true`.
-- `normalized`: public fields only. `applied`, `canApply`, `connectsCost`, `connectsBalance`, `boost`, and `currency` are always null. A scraper `questions` value that is missing or `[]` stays unknown (`null`). A non-empty list is a hint, not a confirmed question list.
+- `normalized`: public fields only. `applied`, `canApply`, `connectsCost`, `connectsBalance`, `boost`, and `currency` are always null. A missing currency is not stored as USD. `price_type` of `Fixed-price` or `Hourly`, and a positive `price`, are read as the job type and amount. An existing `budget` string still wins. A scraper `questions` value that is missing or `[]` stays unknown (`null`). A non-empty list is a hint, not a confirmed question list.
+
+A later import updates the snapshot and does not move a held job back to `matched`. Pasting the job link is the retry. The writer then applies the saved minimum fixed budget. The hourly profile rate is not used as a fixed-price bid.
 
 Apify drain writes the snapshot before it advances the receipt offset and before it clears the receipt item list. A replay merges into the same row. A partial or thin import cannot replace a description, question list, or raw payload that is already richer. A job that already has a proposal, or whose status is `proposed`, is not updated. The 30-jobs-per-hour intake cap is unchanged.
 

@@ -1,5 +1,5 @@
 import { acquireLease, releaseLease } from '../kv';
-import { loadSettings, type Env, type Settings } from '../settings';
+import type { Env, Settings } from '../settings';
 import { normalizeCountry, stripUntrusted } from './filters';
 import { computeBid } from './letter';
 
@@ -120,13 +120,15 @@ function budgetText(raw: Record<string, unknown>, jobType: 'fixed' | 'hourly' | 
     if (min && max) return `${min}–${max}/hr`;
     if (max) return `up to ${max}/hr`;
     if (min) return `${min}+/hr`;
+    const rate = moneyText(raw.price);
+    return rate ? `${rate}/hr` : null;
   }
-  const fixed = moneyText(raw.fixed_budget ?? raw.fixed_price ?? raw.amount ?? raw.fixedPrice);
+  const fixed = moneyText(raw.fixed_budget ?? raw.fixed_price ?? raw.amount ?? raw.fixedPrice ?? raw.price);
   return jobType === 'fixed' ? fixed : null;
 }
 
 function jobTypeOf(raw: Record<string, unknown>): 'fixed' | 'hourly' | null {
-  const type = String(raw.job_type ?? raw.jobType ?? raw.type ?? raw.contract_type ?? raw.contractType ?? '').toLowerCase();
+  const type = String(raw.price_type ?? raw.job_type ?? raw.jobType ?? raw.type ?? raw.contract_type ?? raw.contractType ?? '').toLowerCase();
   if (type.includes('hour')) return 'hourly';
   if (type.includes('fix')) return 'fixed';
   const budget = text(raw.budget ?? raw.budget_text, 120) ?? '';
@@ -280,13 +282,7 @@ export async function persistSnapshot(env: Env, input: PersistInput, now = new D
       .bind(input.jobId, existing?.source ?? input.source, fetchedAt, sourcePostedAt, sourceSeenAt, JSON.stringify(provenance),
         keepRaw ? existing.rawPayload : raw.json, keepRaw ? (existing.rawTruncated ? 1 : 0) : (raw.truncated ? 1 : 0),
         keepRaw ? existing.rawOriginalBytes : raw.originalBytes, JSON.stringify(normalized), now.toISOString()).run();
-    const job = await env.DB.prepare('SELECT status, reason FROM jobs WHERE id = ?').bind(input.jobId).first<{ status: string; reason: string | null }>();
-    if (job?.status === 'error' && (job.reason ?? '').startsWith('Held:')) {
-      const hold = snapshotHoldReason(normalized, await loadSettings(env));
-      if (!hold && !(await env.DB.prepare('SELECT 1 AS n FROM proposals WHERE job_id = ?').bind(input.jobId).first())) {
-        await env.DB.prepare("UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status = 'error'").bind('Snapshot completed; ready to draft', input.jobId).run();
-      }
-    }
+    // A corrected snapshot does not put a held job back in the writer. Pasting the link is the explicit retry.
   } finally { await releaseLease(env, `snapshot:${input.jobId}`, lease); }
 }
 
