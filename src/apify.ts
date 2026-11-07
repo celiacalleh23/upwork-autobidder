@@ -1,3 +1,4 @@
+import { refusePreview } from './previewIsolation';
 import { timingSafeEqual } from './auth';
 import { sha256b64url } from './crypto';
 import { readBody, readResponseBody, readTextStream } from './http';
@@ -68,6 +69,7 @@ export async function receiveApify(req: Request, env: Env, initialize: () => Pro
 
 const headers = (env: Env) => ({ authorization: `Bearer ${env.APIFY_TOKEN}`, 'content-type': 'application/json' });
 async function apifyJson(env: Env, path: string, init: RequestInit = {}): Promise<unknown> {
+  refusePreview(env);
   if (!env.APIFY_TOKEN) throw new Error('APIFY_TOKEN is missing');
   const res = await fetch(`https://api.apify.com/v2/${path}`, { ...init, headers: headers(env), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`Apify request failed (${res.status})`);

@@ -20,6 +20,7 @@ import { sendDailyReport } from './pipeline/report';
 import { accountUpkeep } from './pipeline/stats';
 import { heldByUpwork } from './upworkPace';
 import { checkLoomAlert, cleanupLoomCopies, keepLoomAlive } from './loom';
+import { isIsolatedPreview, previewRequestBlocked } from './previewIsolation';
 import { loadSettings, loadState, type Env } from './settings';
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -166,6 +167,12 @@ export default {
     const url = new URL(req.url);
     const secure = url.protocol === 'https:';
 
+    if (isIsolatedPreview(env) && previewRequestBlocked(url.pathname, req.method)) {
+      return withHeaders(new Response(JSON.stringify({ error: 'Isolated preview does not call external services or change sending.' }), {
+        status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      }));
+    }
+
     if (url.pathname === '/login') return withHeaders(await handleLogin(req, env, secure));
     // No session check here: the cookie is SameSite=Strict, so it is not sent on the redirect back from Upwork. The single-use
     // OAuth state (created by a signed-in /oauth/upwork/start) is what ties this request to the dashboard.
@@ -204,6 +211,8 @@ export default {
   // Pipeline: job added by link → read and filter → score → letter → preview (M4) → Loom copy (M5) → submit (M6) →
   // report (M7). Bidding-account discovery runs at :00/:30; the separate scanner runs at :15/:45.
   async scheduled(event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    // Production crons stay on the top-level Worker. A preview must not search, write, send, or call vendors.
+    if (isIsolatedPreview(env)) return;
     await ensureSchema(env);
     const log = (what: string) => (e: unknown) => console.error(`${what} failed`, e instanceof Error ? e.message : e);
     const minute = new Date(event.scheduledTime).getUTCMinutes();

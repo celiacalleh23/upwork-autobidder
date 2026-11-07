@@ -39,3 +39,21 @@ UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
 #   RESEND_API_KEY             daily report email and the low-Connects alert
 #   INTAKE_SECRET              32+ random chars; enables POST /api/jobs/intake (jobs added by link from other services)
 #   REPORT_FROM                sender address on a Resend-verified domain (optional until the domain is verified)
+
+# Workers Builds branch previews (Wrangler 4.156). Production deploys do not use this block.
+# Vars and D1 bindings are not inherited, so the preview lists its own. The database below is empty and
+# separate from production autobidder. Do not add triggers, routes, or queue consumers here: those settings
+# target production. Do not add service, workflow, or queue-producer bindings. Do not put secrets in this file.
+# Secret inheritance into a preview is not visible from the repo. PREVIEW_ISOLATION makes the Worker refuse
+# Upwork, Apify, Claude, Loom, email, webhooks, OAuth, and scheduled work even if a secret is present.
+[previews.vars]
+PREVIEW_ISOLATION = "true"
+SCAN_ACCOUNT_DISABLED = "true"
+CLAUDE_MODEL = "preview-disabled"
+UPWORK_MCP_URL = "https://invalid.example"
+INDEPENDENT_DRAFTS = "false"
+
+[[previews.d1_databases]]
+binding = "DB"
+database_name = "rafadataapp-pr1-preview"
+database_id = "c8aed43e-50cc-4d79-8f50-fee163b76763"

@@ -1,4 +1,5 @@
 import { getKv } from './kv';
+import { refusePreview } from './previewIsolation';
 import type { Env } from './settings';
 
 // Email through Resend (BUILD_PLAN M7). Without RESEND_API_KEY nothing is sent and the caller shows the message on the
@@ -10,6 +11,7 @@ export const emailConfigured = (env: Env) => Boolean(env.RESEND_API_KEY);
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
 export async function sendEmail(env: Env, to: string[], subject: string, text: string, html?: string, idempotencyKey?: string): Promise<void> {
+  refusePreview(env);
   if (!env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not set.');
   const recipients = to.map((t) => t.trim()).filter(Boolean);
   if (!recipients.length) throw new Error('No report email set in Settings.');
