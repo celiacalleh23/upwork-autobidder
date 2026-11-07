@@ -1,7 +1,7 @@
 import { finiteNumber } from './sendRules';
 import { answerQuestions, ClaudeConfigError, ClaudeDeclined, scoreJob, writeOpening, type JobForClaude } from '../claude';
 import { acquireLease, delKv, getKv, putKv, releaseLease, ownsLease, renewLease } from '../kv';
-import { isAccountWarning, McpError, type McpClient } from '../mcp';
+import { isAccountWarning, McpError, McpJobAccessError, type McpClient } from '../mcp';
 import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
@@ -9,7 +9,7 @@ import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrus
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
-import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle } from '../upworkPace';
+import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
@@ -220,6 +220,12 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
   if (!pending?.n) return null;
 
   const summary: WriteSummary = { queued: 0, lowScore: 0, filtered: 0, errors: 0, note: null };
+  try { await permitJobRead(env); } catch (e) {
+    if (!(e instanceof UpworkBusy)) throw e;
+    summary.note = e.message;
+    await record(env, summary);
+    return summary;
+  }
   if (!env.ANTHROPIC_API_KEY) summary.note = 'Waiting for the ANTHROPIC_API_KEY secret in Cloudflare.';
   else if (!s.letter.template.trim()) summary.note = 'Waiting for the letter template in Settings → Cover letter.';
   if (summary.note) { await record(env, summary); return summary; }
@@ -273,6 +279,11 @@ export async function runWriter(env: Env): Promise<WriteSummary | null> {
         if (e instanceof McpError && isAccountWarning(msg)) {
           summary.note = 'Upwork restricted or warned the account; bidding is paused.';
           await pauseForWarning(env, 'preparing proposals', msg);
+          break;
+        }
+        if (e instanceof McpJobAccessError) {
+          await setJob(env, job.id, 'error', 'Upwork API could not open this job: private/invite-only or a temporary access limit. This job will not be retried automatically.');
+          summary.note = 'Upwork refused a job-detail read. Further job-detail reads wait five minutes; check the recorded trace for the cause.';
           break;
         }
         await setJob(env, job.id, 'error', e instanceof ClaudeDeclined ? msg : `Could not prepare: ${msg}`);

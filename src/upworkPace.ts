@@ -1,5 +1,5 @@
 import { delKv, getKv, putKv } from './kv';
-import { isAccountWarning, throttleWait } from './mcp';
+import { isAccountWarning, McpJobAccessError, throttleWait } from './mcp';
 import { loadState, patchState, type Env, type State } from './settings';
 
 // Rafa's account reads Upwork slowly (Celia, Oct 29), so bidding keeps most of Upwork's limit
@@ -55,8 +55,21 @@ export async function permitUpworkCall(env: Env, budgeted: boolean): Promise<voi
   if (Number(await getKv(env, 'upwork:retryAt')) > Date.now()) throw new UpworkBusy('Upwork asked to slow down; retry later.');
 }
 
+// A job-open PERMISSION refusal is ambiguous: private/invite-only or access pressure.
+// Respect its slowdown instruction without retrying that job or stopping discovery searches.
+export const JOB_READ_COOLDOWN_MS = 5 * 60_000;
+export async function permitJobRead(env: Env): Promise<void> {
+  if (Number(await getKv(env, 'upwork:jobReadRetryAt')) > Date.now()) throw new UpworkBusy('Job-detail reads are cooling down after an Upwork access refusal.');
+}
+
 export async function recordUpworkError(env: Env, e: unknown): Promise<void> {
   const msg = e instanceof Error ? e.message : String(e);
+  if (e instanceof McpJobAccessError) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO kv(key,value) VALUES ('upwork:jobReadRetryAt',?) ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(CAST(kv.value AS INTEGER),CAST(excluded.value AS INTEGER)) AS TEXT)").bind(String(Date.now()+JOB_READ_COOLDOWN_MS)),
+      env.DB.prepare("INSERT INTO kv(key,value,updated_at) VALUES ('upwork:jobAccess:last',?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify({at:new Date().toISOString(),...e.context})),
+    ]);
+  }
   if (isAccountWarning(msg)) await pauseForWarning(env, 'an Upwork request', msg);
   const wait = throttleWait(e);
   if (wait !== null) {

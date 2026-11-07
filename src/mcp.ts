@@ -1,5 +1,5 @@
 import type { Env } from './settings';
-import { permitSearch, permitUpworkCall, recordUpworkError } from './upworkPace';
+import { permitSearch, permitUpworkCall, permitJobRead, recordUpworkError } from './upworkPace';
 
 // Minimal MCP client over Streamable HTTP: initialize → notifications/initialized → tools/list / tools/call.
 
@@ -9,6 +9,10 @@ export class McpAuthError extends Error {}
 export class McpError extends Error {}
 // The tool ran and answered with an error (isError): Upwork gave a definite answer, unlike a dropped connection or 5xx.
 export class McpToolError extends McpError {}
+export class McpJobAccessError extends McpToolError {
+  constructor(message: string, public readonly context: { jobId: string; orgUid: string; reason: string; traceId: string | null }) { super(message); }
+}
+
 
 interface RpcMessage {
   jsonrpc: '2.0';
@@ -76,6 +80,8 @@ export class McpClient {
   }
 
   private async requestOnce(method: string, params: object): Promise<unknown> {
+    const tool = params as { name?: string; arguments?: { action?: string } };
+    if (this.env && method === 'tools/call' && tool.name?.split(/__|\./).pop() === 'find_jobs' && tool.arguments?.action === 'get') await permitJobRead(this.env);
     if (this.env) await permitUpworkCall(this.env, method === 'tools/call');
     if (method === 'tools/call' && /confirm_preview$/.test(String((params as { name?: string }).name))) {
       if (this.confirmGuard) await this.confirmGuard();
@@ -154,7 +160,21 @@ export class McpClient {
   private async callToolOnce(name: string, args: object): Promise<unknown> {
     const r = (await this.request('tools/call', { name, arguments: args })) as ToolResult;
     const text = (r.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n');
-    if (r.isError) throw new McpToolError(`Upwork ${name.replace(/^.*__/, '')}: ${text.slice(0, 300) || 'error'}`);
+    if (r.isError) {
+      const message = `Upwork ${name.replace(/^.*__/, '')}: ${text.slice(0, 300) || 'error'}`;
+      const input = args as { action?: string; org_uid?: string; params?: { id?: string } };
+      let detail: { error_code?: unknown; reason?: unknown; trace_id?: unknown } | null = null;
+      try { detail = JSON.parse(text); } catch { /* unstructured errors keep normal handling */ }
+      if (!isAccountWarning(text) && name.split(/__|\./).pop() === 'find_jobs' && input.action === 'get'
+        && detail?.error_code === 'PERMISSION' && typeof detail.reason === 'string'
+        && /jobs are being opened too quickly|don't retry the same job repeatedly/i.test(detail.reason)) {
+        throw new McpJobAccessError(message, {
+          jobId: String(input.params?.id ?? '').slice(0, 64), orgUid: String(input.org_uid ?? '').slice(0, 100),
+          reason: detail.reason.slice(0, 600), traceId: typeof detail.trace_id === 'string' ? detail.trace_id.slice(0, 100) : null,
+        });
+      }
+      throw new McpToolError(message);
+    }
     if (r.structuredContent !== undefined) return r.structuredContent;
     try { return JSON.parse(text); } catch { return text; }
   }
