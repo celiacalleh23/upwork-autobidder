@@ -4,13 +4,14 @@ import { acquireLease, delKv, getKv, putKv, releaseLease, ownsLease, renewLease 
 import { isAccountWarning, McpError, McpJobAccessError, type McpClient } from '../mcp';
 import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
 import { findKey, upworkClient } from '../oauth';
-import { loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
+import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
 import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
-import { createPreview, FIXED_DEFAULTS, type Preview } from './preview';
+import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
+import { loadSnapshot, snapshotHoldReason } from './snapshot';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
@@ -165,15 +166,15 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   let letter = assembleLetter(s.letter.template, opening, sourceUrl, disclosure);
 
   const fixed = job.job_type === 'fixed';
-  let p: Preview | null = null;
   let note: string | null = blocked === 'connects' ? `Not enough Connects yet: balance ${d.connectsBalance}, this job costs ${d.connectsCost}` : null;
-  p = await createPreview(client, state, { jobId: job.id, letter, bid, fixed });
+  const preview = await createPreview(client, state, { jobId: job.id, letter, bid, fixed });
 
   let answers: Answer[] = [];
-  if (p?.questions.length) {
-    answers = await answerQuestions(env, who.profile, forClaude, p.questions);
-    let bad = checkAnswers(p.questions, answers);
-    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, p.questions, bad); bad = checkAnswers(p.questions, answers); }
+  const liveQuestions = preview.questions;
+  if (liveQuestions?.length) {
+    answers = await answerQuestions(env, who.profile, forClaude, liveQuestions);
+    let bad = checkAnswers(liveQuestions, answers);
+    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, liveQuestions, bad); bad = checkAnswers(liveQuestions, answers); }
     if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
   }
 
@@ -191,7 +192,11 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     }
   }
 
-  const createParams = { charged_amount: bid, ...(p?.extra ?? (fixed ? FIXED_DEFAULTS : {})), ...(answers.length ? { answers } : {}) };
+  const createParams = {
+    charged_amount: bid, ...(preview.extra ?? (fixed ? FIXED_DEFAULTS : {})),
+    questions_state: liveQuestions === null ? 'unknown' : 'live',
+    ...(answers.length ? { answers } : {}),
+  };
   // Auto mode approves straight away; fixed-price stays in review until Siv acknowledges Upwork's terms (Settings).
   const current = await loadState(env);
   if (!(await ownsLease(env, 'write', lease)) || current.paused || !current.upwork.connected || current.controlsVersion !== state.controlsVersion || JSON.stringify(await loadSettings(env)) !== JSON.stringify(s)) {
@@ -204,7 +209,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
-      JSON.stringify(createParams), loomUrl, loomId, p?.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note,
+      JSON.stringify(createParams), loomUrl, loomId, preview.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note,
       status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
     env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
   ]);
@@ -213,7 +218,165 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   return 'queued';
 }
 
+async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, job: JobRow, lease: string): Promise<Outcome> {
+  const snap = await loadSnapshot(env, job.id);
+  if (!snap) { await setJob(env, job.id, 'error', 'Held: no saved public snapshot. Independent drafts do not call Upwork.'); return 'errors'; }
+  const n = snap.normalized;
+  const hold = snapshotHoldReason(n, s);
+  if (hold) { await setJob(env, job.id, 'error', hold); return 'errors'; }
+  job = {
+    ...job, title: n.title ?? job.title, job_type: n.jobType ?? job.job_type, budget: n.budgetText ?? job.budget,
+    client_country: n.country ?? job.client_country, posted_at: n.postedAt ?? job.posted_at, proposals_tier: n.proposalsTier ?? job.proposals_tier,
+  };
+  await env.DB.prepare('UPDATE jobs SET title = ?, job_type = ?, budget = ?, client_country = ?, posted_at = ?, proposals_tier = ? WHERE id = ?')
+    .bind(job.title, job.job_type, job.budget, job.client_country, job.posted_at, job.proposals_tier, job.id).run();
+  // Public fields only. applied is omitted, so a feed cannot assert that Rafa has not applied.
+  const verdict = evaluateJob({
+    id: job.id, title: job.title ?? '', description: n.description ?? '', job_type: job.job_type ?? undefined,
+    budget: job.budget ?? undefined, client: { country: job.client_country ?? undefined, verification_status: n.verification ?? undefined },
+    ...(n.proposalCount !== null ? { proposal_count: n.proposalCount } : {}), proposals_tier: job.proposals_tier ?? undefined,
+  }, s, new Set());
+  if (verdict.status === 'filtered') { await setJob(env, job.id, 'filtered', verdict.reason); return 'filtered'; }
+  const forClaude: JobForClaude = {
+    title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
+    description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, clientFeedbackNames: [],
+  };
+  const { profileFit, winSimilarity, reason: why, pros, cons } = await scoreJob(env, who.profile, who.wins, forClaude);
+  const keywords = verdict.keywords;
+  const analysis = JSON.stringify(jobAnalysis({
+    title: job.title, keywords, proposalsTier: job.proposals_tier, postedAt: job.posted_at, jobType: job.job_type,
+    budget: job.budget, connectsCost: null, winScore: winSimilarity, profileScore: profileFit,
+  }, { pros, cons }));
+  await env.DB.prepare('UPDATE jobs SET analysis = ? WHERE id = ?').bind(analysis, job.id).run();
+  const score = weightedScore(profileFit, winSimilarity, s);
+  const breakdown = winSimilarity === null ? `profile ${profileFit}, no past wins yet` : `past wins ${winSimilarity} · profile ${profileFit}`;
+  const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
+  const sc: Scores = { score, win: winSimilarity, profile: profileFit };
+  if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); return 'lowScore'; }
+  const bid = computeBid(job.job_type, job.budget, s);
+  if (bid === null) { await setJob(env, job.id, 'error', 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.', sc); return 'errors'; }
+  const sourceUrl = s.loom.sourceUrl || null;
+  const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
+  const withOpening = s.letter.opening !== 'off';
+  let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
+  let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+  if (problem && withOpening) {
+    opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
+    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+  }
+  if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
+  let letter = assembleLetter(s.letter.template, opening, sourceUrl, disclosure);
+  const hints = n.questions;
+  let answers: Answer[] = [];
+  if (hints?.length) {
+    answers = await answerQuestions(env, who.profile, forClaude, hints);
+    let bad = checkAnswers(hints, answers);
+    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
+    if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
+  }
+  let note = 'Saved from the public snapshot. Applied status, Connects, balance, boost, and final screening questions are checked on Upwork before anything is sent.';
+  if (!hints) note += ' Feed screening questions were missing or empty, so they stay unknown.';
+  else note += ' Feed screening questions are hints until the live preview confirms them.';
+  if (n.questionHint) note += ' An AI hint from the feed was stored and was not used as a question.';
+  let loomUrl = sourceUrl;
+  let loomId: string | null = null;
+  if (sourceUrl && state.loom.connected) {
+    try {
+      const copy = await copyForJob(env, sourceUrl, stripUntrusted(job.title));
+      if (copy) { loomUrl = copy.url; loomId = copy.id; letter = swapLoomLink(letter, copy.url); }
+    } catch (e) {
+      if (!(e instanceof LoomAuthError)) await markLoomError(env, e);
+      note = [note, `Loom copy failed, the letter uses the source video: ${errText(e)}`].filter(Boolean).join(' · ');
+    }
+  }
+  const fixed = job.job_type === 'fixed';
+  const createParams = {
+    charged_amount: bid, ...(fixed ? FIXED_DEFAULTS : {}),
+    questions_state: hints?.length ? 'hints' : 'unknown',
+    ...(answers.length ? { answers } : {}),
+  };
+  const current = await loadState(env);
+  if (!(await ownsLease(env, 'write', lease)) || current.paused || current.controlsVersion !== state.controlsVersion || JSON.stringify(await loadSettings(env)) !== JSON.stringify(s)) {
+    if (loomId) await deleteCopy(env, loomId).catch(() => undefined);
+    throw new McpError('Controls changed while preparing the proposal; retry after review.');
+  }
+  // Review stays pending. Auto is only eligible for the sender, which still runs the live checks before confirm.
+  const status = current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
+  const [inserted] = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
+      JSON.stringify(createParams), loomUrl, loomId, null, score, winSimilarity, profileFit, status, note,
+      status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
+    env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
+  ]);
+  if (loomId && !inserted.meta.changes) await deleteCopy(env, loomId).catch((e) => console.error('loom: unused copy not deleted', loomId, errText(e)));
+  return 'queued';
+}
+
+// Flag on: score, write, and prepare Loom from the saved public snapshot. This function does not construct an Upwork client.
+export async function runIndependentWriter(env: Env): Promise<WriteSummary | null> {
+  const [state, s] = await Promise.all([loadState(env), loadSettings(env)]);
+  if (state.paused) return null;
+  const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'matched'").first<{ n: number }>();
+  if (!pending?.n) return null;
+  const summary: WriteSummary = { queued: 0, lowScore: 0, filtered: 0, errors: 0, note: null };
+  if (!env.ANTHROPIC_API_KEY) summary.note = 'Waiting for the ANTHROPIC_API_KEY secret in Cloudflare.';
+  else if (!s.letter.template.trim()) summary.note = 'Waiting for the letter template in Settings → Cover letter.';
+  if (summary.note) { await record(env, summary); return summary; }
+  let lease = await acquireLease(env, 'write', 20 * 60_000);
+  if (!lease) return null;
+  try {
+    const { results: jobs } = await env.DB.prepare(
+      "SELECT id, title, url, job_type, budget, client_country, reason, posted_at, proposals_tier FROM jobs WHERE status = 'matched' ORDER BY posted_at DESC, seen_at DESC LIMIT ?",
+    ).bind(s.maxNewJobsPerRun).all<JobRow>();
+    const recordRow = await loadTrackRecord(env);
+    await patchState(env, { writer: { startedAt: new Date().toISOString() } });
+    const who: Who = { profile: profileForClaude(recordRow, s), wins: winsForClaude(recordRow) };
+    const deadline = Date.now() + 12 * 60_000;
+    for (const job of jobs) {
+      if (Date.now() >= deadline || !(await ownsLease(env, 'write', lease)) || (await loadState(env)).paused) break;
+      const renewed = await renewLease(env, 'write', lease, 20 * 60_000);
+      if (!renewed) break;
+      lease = renewed;
+      const tryKey = `writeTry:${job.id}`;
+      const tries = Number(await getKv(env, tryKey) ?? 0) + 1;
+      if (tries > MAX_TRIES) {
+        summary.errors++;
+        await setJob(env, job.id, 'error', `Could not prepare: the run stopped ${MAX_TRIES} times on this job (check Cloudflare logs)`);
+        await delKv(env, tryKey);
+        continue;
+      }
+      await putKv(env, tryKey, String(tries));
+      try {
+        summary[await draftFromSnapshot(env, state, s, who, job, lease)]++;
+        await delKv(env, tryKey);
+      } catch (e) {
+        await delKv(env, tryKey);
+        if (e instanceof ClaudeConfigError) { summary.note = e.message; break; }
+        const msg = errText(e);
+        console.error('writer: snapshot draft failed', job.id, msg);
+        summary.errors++;
+        await setJob(env, job.id, 'error', e instanceof ClaudeDeclined ? msg : `Could not prepare: ${msg}`);
+      }
+    }
+  } catch (e) {
+    summary.errors++; summary.note = errText(e);
+    console.error('independent writer failed', summary.note);
+  } finally {
+    try {
+      await record(env, summary);
+      const done = [summary.queued && `${summary.queued} written`, summary.lowScore && `${summary.lowScore} low score`, summary.filtered && `${summary.filtered} filtered`, summary.errors && `${summary.errors} errors`].filter(Boolean).join(', ');
+      const st = await loadState(env);
+      await patchState(env, { writer: { startedAt: st.writer.startedAt, finishedAt: new Date().toISOString(), note: [done || 'nothing to write', summary.note].filter(Boolean).join(' · ') } });
+    } finally { await releaseLease(env, 'write', lease); }
+  }
+  return summary;
+}
+
 export async function runWriter(env: Env): Promise<WriteSummary | null> {
+  if (independentDrafts(env)) return runIndependentWriter(env);
   const [state, s] = await Promise.all([loadState(env), loadSettings(env)]);
   if (state.paused || !state.upwork.connected || !state.upwork.orgUid || !state.upwork.toolNames.find_jobs) return null;
   const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'matched'").first<{ n: number }>();

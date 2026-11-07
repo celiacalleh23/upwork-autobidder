@@ -2,7 +2,8 @@ import { timingSafeEqual } from './auth';
 import { sha256b64url } from './crypto';
 import { readBody, readResponseBody, readTextStream } from './http';
 import { acquireLease, getKv, ownsLease, putKv, releaseLease } from './kv';
-import { addJob } from './pipeline/jobs';
+import { addJob, jobIdFromUrl, jobUrl } from './pipeline/jobs';
+import { persistSnapshot } from './pipeline/snapshot';
 import { InvalidInput, type Env, type Settings } from './settings';
 
 type ObjectValue = Record<string, unknown>;
@@ -93,7 +94,14 @@ export async function drainApify(env: Env): Promise<void> {
         const j = object(value);
         const raw = j?.url ?? j?.link ?? j?.jobUrl;
         const url = object(raw)?.href ?? object(raw)?.url ?? raw;
-        const result = await addJob(env, { jobUrl: url, title: j?.title ?? j?.jobTitle, postedAt: j?.date_posted ?? j?.publishedDate ?? j?.postedAt ?? j?.published_date, automatic: true });
+        const postedAt = j?.date_posted ?? j?.publishedDate ?? j?.postedAt ?? j?.published_date;
+        const jobId = jobIdFromUrl(String(url ?? '')) ?? jobIdFromUrl(String(j?.id ?? ''));
+        // Store the public payload before the receipt offset moves or the item list is cleared.
+        if (jobId && j) await persistSnapshot(env, {
+          jobId, source: 'apify', partial: false, raw: j,
+          provenance: { source: 'apify', receipt: row.key, runId: receipt.runId ?? null, dataset: receipt.dataset, offset: receipt.offset },
+        });
+        const result = await addJob(env, { jobUrl: url ?? (jobId ? jobUrl(jobId) : url), title: j?.title ?? j?.jobTitle, postedAt, automatic: true });
         if (!result.ok && result.retryable) throw new Error(result.reason);
         if (result.ok) receipt.imported++;
         else if (result.id) receipt.duplicates++;

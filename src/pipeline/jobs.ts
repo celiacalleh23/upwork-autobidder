@@ -1,6 +1,7 @@
 import { acquireLease, releaseLease } from '../kv';
 import type { Env, Settings } from '../settings';
 import { containsTerm, recheckStored, reopenable, stripUntrusted, type StoredJob } from './filters';
+import { persistSnapshot } from './snapshot';
 
 // Jobs arrive by manual link, Upwork discovery, or Apify. Automatic sources share canonical
 // deduplication and the intake cap; the writer fetches full details and applies current filters.
@@ -46,6 +47,12 @@ export async function addJob(env: Env, input: { jobUrl?: unknown; title?: unknow
     const title = stripUntrusted(String(input.title ?? '')).replace(/\s+/g, ' ').trim().slice(0, 300) || 'Job added by link';
     const date = typeof input.postedAt === 'string' ? Date.parse(input.postedAt) : NaN;
     const posted = Number.isFinite(date) && date <= Date.now() + 300_000 ? new Date(date).toISOString() : null;
+    // Fill only gaps. A thin link or search hit must not erase a richer Apify snapshot already stored.
+    await persistSnapshot(env, {
+      jobId: id, source: input.automatic ? 'automatic' : 'manual', partial: true,
+      raw: { url: jobUrl(id), title: input.title, date_posted: posted },
+      provenance: { source: input.automatic ? 'automatic' : 'manual' },
+    });
     const change = existing
       ? env.DB.prepare("UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status NOT IN ('matched', 'proposed')").bind(ADDED_REASON, id)
       : env.DB.prepare("INSERT OR IGNORE INTO jobs (id, title, url, status, reason, posted_at) VALUES (?, ?, ?, 'matched', ?, ?)").bind(id, title, jobUrl(id), ADDED_REASON, posted);

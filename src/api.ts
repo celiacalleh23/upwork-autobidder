@@ -303,6 +303,7 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
         if (state.paused) return fail('Resume after reviewing the pause reason before refreshing Upwork data', 409);
         const client = await upworkClient(env);
         const preview = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed: row.job_type === 'fixed' });
+        if (preview.questions === null) return fail('Upwork did not return screening questions. Nothing was changed.');
         const params = JSON.parse(row.create_params || '{}');
         const old = Array.isArray(params.answers) ? params.answers as Answer[] : [];
         params.answers = preview.questions.map(question => ({ question, answer: old.find(a => a.question === question)?.answer ?? '' }));

@@ -87,6 +87,24 @@ CREATE TABLE IF NOT EXISTS connects_ledger (
 );
 CREATE INDEX IF NOT EXISTS connects_ledger_at ON connects_ledger(at);
 
+-- Public job text captured at ingestion (additive; existing tables are not altered).
+-- Account facts (applied, can_apply, Connects balance, cost, boost) are never stored here.
+-- job_id is the canonical digit string, including any leading zeros. fetched_at is when this
+-- app stored the row; source_posted_at and source_seen_at are the feed's own timestamps.
+CREATE TABLE IF NOT EXISTS job_snapshots (
+  job_id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  source_posted_at TEXT,
+  source_seen_at TEXT,
+  provenance TEXT NOT NULL,
+  raw_payload TEXT NOT NULL,
+  raw_truncated INTEGER NOT NULL DEFAULT 0,
+  raw_original_bytes INTEGER NOT NULL DEFAULT 0,
+  normalized TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- One row per cron pass
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

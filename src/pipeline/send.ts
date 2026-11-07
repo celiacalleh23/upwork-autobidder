@@ -132,6 +132,15 @@ async function verifyUnknown(env: Env, client: McpClient, state: State) {
   }
 }
 
+// null means the live preview omitted the list. An explicit empty list is a real "no questions" answer.
+function screeningHold(questions: string[] | null, answers: Answer[]): string | null {
+  if (questions === null) return 'Upwork did not return screening questions. Nothing was sent.';
+  if (checkAnswers(questions, answers) || questions.some((q, i) => answers[i]?.question !== q)) {
+    return `Upwork now shows ${questions.length} screening question(s); review the answers and approve again`;
+  }
+  return null;
+}
+
 function storedParams(row: Row): { extra: Record<string, string>; answers: Answer[] } {
   try {
     const p = JSON.parse(row.create_params || '{}') as Record<string, unknown>;
@@ -232,9 +241,10 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     try {
       let p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra, answers });
       if (cannotApply(p.canApply, p.connectsCost, balance) === 'closed') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: CLOSED_REASON }); return summary; }
-      if (checkAnswers(p.questions, answers) || p.questions.some((q, i) => answers[i]?.question !== q)) {
-        await setProposal(env, row.id, { status: 'pending', submitted_at: null, error: `Upwork now shows ${p.questions.length} screening question(s); review the answers and approve again` });
-        summary.note = 'A proposal went back to review: new screening questions.'; return summary;
+      const screening = screeningHold(p.questions, answers);
+      if (screening) {
+        await setProposal(env, row.id, { status: 'pending', submitted_at: null, error: screening });
+        summary.note = screening; return summary;
       }
       if (p.connectsCost !== null && balance !== null && p.connectsCost > balance) {
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
@@ -269,8 +279,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       const violation = cannotApply(p.canApply, p.connectsCost, balance) ? 'The final preview is not eligible.'
         : connectsOverLimit(p.connectsCost, s)
         ?? connectsGate(balance, p.connectsCost === null ? null : p.connectsCost + (boost ?? 0), s)
-        ?? checkAnswers(p.questions, answers)
-        ?? (p.questions.some((q, i) => answers[i]?.question !== q) ? 'Screening questions changed.' : null)
+        ?? screeningHold(p.questions, answers)
         ?? checkLetter(row.cover_letter.replace(/https:\/\/(?:www\.)?loom\.com\/share\/\S+/g, ''), null);
       if (violation) {
         await setProposal(env, row.id, { status: 'pending', submitted_at: null, error: violation });
