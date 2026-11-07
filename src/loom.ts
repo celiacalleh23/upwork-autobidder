@@ -1,4 +1,5 @@
 import { seal, unseal } from './crypto';
+import { refusePreview } from './previewIsolation';
 import { emailConfigured, sendEmail } from './email';
 import { acquireLease, delKv, getKv, putKv, releaseLease } from './kv';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type State } from './settings';
@@ -159,6 +160,7 @@ export async function markLoomError(env: Env, e: unknown) {
 // Runs Loom calls with the stored session: saves a renewed cookie, notes the activity, and marks the connection
 // lost on an auth error. Null when Loom is not connected.
 async function withSession<T>(env: Env, fn: (sess: Session) => Promise<T>): Promise<T | null> {
+  refusePreview(env);
   const sess = await loadSession(env);
   if (!sess) {
     if (!(await loadState(env)).loom.connected) return null;
@@ -193,6 +195,7 @@ export function expiryHint(v: unknown, now = Date.now()): string | null {
 
 // Proves the session can copy the source video: makes one copy and deletes it straight away.
 export async function connectLoom(env: Env, pasted: string, sourceUrl: string, expires: unknown = null): Promise<State> {
+  refusePreview(env);
   const cookie = cookieFrom(pasted);
   if (!cookie) throw new LoomError('Paste the connect.sid value from loom.com (one line).');
   const source = videoIdFrom(sourceUrl);

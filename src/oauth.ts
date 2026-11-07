@@ -1,3 +1,4 @@
+import { refusePreview } from './previewIsolation';
 import { heldByUpwork } from './upworkPace';
 import { randomToken, seal, sha256b64url, unseal } from './crypto';
 import { acquireLease, delKv, getKv, putKv, releaseLease } from './kv';
@@ -126,6 +127,7 @@ async function getClient(env: Env, as: AuthServer, redirectUri: string, purpose:
 }
 
 export async function startUpworkAuth(env: Env, origin: string, purpose: UpworkPurpose = 'bidding'): Promise<string> {
+  refusePreview(env);
   if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') throw new OAuthError('Scan-only account is temporarily unavailable.');
   const as = await discover(env);
   const redirectUri = redirectUriFor(origin);
@@ -177,6 +179,7 @@ export async function callbackPurpose(env: Env, params: URLSearchParams): Promis
 }
 
 export async function finishUpworkAuth(env: Env, params: URLSearchParams, purpose: UpworkPurpose = 'bidding'): Promise<void> {
+  refusePreview(env);
   const lease = await acquireLease(env, keyFor('upwork-auth', purpose), 60_000);
   if (!lease) throw new OAuthError('Upwork sign-in is busy; retry shortly.');
   try { await finishAuthLocked(env, params, purpose); }
@@ -225,6 +228,7 @@ async function loadTokens(env: Env, purpose: UpworkPurpose = 'bidding'): Promise
 
 // A valid access token, refreshed shortly before expiry. On invalid_grant the connection is marked for reconnecting.
 export async function getAccessToken(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<string> {
+  refusePreview(env);
   if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') throw new OAuthError('Scan-only account is temporarily unavailable.');
   if (heldByUpwork(await connectionState(env, purpose))) throw new OAuthError('Upwork is held after an account warning; review the warning before resuming.');
   const current = await loadTokens(env, purpose);
@@ -295,6 +299,7 @@ interface Account { name?: string; org_uid?: string; role?: string }
 
 // After connecting (and on "Check now"): resolve tool names, pick Rafa's TALENT account, read the Connects balance.
 export async function checkUpwork(env: Env, purpose: UpworkPurpose = 'bidding'): Promise<State> {
+  refusePreview(env);
   const st = await connectionState(env, purpose);
   try {
     const client = await upworkClient(env, purpose);

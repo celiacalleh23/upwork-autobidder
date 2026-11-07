@@ -12,7 +12,7 @@ export interface Preview {
   previewId: string;
   connectsCost: number | null;
   canApply: boolean | null;
-  questions: string[];
+  questions: string[] | null; // null: the live preview did not include a question list. An explicit [] is a list.
   extra: Record<string, string>; // application_method / payment_mode / estimated_duration that Upwork asked for
   boost: BoostInfo | null;
   boostDiagnostics?: { fields: string[]; availableType: string; recommendedType: string; reason: string | null };
@@ -43,9 +43,11 @@ export async function createPreview(
       throw new McpError(`Upwork preview returned no preview id: ${asText.slice(0, 200)}`);
     }
     const raw = findKey(r, 'screening_questions') ?? findKey(r, 'questions');
-    const questions = (Array.isArray(raw) ? raw : [])
-      .map((q) => (typeof q === 'string' ? q : String((q as Record<string, unknown>)?.question ?? (q as Record<string, unknown>)?.text ?? '')))
-      .map((q) => stripUntrusted(q)).filter(Boolean);
+    // A missing list is unknown. It must not become an empty list that a later confirm treats as "no questions".
+    const questions = Array.isArray(raw)
+      ? raw.map((q) => (typeof q === 'string' ? q : String((q as Record<string, unknown>)?.question ?? (q as Record<string, unknown>)?.text ?? '')))
+        .map((q) => stripUntrusted(q)).filter(Boolean)
+      : null;
     const cost = finiteNumber(findKey(r, 'connects_cost'));
     const can = findKey(r, 'can_apply');
     const rawBoost = findKey(r, 'boost');

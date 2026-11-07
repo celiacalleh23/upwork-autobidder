@@ -40,7 +40,7 @@ async function connected(e: Env, auto = false) {
   } } });
   await putKv(e, 'upwork_tokens', await seal(e, { accessToken: 'synthetic', expiresAt: Date.now()+3600_000 }));
 }
-async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number; boostPreviewRefused?: boolean; boostInfo?: Record<string, unknown>; balance?: number; boostMax?: number; boostMin?: number } = {}) {
+async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; off?: boolean; cost?: number; warning?: boolean; questions?: string[]; omitQuestions?: boolean; answers?: unknown[]; response?: unknown; unknown?: boolean; autoApproval?: boolean; score?: number; boost?: number; boostOff?: boolean; pending?: boolean; autoMode?: boolean; boostRefusals?: number; boostPreviewRefused?: boolean; boostInfo?: Record<string, unknown>; balance?: number; boostMax?: number; boostMin?: number } = {}) {
   vi.useFakeTimers();
   const e = env(); await connected(e, opts.autoMode);
   const settings = structuredClone(DEFAULT_SETTINGS); settings.sendingEnabled = true; settings.caps.activeStart = settings.caps.activeEnd = '00:00';
@@ -71,7 +71,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
         if (opts.pauseDuringDispatch) setTimeout(() => patchState(e, { paused: true, pausedReason: 'Paused from the dashboard' }), 5000);
         if (opts.pause) await patchState(e, { paused: true, pausedReason: 'Paused from the dashboard' });
         if (opts.off) await saveSettings(e, { ...settings, sendingEnabled: false });
-        data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, questions: opts.questions ?? [], ...(opts.boostInfo ? {boost:opts.boostInfo} : opts.boost !== undefined ? { boost: { available: true, recommended_connects: opts.boost, max_boost_connects: 600 } } : {}) };
+        data = { preview_id: 'synthetic-preview', connects_cost: opts.cost ?? 8, can_apply: true, ...(opts.omitQuestions ? {} : { questions: opts.questions ?? [] }), ...(opts.boostInfo ? {boost:opts.boostInfo} : opts.boost !== undefined ? { boost: { available: true, recommended_connects: opts.boost, max_boost_connects: 600 } } : {}) };
       }
       if (name === 'confirm_preview') { confirms++; data = opts.response ?? { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: 'synthetic', error: null } } }; }
       result = name === 'manage_proposals' && opts.boostPreviewRefused && m.params.arguments.params?.boost_connects ? { isError: true, content: [{ type: 'text', text: 'The boost bid was rejected: outbid for paid slot' }] } : name === 'get_freelancer_dashboard' && opts.warning ? { isError: true, content: [{ type: 'text', text: 'Your account is restricted due to violations of our Terms of Service' }] } : { structuredContent: data };
@@ -157,6 +157,13 @@ describe('submission boundary (mocked upstream only)', () => {
   });
   it('stops and holds on an account warning', async () => {
     const r = await sender({ warning: true }); expect(r.confirms).toBe(0); expect((await loadState(r.e)).paused).toBe(true);
+  });
+  it('does not confirm when the live preview omits screening questions', async () => {
+    const r = await sender({ omitQuestions: true, score: 90, boost: 4 });
+    expect(r.confirms).toBe(0);
+    expect(r.boostBids).toEqual([]);
+    expect(r.row?.status).toBe('pending');
+    expect(r.e.sqlite.prepare('SELECT error FROM proposals WHERE id=1').get()?.error).toMatch(/did not return screening questions/);
   });
   it('invalidates answers when question content changes without a count change', async () => {
     const r = await sender({ questions: ['New question'], answers: [{ question: 'Old question', answer: 'Old answer' }] });
