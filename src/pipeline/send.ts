@@ -67,7 +67,7 @@ export async function refreshConnects(env: Env, now = Date.now()): Promise<void>
   if (Number.isFinite(last) && now - last < BALANCE_EVERY_MS) return;
   await putKv(env, 'connects:checkedAt', String(now));
   const balance = await readBalance(await upworkClient(env), state);
-  if (balance !== null) await patchState(env, { connectsBalance: balance });
+  if (balance !== null) await patchState(env, { connectsBalance: balance, connectsBalanceStale: false });
   await checkConnectsAlert(env, balance);
 }
 
@@ -215,7 +215,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     if (unclear?.n) { summary.note = `Checking ${unclear.n} unclear send(s) on Upwork before sending more.`; return summary; }
 
     const balance = await readBalance(client, state);
-    if (balance !== null) await patchState(env, { connectsBalance: balance });
+    if (balance !== null) await patchState(env, { connectsBalance: balance, connectsBalanceStale: false });
     await checkConnectsAlert(env, balance);
 
     let d: Awaited<ReturnType<typeof jobDetails>>;
@@ -413,9 +413,10 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     if (boostRefusals) await delKv(env, boostKey);
     await clearThrottle(env);
     summary.sent = 1; summary.note = `last proposal sent at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: s.caps.timezone })}${boost ? ` (boosted, bid ${boost} Connects)` : ''}`;
-    const after = await readBalance(client, state).catch(() => null) ?? (balance !== null && finalCost !== null ? balance - finalCost - (boost ?? 0) : null);
-    await patchState(env, { lastSendAt: new Date().toISOString(), consecutiveErrors: 0, ...(after !== null ? { connectsBalance: after } : {}) });
-    await checkConnectsAlert(env, after);
+    // The pre-send read is the spend decision. Do not read again and do not subtract the cost:
+    // Upwork may charge a different amount, and a guessed balance must not be spent later.
+    // The header keeps the pre-send figure marked stale until refreshConnects or the next send's fresh read.
+    await patchState(env, { lastSendAt: new Date().toISOString(), consecutiveErrors: 0, connectsBalanceStale: true });
     await env.DB.prepare("INSERT INTO runs (finished_at, submitted, note) VALUES (datetime('now'), 1, ?)").bind(summary.note).run();
     return summary;
   } catch (e) {

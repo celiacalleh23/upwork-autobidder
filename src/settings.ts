@@ -74,6 +74,7 @@ export interface State {
   paused: boolean;
   pausedReason: string | null;
   connectsBalance: number | null;
+  connectsBalanceStale: boolean; // true after a send until a fresh read; not a spendable figure
   lastScanAt: string | null;
   consecutiveErrors: number;
   upwork: {
@@ -148,6 +149,7 @@ export const DEFAULT_STATE: State = {
   paused: false,
   pausedReason: null,
   connectsBalance: null,
+  connectsBalanceStale: false,
   lastScanAt: null,
   consecutiveErrors: 0,
   upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null },
