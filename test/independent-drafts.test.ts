@@ -10,7 +10,7 @@ import { addJob } from '../src/pipeline/jobs';
 import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
 import { computeBid } from '../src/pipeline/letter';
-import { boundRawPayload, mergeSnapshots, normalizePublicJob, persistSnapshot } from '../src/pipeline/snapshot';
+import { boundRawPayload, mergeSnapshots, normalizePublicJob, persistSnapshot, snapshotHoldReason } from '../src/pipeline/snapshot';
 import { DEFAULT_SETTINGS, loadState, patchState, saveSettings, type Env } from '../src/settings';
 import { seal } from '../src/crypto';
 import * as oauth from '../src/oauth';
@@ -246,48 +246,93 @@ const fixedPricePayload = () => ({
   price_type: 'Fixed-price', price: 5, buyer_payment_verified: true, proposal_count: 4,
 });
 
-it('reads a Fixed-price amount without inventing a currency or using the hourly rate', () => {
+it('reads a Fixed-price amount of 5 without treating it as dollars', () => {
   const snap = normalizePublicJob(heldJobId, fixedPricePayload());
   expect(snap.jobType).toBe('fixed');
   expect(snap.budgetText).toBe('5.00');
+  expect(snap.amountSource).toBe('price');
   expect(snap.currency).toBeNull();
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  settings.minFixedBudget = 20;
   expect(computeBid(snap.jobType, snap.budgetText, settings)).toBe(5);
+  const hold = snapshotHoldReason(snap, settings);
+  expect(hold).toContain('5.00 is numerically below the minimum fixed budget of 20');
+  expect(hold).toContain('no currency');
+  expect(hold).not.toMatch(/\$|USD/);
   expect(computeBid('fixed', null, settings)).toBeNull();
   expect(computeBid('hourly', null, settings)).toBe(30);
-  expect(normalizePublicJob(heldJobId, { ...fixedPricePayload(), price: 0 }).budgetText).toBeNull();
-  expect(normalizePublicJob(id, { price_type: 'Hourly', price: 25, budget: '40.00–50.00/hr' }).budgetText).toBe('40.00–50.00/hr');
-  expect(normalizePublicJob(id, { price_type: 'Hourly', price: 25 }).budgetText).toBe('25.00/hr');
+  const zero = normalizePublicJob(heldJobId, { ...fixedPricePayload(), price: 0 });
+  expect(zero.budgetText).toBeNull();
+  expect(zero.amountSource).toBeNull();
+  const stated = normalizePublicJob(id, { price_type: 'Hourly', price: 25, budget: '40.00–50.00/hr' });
+  expect(stated.budgetText).toBe('40.00–50.00/hr');
+  expect(stated.amountSource).toBeNull();
+  expect(normalizePublicJob(id, { price_type: 'Hourly', price: 25 }).amountSource).toBe('price');
 });
 
-it('filters the fixed-price job and does not requeue or send the held row', async () => {
+it('holds a fixed price of 5 under the live minimum of 20 and does not requeue or send it', async () => {
   const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
   await ready(e, 'auto');
   const s = structuredClone(DEFAULT_SETTINGS);
   s.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
-  s.minFixedBudget = 150;
+  s.minFixedBudget = 20;
+  s.fixedPriceTermsAcknowledged = true;
   s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
   s.sendingEnabled = true;
   s.caps.activeStart = s.caps.activeEnd = '00:00';
   await saveSettings(e, s);
   await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), provenance: { source: 'apify', runId: '7OHpRQhzrCbFHhLOj' } });
-  e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, ?, ?, 'error', ?)").run(
-    heldJobId, fixedPricePayload().title, fixedPricePayload().url, 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.',
-  );
-  await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), provenance: { source: 'apify-replay' } });
-  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
+  await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title, automatic: true });
   const client = vi.spyOn(oauth, 'upworkClient');
   await runWriter(e);
+  const held = e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(heldJobId) as { status: string; reason: string };
+  expect(held.status).toBe('error');
+  expect(held.reason).toContain('5.00 is numerically below the minimum fixed budget of 20');
+  expect(held.reason).toContain('no currency');
+  expect(held.reason).not.toMatch(/\$|USD/);
   expect(client).not.toHaveBeenCalled();
   expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+  await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), provenance: { source: 'apify-replay' } });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
   await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title });
   await runWriter(e);
   expect(client).not.toHaveBeenCalled();
-  expect(e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(heldJobId)).toMatchObject({
-    status: 'filtered', reason: 'Budget $5 below $150',
-  });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
   expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+});
+
+it('does not auto-confirm a bare price above the minimum when currency is absent', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'auto');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  s.minFixedBudget = 20;
+  s.fixedPriceTermsAcknowledged = true;
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  await saveSettings(e, s);
+  await patchState(e, { upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs', confirm_preview: 'confirm_preview', manage_proposals: 'manage_proposals' } } });
+  const aboveId = '2118988132749471493';
+  const raw = { ...fixedPricePayload(), id: `02${aboveId}`, url: `https://www.upwork.com/jobs/~02${aboveId}`, price: 25 };
+  await persistSnapshot(e, { jobId: aboveId, source: 'apify', partial: false, raw, provenance: { source: 'apify' } });
+  await addJob(e, { jobUrl: raw.url, title: raw.title, automatic: true });
+  const client = vi.spyOn(oauth, 'upworkClient');
+  vi.stubGlobal('fetch', () => { throw new Error('network'); });
+  await runWriter(e);
+  const held = e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(aboveId) as { status: string; reason: string };
+  expect(held.status).toBe('error');
+  expect(held.reason).toContain('25.00');
+  expect(held.reason).toContain('minimum fixed budget of 20');
+  expect(held.reason).not.toContain('numerically below');
+  expect(held.reason).not.toMatch(/\$|USD/);
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(0);
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, create_params) VALUES (?, ?, ?, 25, 'fixed', 'approved', 'auto-submit', datetime('now'), '{}')")
+    .run(aboveId, raw.title, 'Hi there,\n\nThe fixed letter.');
+  await runSender(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
 });
 
 it('inserts a finished Claude draft after an interrupted queue write without generating again', async () => {

@@ -21,6 +21,7 @@ export interface PublicJobSnapshot {
   descriptionTruncated: boolean;
   jobType: 'fixed' | 'hourly' | null;
   budgetText: string | null;
+  amountSource: 'price' | null; // 'price' is the feed's bare number. It is not a currency.
   currency: null;
   country: string | null;
   verification: string | null;
@@ -111,20 +112,23 @@ function moneyText(v: unknown): string | null {
   return n !== null && n > 0 ? n.toFixed(2) : null;
 }
 
-function budgetText(raw: Record<string, unknown>, jobType: 'fixed' | 'hourly' | null): string | null {
+function budgetText(raw: Record<string, unknown>, jobType: 'fixed' | 'hourly' | null): { text: string | null; fromPrice: boolean } {
   const direct = text(raw.budget ?? raw.budget_text ?? raw.budgetText, 120);
-  if (direct) return direct;
+  if (direct) return { text: direct, fromPrice: false };
   if (jobType === 'hourly') {
     const min = moneyText(raw.hourly_budget_min ?? raw.hourlyBudgetMin ?? raw.hourly_min);
     const max = moneyText(raw.hourly_budget_max ?? raw.hourlyBudgetMax ?? raw.hourly_max);
-    if (min && max) return `${min}–${max}/hr`;
-    if (max) return `up to ${max}/hr`;
-    if (min) return `${min}+/hr`;
+    if (min && max) return { text: `${min}–${max}/hr`, fromPrice: false };
+    if (max) return { text: `up to ${max}/hr`, fromPrice: false };
+    if (min) return { text: `${min}+/hr`, fromPrice: false };
     const rate = moneyText(raw.price);
-    return rate ? `${rate}/hr` : null;
+    return { text: rate ? `${rate}/hr` : null, fromPrice: !!rate };
   }
-  const fixed = moneyText(raw.fixed_budget ?? raw.fixed_price ?? raw.amount ?? raw.fixedPrice ?? raw.price);
-  return jobType === 'fixed' ? fixed : null;
+  const stated = moneyText(raw.fixed_budget ?? raw.fixed_price ?? raw.amount ?? raw.fixedPrice);
+  if (stated) return { text: stated, fromPrice: false };
+  if (jobType !== 'fixed') return { text: null, fromPrice: false };
+  const price = moneyText(raw.price);
+  return { text: price, fromPrice: !!price };
 }
 
 function jobTypeOf(raw: Record<string, unknown>): 'fixed' | 'hourly' | null {
@@ -159,6 +163,7 @@ export function normalizePublicJob(jobId: string, raw: unknown): PublicJobSnapsh
   const descriptionTruncated = !!descriptionSource && descriptionSource.length > DESCRIPTION_STORE_LIMIT;
   const description = descriptionSource ? descriptionSource.slice(0, DESCRIPTION_STORE_LIMIT) : null;
   const jobType = jobTypeOf(src);
+  const budget = budgetText(src, jobType);
   const skillsRaw = src.skills;
   const skills = Array.isArray(skillsRaw) ? skillsRaw.map((s) => text(typeof s === 'string' ? s : object(s)?.name, 80)).filter((s): s is string => !!s).slice(0, 40) : null;
   const hint = [text(src.ai_specific_requirements_before_applying, 500), text(src.ai_anti_bot_phrase, 200)].filter(Boolean).join(' · ') || null;
@@ -166,7 +171,7 @@ export function normalizePublicJob(jobId: string, raw: unknown): PublicJobSnapsh
   return {
     v: 1, id: jobId, sourceId, title: text(src.title ?? src.jobTitle, 300),
     url: text(typeof src.url === 'object' ? object(src.url)?.href ?? object(src.url)?.url : src.url ?? src.link ?? src.jobUrl, 400) ?? snapshotUrl(jobId),
-    description, descriptionTruncated, jobType, budgetText: budgetText(src, jobType), currency: null,
+    description, descriptionTruncated, jobType, budgetText: budget.text, amountSource: budget.fromPrice ? 'price' : null, currency: null,
     country: countryOf(src), verification: verificationOf(src),
     proposalCount: asNumber(src.proposal_count ?? src.proposalCount ?? src.applicants),
     proposalsTier: text(src.proposals_tier ?? src.proposalsTier, 40),
@@ -205,6 +210,7 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
     descriptionTruncated: descriptionFlag(prev, next, partial),
     jobType: partial ? (prev.jobType ?? next.jobType) : (next.jobType ?? prev.jobType),
     budgetText: partial ? (prev.budgetText ?? next.budgetText) : (next.budgetText ?? prev.budgetText),
+    amountSource: partial ? (prev.amountSource ?? next.amountSource) : next.amountSource,
     currency: null,
     country: partial ? (prev.country ?? next.country) : (next.country ?? prev.country),
     verification: partial ? (prev.verification ?? next.verification) : (next.verification ?? prev.verification),
@@ -218,13 +224,28 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
   };
 }
 
+// A bare feed price is a number, not a bid. No currency contract is inferred, including USD.
+export function unverifiedPriceHold(snap: PublicJobSnapshot, s: Settings): string | null {
+  if (snap.amountSource !== 'price') return null;
+  const stated = snap.budgetText ?? 'a number';
+  const min = s.minFixedBudget;
+  if (snap.jobType === 'fixed' && min > 0) {
+    const amount = Number(stated);
+    const comparison = Number.isFinite(amount) && amount < min
+      ? `${stated} is numerically below the minimum fixed budget of ${min}, but that minimum is not applied without a verified same-currency contract. `
+      : `The minimum fixed budget of ${min} is not applied without a verified same-currency contract. `;
+    return `Held: the feed stated a fixed price of ${stated} and no currency. ${comparison}Nothing is drafted or sent.`;
+  }
+  return `Held: the feed stated ${stated} and no currency. Nothing is drafted or sent.`;
+}
+
 export function snapshotHoldReason(snap: PublicJobSnapshot, s: Settings): string | null {
   if (!snap.title) return 'Held: the saved snapshot has no job title.';
   if (!snap.description) return 'Held: the saved snapshot has no job description.';
   if (s.verifiedOnly && !snap.verification) return 'Held: client payment verification was not in the saved snapshot.';
   if (s.maxExistingProposals > 0 && snap.proposalCount === null && !snap.proposalsTier) return 'Held: the current proposal count was not in the saved snapshot.';
-  if (computeBid(snap.jobType, snap.budgetText, s) === null) return 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.';
-  return null;
+  if (computeBid(snap.jobType, snap.budgetText, s) === null) return 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.';
+  return unverifiedPriceHold(snap, s);
 }
 
 function readRow(row: Record<string, unknown> | null): SnapshotRow | null {

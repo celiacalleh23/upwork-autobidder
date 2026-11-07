@@ -295,7 +295,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     const sc: Scores = { score, win: winSimilarity, profile: profileFit };
     if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); await env.DB.prepare('UPDATE jobs SET analysis = ? WHERE id = ?').bind(analysis, job.id).run(); return 'lowScore'; }
     const bid = computeBid(job.job_type, job.budget, s);
-    if (bid === null) { await setJob(env, job.id, 'error', 'Held: no bid can be computed from the saved snapshot. Currency is unknown and no rate was stated.', sc); return 'errors'; }
+    if (bid === null) { await setJob(env, job.id, 'error', 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.', sc); return 'errors'; }
     const sourceUrl = s.loom.sourceUrl || null;
     const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
     const withOpening = s.letter.opening !== 'off';
