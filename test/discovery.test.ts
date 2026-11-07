@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { environment } from './support/db';
 import { discoveryDue, discoveryJob, runScan } from '../src/pipeline/scan';
+import { persistSnapshot, snapshotHoldReason } from '../src/pipeline/snapshot';
 import { permitSearch } from '../src/upworkPace';
 import { getKv, putKv } from '../src/kv';
 import { patchState, saveSettings, DEFAULT_SETTINGS } from '../src/settings';
@@ -24,6 +25,40 @@ it.each([{limit:15,spacing:0,advance:60001},{limit:150,spacing:10000,advance:360
   vi.setSystemTime(now+advance);
   await expect(permitSearch(e)).resolves.toBeUndefined();
 });
+it('stores the description already on the search hit and does not read the job again', async () => {
+  const e = env();
+  const id = '2119044137876131663';
+  const at = Date.UTC(2026, 10, 7, 15, 30);
+  await patchState(e, { paused: false, upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs' } } });
+  await saveSettings(e, { ...structuredClone(DEFAULT_SETTINGS), keywords: ['Email'] });
+  const callTool = vi.fn().mockResolvedValue({ jobs: [{
+    id, title: 'Email Marketing Campaign Manager', published_date: new Date(at).toISOString(),
+    description_snippet: 'Run the weekly campaigns and report on them.',
+    job_type: 'hourly', budget: '30.00–40.00/hr', proposals_tier: '5 to 10',
+    client: { country: 'United States', verification_status: 'VERIFIED' },
+  }] });
+  vi.spyOn(oauth, 'upworkClient').mockResolvedValue({ callTool } as unknown as McpClient);
+  expect(discoveryJob({ id, published_date: new Date(at).toISOString(), description_snippet: 'Snippet only.' }, at)?.description).toBe('Snippet only.');
+  await runScan(e, at);
+  expect(callTool).toHaveBeenCalledTimes(1);
+  expect(callTool.mock.calls[0][1]).toMatchObject({ action: 'search' });
+  const row = e.sqlite.prepare('SELECT source, normalized FROM job_snapshots WHERE job_id = ?').get(id) as { source: string; normalized: string };
+  const snap = JSON.parse(row.normalized);
+  expect(row.source).toBe('automatic');
+  expect(snap.description).toBe('Run the weekly campaigns and report on them.');
+  expect(snap.verification).toBe('VERIFIED');
+  expect(snapshotHoldReason(snap, { ...structuredClone(DEFAULT_SETTINGS), keywords: ['Email'] })).toBeNull();
+  const rich = 'A'.repeat(80);
+  await persistSnapshot(e, { jobId: id, source: 'apify', partial: false, raw: { description: rich, title: 'Email Marketing Campaign Manager' }, provenance: { source: 'apify' } });
+  await persistSnapshot(e, { jobId: id, source: 'automatic', partial: true, raw: { description: 'short snippet' }, provenance: { source: 'automatic' } });
+  await runScan(e, at);
+  expect(JSON.parse(String(e.sqlite.prepare('SELECT normalized FROM job_snapshots WHERE job_id = ?').get(id)?.normalized)).description).toBe(rich);
+  e.sqlite.prepare("UPDATE jobs SET status = 'error', reason = 'Held: the saved snapshot has no job description.' WHERE id = ?").run(id);
+  await runScan(e, at + 1800_000);
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(id)?.status).toBe('error');
+  expect(callTool.mock.calls.every((call) => call[1].action === 'search')).toBe(true);
+});
+
 it('deduplicates overlapping sources and repeated cron deliveries, and respects pause', async () => {
   const e=env(); await patchState(e,{paused:false,upwork:{connected:true,orgUid:'mock',toolNames:{find_jobs:'find_jobs'}}});
   await saveSettings(e,{...structuredClone(DEFAULT_SETTINGS),keywords:['Klaviyo','Email']});

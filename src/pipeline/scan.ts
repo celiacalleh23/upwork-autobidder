@@ -7,6 +7,18 @@ export const discoveryDue = (minute: number) => minute % 15 === 0;
 export const DISCOVERY_WINDOW_MS = 60 * 60_000;
 const MAX_QUERIES = 12; // 576 base requests/day; quota guard also counts retries.
 
+const publicText = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
+
+// Text already on the search hit. include_full_details is part of that same search; this does not fetch the job again.
+function searchDescription(j: Record<string, unknown>): string | undefined {
+  const posting = j.marketplaceJobPosting;
+  const content = posting && typeof posting === 'object' && !Array.isArray(posting)
+    ? (posting as Record<string, unknown>).content : undefined;
+  const nested = content && typeof content === 'object' && !Array.isArray(content)
+    ? (content as Record<string, unknown>).description : undefined;
+  return publicText(j.description) ?? publicText(nested) ?? publicText(j.description_snippet);
+}
+
 export function discoveryJob(value: unknown, now = Date.now()) {
   if (!value || typeof value !== 'object') return null;
   const j = value as Record<string, unknown>;
@@ -14,7 +26,15 @@ export function discoveryJob(value: unknown, now = Date.now()) {
   const date = j.published_date ?? j.created_date;
   const at = typeof date === 'string' ? Date.parse(date) : NaN;
   if (!/^\d{15,22}$/.test(id) || !Number.isFinite(at) || at > now + 300_000 || now - at > DISCOVERY_WINDOW_MS) return null;
-  return { jobUrl: jobUrl(id), title: j.title, postedAt: new Date(at).toISOString(), automatic: true };
+  return {
+    jobUrl: jobUrl(id), title: j.title, postedAt: new Date(at).toISOString(), automatic: true as const,
+    description: searchDescription(j),
+    jobType: publicText(j.job_type),
+    budget: publicText(j.budget),
+    proposalsTier: publicText(j.proposals_tier),
+    client: j.client && typeof j.client === 'object' && !Array.isArray(j.client) ? j.client as Record<string, unknown> : undefined,
+    skills: Array.isArray(j.skills) ? j.skills : undefined,
+  };
 }
 
 export async function runScan(env: Env, scheduledTime: number): Promise<void> {
