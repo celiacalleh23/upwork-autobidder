@@ -17,6 +17,8 @@ export interface JobForClaude {
   clientFeedbackNames: string[];
   descriptionTruncated?: boolean;
   descriptionFragment?: boolean;
+  clientHourlyUnstated?: boolean;
+  bidderHourlyUsd?: number;
 }
 
 // Rafa is a woman (Celia, Oct 26): Claude's notes on the dashboard must say she/her.
@@ -50,14 +52,23 @@ export function boundPromptDescription(description: string, storedTruncated = fa
   return { text, note: notes.length ? notes.join('\n') : null };
 }
 
+export function sourceLimits(j: JobForClaude): string {
+  const lines: string[] = [];
+  if (!j.description.trim()) lines.push('The source did not include the job post. Use only the title. Do not invent requirements, deliverables, portfolio results, a client budget, a job type, or a currency.');
+  else if (j.descriptionFragment) lines.push('The description is a snippet, not the full post. Use only the title and that snippet. Do not add requirements or results that are not written there.');
+  if (j.clientHourlyUnstated && j.bidderHourlyUsd) lines.push(`The client did not state an hourly rate. USD ${j.bidderHourlyUsd} is the freelancer's own rate, not the client's budget.`);
+  return lines.join('\n');
+}
+
 const jobBlock = (j: JobForClaude) => {
   const description = boundPromptDescription(j.description, j.descriptionTruncated, j.descriptionFragment);
+  const limits = sourceLimits(j);
   return `<job_post>
 Title: ${dataText(j.title)}
 Type: ${j.jobType ?? 'unknown'} · Budget: ${j.budget ?? 'not stated'} · Client country: ${j.country ?? 'unknown'} · Currency: unknown
 ${j.clientFeedbackNames.length ? `Names in this client's past reviews: ${j.clientFeedbackNames.join(', ')}\n` : ''}
 ${dataText(description.text)}${description.note ? `\n${description.note}` : ''}
-</job_post>`;
+</job_post>${limits ? `\n<source_limits>\n${limits}\n</source_limits>` : ''}`;
 };
 
 async function json<T>(env: Env, system: string, user: string, schema: Record<string, unknown>, effort: 'low' | 'medium', maxTokens: number): Promise<T> {
@@ -142,6 +153,7 @@ The client should feel a person actually read their post. So:
   clients, numbers or results.
 - If a past-review name is given, you may address the client by that name; never guess a name.
 - If the post asks applicants to include a short code word or phrase in their proposal, include it.
+- If the source limits say the post is missing or only a snippet, the one concrete detail must be copied from the title or that snippet. Do not invent a requirement, a deliverable, a portfolio result, or a client budget.
 ${extraRules.trim() ? `\nExtra rules from the freelancer's team (for this paragraph only):\n${extraRules.trim().replaceAll('{loom_link}', 'the video link')}\n` : ''}
 Freelancer profile:
 ${profile}

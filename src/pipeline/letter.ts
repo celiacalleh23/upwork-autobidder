@@ -4,6 +4,8 @@ import { parseBudget } from './filters';
 // Pure letter and bid logic: no network. Everything Claude writes passes through these checks before it is stored.
 
 export const MAX_LETTER = 5000;
+// Used when the source has no post text, so the opening cannot invent a requirement from a title alone.
+export const MISSING_DESCRIPTION_OPENING = 'The saved job post did not include a description, so this sentence adds no requirement that was not stated.';
 export const MAX_OPENING = 300; // one sentence (Siv, Oct 27)
 export const MAX_OPENING_SENTENCES = 1;
 

@@ -16,6 +16,7 @@ import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
+import { loadSnapshot, submissionBlock, unverifiedPriceHold } from './pipeline/snapshot';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -342,8 +343,14 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
         return json({ ok: true });
       }
       if (method === 'POST' && action === 'approve') {
-        const proposal = await env.DB.prepare("SELECT create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ create_params: string }>();
+        const proposal = await env.DB.prepare("SELECT job_id, create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ job_id: string; create_params: string }>();
         if (!proposal) return fail('This proposal is no longer waiting for review', 409);
+        const snap = await loadSnapshot(env, proposal.job_id);
+        if (snap) {
+          const s = await loadSettings(env);
+          const blocked = unverifiedPriceHold(snap.normalized, s) ?? submissionBlock(snap.normalized, s);
+          if (blocked) return fail(blocked);
+        }
         const answers = answersOf(proposal.create_params);
         const problem = checkAnswers(answers.map(a => a.question), answers);
         if (problem) return fail('Review screening answers: ' + problem);
