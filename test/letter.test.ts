@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences, metaLanguageIn, openingFromTitle, resolveSendBid, swapLoomLink } from '../src/pipeline/letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences, fallbackTitleOpening, metaLanguageIn, resolveSendBid, swapLoomLink, titleOnlyOpeningProblem } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const s = (bid: Partial<Settings['bid']> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0, ...bid } });
@@ -38,22 +38,34 @@ describe('assembleLetter', () => {
 });
 
 describe('title-only opening', () => {
-  it('uses only the title and never the internal missing-description sentence', () => {
-    const leaked = 'The saved job post did not include a description, so this sentence adds no requirement that was not stated.';
-    for (const title of ['CAPES', 'Shopify']) {
-      const opening = openingFromTitle(title);
-      expect(opening).toBe(`${title} is the work I would take on, and I would start by confirming the details with you.`);
-      expect(checkOpening(opening)).toBeNull();
-      expect(metaLanguageIn(opening)).toBeNull();
-      expect(opening).not.toContain(leaked);
-      const letter = assembleLetter('Hi there,\n\n{opening}\n\nThe fixed letter.', opening, null);
-      expect(checkLetter(letter, null)).toBeNull();
-      expect(letter).toContain(title);
-      expect(letter).not.toContain('saved job post');
-    }
+  const capes = 'Email Marketing Expert Needed to Build 5 Automated Sales Flows for CAPES';
+  const shopify = 'Klaviyo Email Marketing Expert for Shopify | Strategy, Flows & Campaigns';
+  const capesOpening = 'The five automated sales flows for CAPES are the email marketing work I would set up first.';
+  const shopifyOpening = 'The Klaviyo flows and campaigns for Shopify are where I would start.';
+  const leaked = 'The saved job post did not include a description, so this sentence adds no requirement that was not stated.';
+
+  it('accepts a natural sentence for the real titles and rejects a pasted title', () => {
+    expect(titleOnlyOpeningProblem(capesOpening, capes)).toBeNull();
+    expect(titleOnlyOpeningProblem(shopifyOpening, shopify)).toBeNull();
+    expect(capesOpening).not.toMatch(/Needed|\||Expert/);
+    expect(shopifyOpening).not.toMatch(/Needed|\||Expert/);
+    expect(titleOnlyOpeningProblem(capes, capes)).toMatch(/hiring words|raw title/);
+    expect(titleOnlyOpeningProblem(`${shopify} is the work I would take on today.`, shopify)).toMatch(/raw title|hiring words|title divider/);
+    expect(titleOnlyOpeningProblem(leaked, capes)).toMatch(/internal wording/);
+    expect(titleOnlyOpeningProblem(`${capesOpening} ${'extra '.repeat(40)}`, capes)).toMatch(/35 words|300/);
     expect(checkLetter(leaked, null)).toMatch(/internal wording/);
-    expect(checkOpening(leaked)).toMatch(/internal wording/);
     expect(checkLetter('Hi there,\n\n{opening}', null)).toMatch(/template placeholder/);
+  });
+
+  it('falls back to a short opener that names the email or Klaviyo work', () => {
+    expect(fallbackTitleOpening(capes)).toBe('The email marketing work in your post is where I would start.');
+    expect(fallbackTitleOpening(shopify)).toBe('The Klaviyo and email marketing work in your post is where I would start.');
+    for (const title of [capes, shopify]) {
+      const opening = fallbackTitleOpening(title);
+      expect(titleOnlyOpeningProblem(opening, title)).toBeNull();
+      expect(metaLanguageIn(assembleLetter('Hi there,\n\n{opening}', opening, null))).toBeNull();
+      expect(opening).not.toContain(title);
+    }
   });
 });
 

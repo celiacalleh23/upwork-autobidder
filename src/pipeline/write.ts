@@ -7,7 +7,7 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, metaLanguageIn, openingFromTitle, swapLoomLink, type Answer } from './letter';
+import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, fallbackTitleOpening, metaLanguageIn, swapLoomLink, titleOnlyOpeningProblem, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
@@ -308,11 +308,17 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     const sourceUrl = s.loom.sourceUrl || null;
     const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
     const withOpening = s.letter.opening !== 'off';
-    let opening = !withOpening ? '' : n.description ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : openingFromTitle(job.title ?? '');
-    let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-    if (problem && withOpening && n.description) {
+    const titleOnly = !n.description;
+    const openingProblem = (text: string) => titleOnly ? titleOnlyOpeningProblem(text, job.title ?? '') : checkOpening(text);
+    let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
+    let problem = (withOpening ? openingProblem(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+    if (problem && withOpening) {
       opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
-      problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+      problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+    }
+    if (problem && titleOnly && withOpening) {
+      opening = fallbackTitleOpening(job.title ?? '');
+      problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
     }
     if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
     const hints = n.questions;

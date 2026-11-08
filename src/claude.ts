@@ -54,7 +54,7 @@ export function boundPromptDescription(description: string, storedTruncated = fa
 
 export function sourceLimits(j: JobForClaude): string {
   const lines: string[] = [];
-  if (!j.description.trim()) lines.push('The source did not include the job post. Use only the title. Do not invent requirements, deliverables, portfolio results, a client budget, a job type, or a currency.');
+  if (!j.description.trim()) lines.push('Only the title is known. Do not say you read a description or any detail beyond the title. Do not invent a requirement, a tool that is not named in the title, a result, a budget, or a number that is not in the title. Do not paste the title, and do not use Needed, Expert, Wanted, or a vertical bar.');
   else if (j.descriptionFragment) lines.push('The description is a snippet, not the full post. Use only the title and that snippet. Do not add requirements or results that are not written there.');
   if (j.clientHourlyUnstated && j.bidderHourlyUsd) lines.push(`The client did not state an hourly rate. USD ${j.bidderHourlyUsd} is the freelancer's own rate, not the client's budget.`);
   return lines.join('\n');
@@ -153,7 +153,8 @@ The client should feel a person actually read their post. So:
   clients, numbers or results.
 - If a past-review name is given, you may address the client by that name; never guess a name.
 - If the post asks applicants to include a short code word or phrase in their proposal, include it.
-- If the source limits say the post is missing or only a snippet, the one concrete detail must be copied from the title or that snippet. Do not invent a requirement, a deliverable, a portfolio result, or a client budget.
+- If only the title is known, write one natural sentence about the work it names. Mention a real client or platform from the title, not the hiring wording. Do not paste the title. Do not invent a requirement, a tool that is not named, a result, or a budget, and do not claim you read more than the title.
+- If the text is only a snippet, use a detail from the title or that snippet. Do not invent a requirement, a deliverable, a portfolio result, or a client budget.
 ${extraRules.trim() ? `\nExtra rules from the freelancer's team (for this paragraph only):\n${extraRules.trim().replaceAll('{loom_link}', 'the video link')}\n` : ''}
 Freelancer profile:
 ${profile}

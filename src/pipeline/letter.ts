@@ -53,12 +53,29 @@ export function metaLanguageIn(text: string): string | null {
   return hit ? 'internal wording' : null;
 }
 
-// One natural sentence that uses the title and does not add a requirement the post did not state.
-export function openingFromTitle(title: string): string {
-  const clean = stripUntrusted(title).replace(/[.!?]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const tail = ' is the work I would take on, and I would start by confirming the details with you.';
-  const name = (clean || 'This').slice(0, MAX_OPENING - tail.length).trim();
-  return `${name}${tail}`;
+const HIRING_WORDS = /\b(needed|expert|wanted|hiring|looking for)\b/i;
+
+// A title-only opener must be one natural sentence. It must not paste the title or its hiring words.
+export function titleOnlyOpeningProblem(opening: string, title: string): string | null {
+  const structural = checkOpening(opening);
+  if (structural) return structural;
+  if (opening.includes('|')) return 'the opening copies a title divider';
+  if (HIRING_WORDS.test(opening)) return 'the opening copies hiring words from the title';
+  if (/^i\b/i.test(opening.trim())) return 'the opening starts with I';
+  const raw = stripUntrusted(title).replace(/\s+/g, ' ').trim();
+  if (raw.length >= 12 && opening.toLowerCase().includes(raw.toLowerCase())) return 'the opening pastes the raw title';
+  if (opening.trim().split(/\s+/).length > 35) return 'the opening is longer than 35 words';
+  return null;
+}
+
+// Used only after the letter model fails the check above. It names the kind of work in the title and does not paste the title.
+export function fallbackTitleOpening(title: string): string {
+  const klaviyo = /\bklaviyo\b/i.test(title);
+  const email = /\bemail\b/i.test(title);
+  if (klaviyo && email) return 'The Klaviyo and email marketing work in your post is where I would start.';
+  if (klaviyo) return 'The Klaviyo work in your post is where I would start.';
+  if (email) return 'The email marketing work in your post is where I would start.';
+  return 'The work in your post is where I would start.';
 }
 
 export function checkOpening(opening: string): string | null {

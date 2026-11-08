@@ -11,7 +11,7 @@ import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
 import { computeBid } from '../src/pipeline/letter';
 import { boundRawPayload, draftBid, mergeSnapshots, normalizePublicJob, persistSnapshot, snapshotHoldReason, submissionBlock, submissionGaps, unverifiedPriceHold } from '../src/pipeline/snapshot';
-import { metaLanguageIn, openingFromTitle } from '../src/pipeline/letter';
+import { fallbackTitleOpening, metaLanguageIn, titleOnlyOpeningProblem } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, DEFAULT_STATE, loadState, patchState, saveSettings, type Env } from '../src/settings';
 import { seal } from '../src/crypto';
 import * as oauth from '../src/oauth';
@@ -579,12 +579,12 @@ it('writes pending text for saved missing data and still auto-approves a complet
   expect(client).not.toHaveBeenCalled();
   const titleProposal = e.sqlite.prepare('SELECT id, status, approved_via, bid, budget, cover_letter, error FROM proposals WHERE job_id = ?').get(titleId) as { id: number; status: string; approved_via: string | null; bid: number | null; budget: string | null; cover_letter: string; error: string };
   expect(titleProposal).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: null, budget: null });
-  expect(titleProposal.cover_letter).toContain(openingFromTitle('Klaviyo campaign manager'));
+  expect(titleProposal.cover_letter).toContain('The weekly Klaviyo campaigns need the first flow set up before anything else.');
   expect(metaLanguageIn(titleProposal.cover_letter)).toBeNull();
   expect(titleProposal.cover_letter).not.toMatch(/saved job post|did not include a description|this sentence/i);
   expect(titleProposal.error).toMatch(/job description/);
   expect(titleProposal.error).toMatch(/No job type was stated/);
-  expect(opening.mock.calls.every((call) => String((call[5] as { description?: string } | undefined)?.description ?? '').trim().length > 0)).toBe(true);
+  expect(opening.mock.calls.some((call) => !(call[5] as { description?: string } | undefined)?.description)).toBe(true);
   const hourly = e.sqlite.prepare('SELECT status, approved_via, bid, budget, error, create_params FROM proposals WHERE job_id = ?').get(hourlyId) as { status: string; approved_via: string | null; bid: number; budget: string | null; error: string; create_params: string };
   expect(hourly).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: 30, budget: null });
   expect(JSON.parse(hourly.create_params)).toMatchObject({ bid_basis: 'bidder-hourly-usd', bidder_hourly_usd: 30 });
@@ -619,6 +619,38 @@ it('writes pending text for saved missing data and still auto-approves a complet
   expect(submissionBlock(normalizePublicJob(completeId, { title: 'Klaviyo complete post', description: shorter, price_type: 'Hourly', price_min: 40, price_max: 55, buyer_payment_verified: true, proposal_count: 2, country: 'Canada' }, 'hyperbach-public-upwork'), s)).toBeNull();
 });
 
+it('uses the letter model for a title-only opener and falls back when the title is pasted', async () => {
+  const capesTitle = 'Email Marketing Expert Needed to Build 5 Automated Sales Flows for CAPES';
+  const shopifyTitle = 'Klaviyo Email Marketing Expert for Shopify | Strategy, Flows & Campaigns';
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'review');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'sentence', rules: '' };
+  await saveSettings(e, s);
+  const capesId = '2119271616018660118';
+  const shopifyId = '2119171898378828566';
+  for (const [jobId, title] of [[capesId, capesTitle], [shopifyId, shopifyTitle]] as const) {
+    await persistSnapshot(e, { jobId, source: 'automatic', partial: false, raw: { title, url: `https://www.upwork.com/jobs/~02${jobId}` }, provenance: { source: 'automatic' } });
+    e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, ?, ?, 'matched', 'Added by link')").run(jobId, title, `https://www.upwork.com/jobs/~02${jobId}`);
+  }
+  vi.spyOn(claude, 'scoreJob').mockResolvedValue({ profileFit: 90, winSimilarity: null, reason: 'Synthetic fit', pros: [], cons: [] });
+  const opening = vi.spyOn(claude, 'writeOpening').mockImplementation(async (_env, _profile, _wins, _template, _rules, job) => String(job?.title ?? ''));
+  vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
+  const client = vi.spyOn(oauth, 'upworkClient');
+  await runWriter(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(opening.mock.calls.length).toBeGreaterThanOrEqual(2);
+  const capesLetter = String(e.sqlite.prepare('SELECT cover_letter FROM proposals WHERE job_id = ?').get(capesId)?.cover_letter);
+  const shopifyLetter = String(e.sqlite.prepare('SELECT cover_letter FROM proposals WHERE job_id = ?').get(shopifyId)?.cover_letter);
+  expect(capesLetter).toContain(fallbackTitleOpening(capesTitle));
+  expect(shopifyLetter).toContain(fallbackTitleOpening(shopifyTitle));
+  expect(capesLetter).not.toMatch(/Needed|\|/);
+  expect(shopifyLetter).not.toMatch(/Needed|\|/);
+  expect(titleOnlyOpeningProblem(fallbackTitleOpening(capesTitle), capesTitle)).toBeNull();
+  expect(metaLanguageIn(capesLetter)).toBeNull();
+  expect(metaLanguageIn(shopifyLetter)).toBeNull();
+});
+
 it('keeps Review drafts pending, blocks an internal letter before Upwork, and does not auto-send a fixed job with no amount', async () => {
   expect(DEFAULT_STATE.mode).toBe('review');
   const review = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
@@ -631,11 +663,12 @@ it('keeps Review drafts pending, blocks an internal letter before Upwork, and do
   await persistSnapshot(review, { jobId: titleId, source: 'automatic', partial: false, raw: { title: 'CAPES', url: `https://www.upwork.com/jobs/~02${titleId}` }, provenance: { source: 'automatic' } });
   review.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, 'CAPES', ?, 'matched', 'Added by link')").run(titleId, `https://www.upwork.com/jobs/~02${titleId}`);
   vi.spyOn(claude, 'scoreJob').mockResolvedValue({ profileFit: 90, winSimilarity: null, reason: 'Synthetic fit', pros: [], cons: [] });
+  vi.spyOn(claude, 'writeOpening').mockResolvedValue('The weekly Klaviyo campaigns need the first flow set up before anything else.');
   vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
   await runWriter(review);
   const reviewed = review.sqlite.prepare('SELECT status, approved_via, cover_letter FROM proposals').get() as { status: string; approved_via: string | null; cover_letter: string };
   expect(reviewed).toMatchObject({ status: 'pending', approved_via: null });
-  expect(reviewed.cover_letter).toContain(openingFromTitle('CAPES'));
+  expect(reviewed.cover_letter).toContain('The weekly Klaviyo campaigns need the first flow set up before anything else.');
   expect(metaLanguageIn(reviewed.cover_letter)).toBeNull();
 
   const blocked = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
