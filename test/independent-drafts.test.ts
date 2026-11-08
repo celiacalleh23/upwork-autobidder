@@ -308,7 +308,7 @@ it('filters the public $5 fixed-price job at the live minimum of 20 and does not
     heldJobId, fixedPricePayload().title, fixedPricePayload().url, 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.',
   );
   await persistSnapshot(e, { jobId: heldJobId, source: 'apify', partial: false, raw: fixedPricePayload(), contract: hyperbach, provenance: { source: 'apify-replay' } });
-  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
+  expect(e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(heldJobId)).toMatchObject({ status: 'matched', reason: 'Recovered public snapshot' });
   const kept = JSON.parse(String(e.sqlite.prepare('SELECT normalized FROM job_snapshots WHERE job_id = ?').get(heldJobId)?.normalized));
   expect(kept.listedCurrency).toBe('USD');
   expect(kept.budgetText).toBe('5.00');
@@ -317,7 +317,7 @@ it('filters the public $5 fixed-price job at the live minimum of 20 and does not
   expect(partial.budgetText).toBe('5.00');
   expect(partial.listedCurrency).toBe('USD');
   expect((await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title, automatic: true })).ok).toBe(false);
-  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('error');
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(heldJobId)?.status).toBe('matched');
   const client = vi.spyOn(oauth, 'upworkClient');
   await addJob(e, { jobUrl: fixedPricePayload().url, title: fixedPricePayload().title });
   await runWriter(e);
@@ -383,4 +383,72 @@ it('inserts a finished Claude draft after an interrupted queue write without gen
   expect(score).toHaveBeenCalledTimes(1);
   expect(copy).toHaveBeenCalledTimes(1);
   expect(e.sqlite.prepare('SELECT status, loom_video_id FROM proposals').get()).toMatchObject({ status: 'pending', loom_video_id: 'copy1' });
+});
+
+it('holds an hourly listing when every price field is empty and keeps an applicant count of zero', () => {
+  const snap = normalizePublicJob('2119192907272097615', {
+    title: 'Email Marketing Campaign Manager', description: 'Manage the campaigns.',
+    price_type: 'Hourly', price: null, price_min: null, price_max: null,
+    buyer_payment_verified: true, client_total_applicants: 0,
+  }, 'hyperbach-public-upwork');
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.bid = { hourly: 'profile', fixed: 'client_budget', profileRate: 30 };
+  expect(snap.verification).toBe('VERIFIED');
+  expect(snap.proposalCount).toBe(0);
+  expect(snap.budgetText).toBeNull();
+  expect(snap.budgetFault).toBe('malformed');
+  expect(snap.listedCurrency).toBeNull();
+  expect(computeBid('hourly', null, settings)).toBe(30);
+  const hold = snapshotHoldReason(snap, settings) ?? '';
+  expect(hold).toMatch(/zero, blank, or not a single positive amount/);
+  expect(hold).not.toMatch(/proposal count/);
+  const merged = mergeSnapshots(snap, { ...snap, proposalCount: null }, true);
+  expect(merged.proposalCount).toBe(0);
+});
+
+it('returns a held job to a pending draft after a fuller import and does not approve it in Auto', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'auto');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
+  s.sendingEnabled = true;
+  s.fixedPriceTermsAcknowledged = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  await saveSettings(e, s);
+  const jobId = '2119044137876131664';
+  const url = `https://www.upwork.com/jobs/~02${jobId}`;
+  await persistSnapshot(e, { jobId, source: 'automatic', partial: true, raw: { url, title: 'Klaviyo campaign manager' }, provenance: { source: 'automatic' } });
+  e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, 'Klaviyo campaign manager', ?, 'error', 'Held: the saved snapshot has no job description.')").run(jobId, url);
+  await persistSnapshot(e, {
+    jobId, source: 'automatic', partial: true,
+    raw: { description: 'Still only a snippet, and still missing the other public fields.' },
+    provenance: { source: 'automatic' },
+  });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId)?.status).toBe('error');
+  e.sqlite.prepare("UPDATE jobs SET status = 'filtered', reason = 'Budget $5 below $20' WHERE id = ?").run(jobId);
+  await persistSnapshot(e, {
+    jobId, source: 'apify', partial: false, contract: 'hyperbach-public-upwork',
+    raw: {
+      title: 'Klaviyo campaign manager', description: 'Run the Klaviyo campaigns and send the weekly report.',
+      price_type: 'Hourly', price_min: 30, price_max: 45, buyer_payment_verified: true, proposal_count: 4,
+    },
+    provenance: { source: 'apify' },
+  });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId)?.status).toBe('filtered');
+  e.sqlite.prepare("UPDATE jobs SET status = 'error', reason = 'Held: the saved snapshot has no job description.' WHERE id = ?").run(jobId);
+  await persistSnapshot(e, {
+    jobId, source: 'apify', partial: false, contract: 'hyperbach-public-upwork',
+    raw: {
+      title: 'Klaviyo campaign manager', description: 'Run the Klaviyo campaigns and send the weekly report.',
+      price_type: 'Hourly', price_min: 30, price_max: 45, buyer_payment_verified: true, proposal_count: 4,
+    },
+    provenance: { source: 'apify' },
+  });
+  expect(e.sqlite.prepare('SELECT status, reason FROM jobs WHERE id = ?').get(jobId)).toMatchObject({ status: 'matched', reason: 'Recovered public snapshot' });
+  vi.spyOn(claude, 'scoreJob').mockResolvedValue({ profileFit: 90, winSimilarity: null, reason: 'Synthetic fit', pros: [], cons: [] });
+  vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
+  const client = vi.spyOn(oauth, 'upworkClient');
+  await runWriter(e);
+  expect(client).not.toHaveBeenCalled();
+  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
 });
