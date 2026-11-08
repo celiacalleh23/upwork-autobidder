@@ -29,7 +29,11 @@ export type AddResult =
 
 // Adds a job for the writer. A job already proposed is left alone; one filtered, scored low or failed before comes back
 // (someone chose it on purpose). `title` is a placeholder until the writer reads the job.
-export async function addJob(env: Env, input: { jobUrl?: unknown; title?: unknown; postedAt?: unknown; automatic?: boolean }): Promise<AddResult> {
+export async function addJob(env: Env, input: {
+  jobUrl?: unknown; title?: unknown; postedAt?: unknown; automatic?: boolean;
+  description?: unknown; jobType?: unknown; budget?: unknown; proposalsTier?: unknown;
+  client?: unknown; skills?: unknown;
+}): Promise<AddResult> {
   const id = jobIdFromUrl(String(input.jobUrl ?? ''));
   if (!id) return { ok: false, id: null, reason: 'Paste an Upwork job link (https://www.upwork.com/jobs/…).' };
   const lease = await acquireLease(env, 'intake', 30_000);
@@ -48,9 +52,16 @@ export async function addJob(env: Env, input: { jobUrl?: unknown; title?: unknow
     const date = typeof input.postedAt === 'string' ? Date.parse(input.postedAt) : NaN;
     const posted = Number.isFinite(date) && date <= Date.now() + 300_000 ? new Date(date).toISOString() : null;
     // Fill only gaps. A thin link or search hit must not erase a richer Apify snapshot already stored.
+    const raw: Record<string, unknown> = { url: jobUrl(id), title: input.title, date_posted: posted };
+    if (typeof input.description === 'string' && input.description.trim()) raw.description = input.description;
+    if (typeof input.jobType === 'string' && input.jobType.trim()) raw.job_type = input.jobType;
+    if (typeof input.budget === 'string' && input.budget.trim()) raw.budget = input.budget;
+    if (typeof input.proposalsTier === 'string' && input.proposalsTier.trim()) raw.proposals_tier = input.proposalsTier;
+    if (input.client && typeof input.client === 'object' && !Array.isArray(input.client)) raw.client = input.client;
+    if (Array.isArray(input.skills)) raw.skills = input.skills;
     await persistSnapshot(env, {
       jobId: id, source: input.automatic ? 'automatic' : 'manual', partial: true,
-      raw: { url: jobUrl(id), title: input.title, date_posted: posted },
+      raw,
       provenance: { source: input.automatic ? 'automatic' : 'manual' },
     });
     // Pasting the link is the explicit retry. It re-reads the saved public payload and does not run on a cron import.

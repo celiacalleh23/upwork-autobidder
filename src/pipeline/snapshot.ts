@@ -192,7 +192,8 @@ function jobTypeOf(raw: Record<string, unknown>): 'fixed' | 'hourly' | null {
 }
 
 function verificationOf(raw: Record<string, unknown>): string | null {
-  const direct = text(raw.verification_status ?? raw.payment_verification, 40);
+  const client = object(raw.client);
+  const direct = text(raw.verification_status ?? raw.payment_verification ?? client?.verification_status, 40);
   if (direct) return direct.toUpperCase() === 'VERIFIED' ? 'VERIFIED' : direct.toUpperCase() === 'UNVERIFIED' ? 'UNVERIFIED' : direct;
   const flag = raw.buyer_payment_verified ?? raw.payment_verified ?? raw.paymentVerified;
   if (flag === true) return 'VERIFIED';
