@@ -28,7 +28,10 @@ it.each([{limit:15,spacing:0,advance:60001},{limit:150,spacing:10000,advance:360
 it('stores the description already on the search hit and does not read the job again', async () => {
   const e = env();
   const id = '2119044137876131663';
-  const at = Date.UTC(2026, 10, 7, 15, 30);
+  // Discovery keeps a hit for 60 minutes from the clock, not from the cron timestamp.
+  const at = Date.UTC(2026, 10, 8, 15, 30);
+  vi.useFakeTimers();
+  vi.setSystemTime(at);
   await patchState(e, { paused: false, upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs' } } });
   await saveSettings(e, { ...structuredClone(DEFAULT_SETTINGS), keywords: ['Email'] });
   const callTool = vi.fn().mockResolvedValue({ jobs: [{
@@ -54,6 +57,7 @@ it('stores the description already on the search hit and does not read the job a
   await runScan(e, at);
   expect(JSON.parse(String(e.sqlite.prepare('SELECT normalized FROM job_snapshots WHERE job_id = ?').get(id)?.normalized)).description).toBe(rich);
   e.sqlite.prepare("UPDATE jobs SET status = 'error', reason = 'Held: the saved snapshot has no job description.' WHERE id = ?").run(id);
+  vi.setSystemTime(at + 1800_000);
   await runScan(e, at + 1800_000);
   expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(id)?.status).toBe('error');
   expect(callTool.mock.calls.every((call) => call[1].action === 'search')).toBe(true);
