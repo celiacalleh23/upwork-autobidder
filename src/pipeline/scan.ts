@@ -10,13 +10,16 @@ const MAX_QUERIES = 12; // 576 base requests/day; quota guard also counts retrie
 const publicText = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
 
 // Text already on the search hit. include_full_details is part of that same search; this does not fetch the job again.
-function searchDescription(j: Record<string, unknown>): string | undefined {
+function searchDescription(j: Record<string, unknown>): { text?: string; kind?: 'body' | 'fragment' } {
   const posting = j.marketplaceJobPosting;
   const content = posting && typeof posting === 'object' && !Array.isArray(posting)
     ? (posting as Record<string, unknown>).content : undefined;
   const nested = content && typeof content === 'object' && !Array.isArray(content)
     ? (content as Record<string, unknown>).description : undefined;
-  return publicText(j.description) ?? publicText(nested) ?? publicText(j.description_snippet);
+  const body = publicText(j.description) ?? publicText(nested);
+  if (body) return { text: body, kind: 'body' };
+  const snippet = publicText(j.description_snippet);
+  return snippet ? { text: snippet, kind: 'fragment' } : {};
 }
 
 export function discoveryJob(value: unknown, now = Date.now()) {
@@ -28,7 +31,8 @@ export function discoveryJob(value: unknown, now = Date.now()) {
   if (!/^\d{15,22}$/.test(id) || !Number.isFinite(at) || at > now + 300_000 || now - at > DISCOVERY_WINDOW_MS) return null;
   return {
     jobUrl: jobUrl(id), title: j.title, postedAt: new Date(at).toISOString(), automatic: true as const,
-    description: searchDescription(j),
+    description: searchDescription(j).text,
+    descriptionKind: searchDescription(j).kind,
     jobType: publicText(j.job_type),
     budget: publicText(j.budget),
     proposalsTier: publicText(j.proposals_tier),

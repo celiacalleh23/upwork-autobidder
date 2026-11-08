@@ -7,11 +7,11 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, swapLoomLink, type Answer } from './letter';
+import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, MISSING_DESCRIPTION_OPENING, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
-import { loadSnapshot, RECOVERED_SNAPSHOT, snapshotHoldReason } from './snapshot';
+import { BIDDER_HOURLY_USD, draftBid, draftReviewNote, heldReasonCanDraft, loadSnapshot, RECOVERED_SNAPSHOT, snapshotHoldReason, submissionGaps, type DraftBasis, type SubmissionGap } from './snapshot';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
@@ -25,7 +25,7 @@ const MAX_TRIES = 3;
 
 interface JobRow {
   id: string; title: string; url: string | null; job_type: string | null; budget: string | null; client_country: string | null;
-  reason: string | null; posted_at: string | null; proposals_tier: string | null;
+  reason: string | null; posted_at: string | null; proposals_tier: string | null; status?: string;
 }
 export interface WriteSummary { queued: number; lowScore: number; filtered: number; errors: number; note: string | null }
 
@@ -223,7 +223,7 @@ export const draftReadyKey = (jobId: string) => `draft:ready:${jobId}`;
 interface ReadyDraft {
   v: 1;
   letter: string;
-  bid: number;
+  bid: number | null;
   score: number;
   win: number | null;
   profile: number;
@@ -241,6 +241,8 @@ interface ReadyDraft {
   budget: string | null;
   country: string | null;
   proposalsTier: string | null;
+  bidBasis: DraftBasis;
+  missing: SubmissionGap[];
 }
 
 async function loadReadyDraft(env: Env, jobId: string): Promise<ReadyDraft | null> {
@@ -248,7 +250,7 @@ async function loadReadyDraft(env: Env, jobId: string): Promise<ReadyDraft | nul
   if (!raw) return null;
   try {
     const d = JSON.parse(raw) as ReadyDraft;
-    if (d?.v !== 1 || typeof d.letter !== 'string' || typeof d.bid !== 'number' || typeof d.score !== 'number') return null;
+    if (d?.v !== 1 || typeof d.letter !== 'string' || (typeof d.bid !== 'number' && d.bid !== null) || typeof d.score !== 'number' || !Array.isArray(d.missing)) return null;
     return d;
   } catch { return null; }
 }
@@ -262,6 +264,11 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   const snap = await loadSnapshot(env, job.id);
   if (!snap) { await setJob(env, job.id, 'error', 'Held: no saved public snapshot. Independent drafts do not call Upwork.'); return 'errors'; }
   const n = snap.normalized;
+  const stored = await env.DB.prepare('SELECT normalized FROM job_snapshots WHERE job_id = ?').bind(job.id).first<{ normalized: string }>();
+  const storedFault = stored ? (JSON.parse(stored.normalized) as { budgetFault?: string | null }).budgetFault : null;
+  if (storedFault === 'malformed' && n.budgetFault === null) {
+    await env.DB.prepare('UPDATE job_snapshots SET normalized = ? WHERE job_id = ?').bind(JSON.stringify(n), job.id).run();
+  }
   const hold = snapshotHoldReason(n, s);
   if (hold) { await setJob(env, job.id, 'error', hold); return 'errors'; }
   job = {
@@ -275,13 +282,16 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     id: job.id, title: job.title ?? '', description: n.description ?? '', job_type: job.job_type ?? undefined,
     budget: job.budget ?? undefined, client: { country: job.client_country ?? undefined, verification_status: n.verification ?? undefined },
     ...(n.proposalCount !== null ? { proposal_count: n.proposalCount } : {}), proposals_tier: job.proposals_tier ?? undefined,
-  }, s, new Set());
+  }, s, new Set(), { allowMissingVerification: true });
   if (verdict.status === 'filtered') { await setJob(env, job.id, 'filtered', verdict.reason); return 'filtered'; }
   let ready = await loadReadyDraft(env, job.id);
   if (!ready) {
+    const priced = draftBid(n, s);
+    const missing = submissionGaps(n, s);
     const forClaude: JobForClaude = {
       title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
-      description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, clientFeedbackNames: [],
+      description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, descriptionFragment: n.descriptionKind === 'fragment', clientFeedbackNames: [],
+      clientHourlyUnstated: priced.basis === 'bidder-hourly-usd', bidderHourlyUsd: priced.basis === 'bidder-hourly-usd' ? BIDDER_HOURLY_USD : undefined,
     };
     const { profileFit, winSimilarity, reason: why, pros, cons } = await scoreJob(env, who.profile, who.wins, forClaude);
     const keywords = verdict.keywords;
@@ -294,14 +304,13 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     const scoreText = `Score ${score} (${breakdown}): ${why}`.slice(0, 400);
     const sc: Scores = { score, win: winSimilarity, profile: profileFit };
     if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); await env.DB.prepare('UPDATE jobs SET analysis = ? WHERE id = ?').bind(analysis, job.id).run(); return 'lowScore'; }
-    const bid = computeBid(job.job_type, job.budget, s);
-    if (bid === null) { await setJob(env, job.id, 'error', 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.', sc); return 'errors'; }
+    const bid = priced.amount;
     const sourceUrl = s.loom.sourceUrl || null;
     const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
     const withOpening = s.letter.opening !== 'off';
-    let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
+    let opening = !withOpening ? '' : n.description ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : MISSING_DESCRIPTION_OPENING;
     let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-    if (problem && withOpening) {
+    if (problem && withOpening && n.description) {
       opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
       problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
     }
@@ -314,7 +323,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
       if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
       if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
     }
-    let note = 'Saved from the public snapshot. Applied status, Connects, balance, boost, and final screening questions are checked on Upwork before anything is sent.';
+    let note = draftReviewNote('Saved from the public snapshot. Applied status, Connects, balance, boost, and final screening questions are checked on Upwork before anything is sent.', missing, priced.basis);
     if (!hints) note += ' Feed screening questions were missing or empty, so they stay unknown.';
     else note += ' Feed screening questions are hints until the live preview confirms them.';
     if (n.questionHint) note += ' An AI hint from the feed was stored and was not used as a question.';
@@ -322,7 +331,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
       v: 1, letter: assembleLetter(s.letter.template, opening, sourceUrl, disclosure), bid, score, win: winSimilarity, profile: profileFit,
       scoreText, analysis, keywords, answers, questionsState: hints?.length ? 'hints' : 'unknown', note,
       loomUrl: sourceUrl, loomId: null, title: stripUntrusted(job.title), url: job.url, jobType: job.job_type, budget: job.budget,
-      country: job.client_country, proposalsTier: job.proposals_tier,
+      country: job.client_country, proposalsTier: job.proposals_tier, bidBasis: priced.basis, missing,
     };
     // Durable before the queue insert, so a crash after Claude does not call Claude or Loom again.
     await putKv(env, draftReadyKey(job.id), JSON.stringify(ready));
@@ -345,7 +354,10 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   }
   const fixed = ready.jobType === 'fixed';
   const createParams = {
-    charged_amount: ready.bid, ...(fixed ? FIXED_DEFAULTS : {}),
+    ...(ready.bid !== null ? { charged_amount: ready.bid } : {}),
+    bid_basis: ready.bidBasis, missing: ready.missing,
+    ...(ready.bidBasis === 'bidder-hourly-usd' ? { bidder_hourly_usd: BIDDER_HOURLY_USD } : {}),
+    ...(fixed && ready.bidBasis === 'client' ? FIXED_DEFAULTS : {}),
     questions_state: ready.questionsState,
     ...(ready.answers.length ? { answers: ready.answers } : {}),
   };
@@ -357,7 +369,8 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   }
   // Review stays pending. A recovered public snapshot stays pending even in Auto, so it cannot be sent until someone approves it.
   const recovered = (job.reason ?? '').startsWith(RECOVERED_SNAPSHOT);
-  const status = !recovered && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
+  const incomplete = ready.missing.length > 0;
+  const status = !incomplete && !recovered && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
@@ -379,7 +392,8 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
 export async function runIndependentWriter(env: Env): Promise<WriteSummary | null> {
   const [state, s] = await Promise.all([loadState(env), loadSettings(env)]);
   if (state.paused) return null;
-  const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'matched'").first<{ n: number }>();
+  const pending = await env.DB.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE status = 'matched'
+    OR (status = 'error' AND reason LIKE 'Held:%' AND NOT EXISTS (SELECT 1 FROM proposals WHERE proposals.job_id = jobs.id))`).first<{ n: number }>();
   if (!pending?.n) return null;
   const summary: WriteSummary = { queued: 0, lowScore: 0, filtered: 0, errors: 0, note: null };
   if (!env.ANTHROPIC_API_KEY) summary.note = 'Waiting for the ANTHROPIC_API_KEY secret in Cloudflare.';
@@ -389,7 +403,9 @@ export async function runIndependentWriter(env: Env): Promise<WriteSummary | nul
   if (!lease) return null;
   try {
     const { results: jobs } = await env.DB.prepare(
-      "SELECT id, title, url, job_type, budget, client_country, reason, posted_at, proposals_tier FROM jobs WHERE status = 'matched' ORDER BY posted_at DESC, seen_at DESC LIMIT ?",
+      `SELECT id, title, url, job_type, budget, client_country, reason, posted_at, proposals_tier, status FROM jobs
+       WHERE status = 'matched' OR (status = 'error' AND reason LIKE 'Held:%' AND NOT EXISTS (SELECT 1 FROM proposals WHERE proposals.job_id = jobs.id))
+       ORDER BY CASE WHEN status = 'matched' THEN 0 ELSE 1 END, posted_at DESC, seen_at DESC LIMIT ?`,
     ).bind(s.maxNewJobsPerRun).all<JobRow>();
     const recordRow = await loadTrackRecord(env);
     await patchState(env, { writer: { startedAt: new Date().toISOString() } });
@@ -397,6 +413,11 @@ export async function runIndependentWriter(env: Env): Promise<WriteSummary | nul
     const deadline = Date.now() + 12 * 60_000;
     for (const job of jobs) {
       if (Date.now() >= deadline || !(await ownsLease(env, 'write', lease)) || (await loadState(env)).paused) break;
+      if (job.status === 'error') {
+        if (!heldReasonCanDraft(job.reason)) continue;
+        const existing = await loadSnapshot(env, job.id);
+        if (!existing || snapshotHoldReason(existing.normalized, s)) continue;
+      }
       const renewed = await renewLease(env, 'write', lease, 20 * 60_000);
       if (!renewed) break;
       lease = renewed;

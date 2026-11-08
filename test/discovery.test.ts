@@ -48,6 +48,7 @@ it('stores the description already on the search hit and does not read the job a
   const snap = JSON.parse(row.normalized);
   expect(row.source).toBe('automatic');
   expect(snap.description).toBe('Run the weekly campaigns and report on them.');
+  expect(snap.descriptionKind).toBe('fragment');
   expect(snap.verification).toBe('VERIFIED');
   expect(snapshotHoldReason(snap, { ...structuredClone(DEFAULT_SETTINGS), keywords: ['Email'] })).toBeNull();
   const rich = 'A'.repeat(80);

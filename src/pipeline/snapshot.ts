@@ -1,6 +1,6 @@
 import { acquireLease, releaseLease } from '../kv';
 import { loadSettings, type Env, type Settings } from '../settings';
-import { normalizeCountry, stripUntrusted } from './filters';
+import { normalizeCountry, parseBudget, stripUntrusted } from './filters';
 import { computeBid } from './letter';
 
 const snapshotUrl = (id: string) => `https://www.upwork.com/jobs/~02${id}`;
@@ -21,6 +21,7 @@ export interface PublicJobSnapshot {
   url: string | null;
   description: string | null;
   descriptionTruncated: boolean;
+  descriptionKind: 'body' | 'fragment' | null;
   jobType: 'fixed' | 'hourly' | null;
   budgetText: string | null;
   amountSource: 'price' | 'hourly-band' | null;
@@ -159,13 +160,15 @@ function hyperbachListing(raw: Record<string, unknown>): {
     const price = plainAmount(raw.price);
     const min = plainAmount(raw.price_min);
     const max = plainAmount(raw.price_max);
-    if (!min.empty || !max.empty || price.malformed || price.empty || !price.text) return deny('malformed', null, null);
+    if (!min.empty || !max.empty || price.malformed) return deny('malformed', null, null);
+    if (price.empty || !price.text) return { jobType, budgetText: null, amountSource: null, explicitCurrency: explicit.code, listedCurrency: null, budgetFault: null };
     return mark(price.text, 'price');
   }
   const price = plainAmount(raw.price);
   const min = plainAmount(raw.price_min);
   const max = plainAmount(raw.price_max);
-  if (!price.empty || min.malformed || max.malformed || (min.empty && max.empty)) return deny('malformed', null, null);
+  if (price.malformed || min.malformed || max.malformed || !price.empty) return deny('malformed', null, null);
+  if (min.empty && max.empty) return { jobType, budgetText: null, amountSource: null, explicitCurrency: explicit.code, listedCurrency: null, budgetFault: null };
   const budgetText = min.text && max.text ? `${min.text}–${max.text}/hr` : max.text ? `up to ${max.text}/hr` : `${min.text}+/hr`;
   return mark(budgetText, 'hourly-band');
 }
@@ -210,12 +213,29 @@ function countryOf(raw: Record<string, unknown>): string | null {
   return normalizeCountry(value) ? value : null;
 }
 
+function clipDescription(source: string | null): { text: string | null; truncated: boolean } {
+  if (!source) return { text: null, truncated: false };
+  return { text: source.slice(0, DESCRIPTION_STORE_LIMIT), truncated: source.length > DESCRIPTION_STORE_LIMIT };
+}
+
+// A labeled snippet stays a fragment. A description field is the post body from that source, not proof it is the whole post.
+function readDescription(src: Record<string, unknown>): { text: string | null; truncated: boolean; kind: 'body' | 'fragment' | null } {
+  const labeled = src.description_kind === 'fragment' || src.description_kind === 'body' ? src.description_kind : null;
+  const body = passage(src.description ?? src.description_text ?? src.job_description, DESCRIPTION_STORE_LIMIT + 1);
+  const fragment = passage(src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
+  if (labeled === 'fragment') {
+    const chosen = clipDescription(body ?? fragment);
+    return { ...chosen, kind: chosen.text ? 'fragment' : null };
+  }
+  if (body) return { ...clipDescription(body), kind: 'body' };
+  if (fragment) return { ...clipDescription(fragment), kind: 'fragment' };
+  return { text: null, truncated: false, kind: null };
+}
+
 // Feed questions that are missing or an empty list stay unknown. AI-written fields are hints, not questions.
 export function normalizePublicJob(jobId: string, raw: unknown, contract?: BudgetContract | null): PublicJobSnapshot {
   const src = object(raw) ?? {};
-  const descriptionSource = passage(src.description ?? src.description_text ?? src.job_description ?? src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
-  const descriptionTruncated = !!descriptionSource && descriptionSource.length > DESCRIPTION_STORE_LIMIT;
-  const description = descriptionSource ? descriptionSource.slice(0, DESCRIPTION_STORE_LIMIT) : null;
+  const description = readDescription(src);
   const directBudget = text(src.budget ?? src.budget_text ?? src.budgetText, 120);
   const shaped = directBudget ? null : hyperbachListing(src);
   const listing = shaped && contract === 'hyperbach-public-upwork' ? shaped : null;
@@ -229,7 +249,7 @@ export function normalizePublicJob(jobId: string, raw: unknown, contract?: Budge
   return {
     v: 1, id: jobId, sourceId, title: text(src.title ?? src.jobTitle, 300),
     url: text(typeof src.url === 'object' ? object(src.url)?.href ?? object(src.url)?.url : src.url ?? src.link ?? src.jobUrl, 400) ?? snapshotUrl(jobId),
-    description, descriptionTruncated, jobType, budgetText: budget,
+    description: description.text, descriptionTruncated: description.truncated, descriptionKind: description.kind, jobType, budgetText: budget,
     amountSource: (listing ?? unscoped)?.amountSource ?? null,
     explicitCurrency: (listing ?? unscoped)?.explicitCurrency ?? null,
     listedCurrency: listing?.listedCurrency ?? null,
@@ -246,31 +266,39 @@ export function normalizePublicJob(jobId: string, raw: unknown, contract?: Budge
   };
 }
 
-function longer(prev: string | null, next: string | null, partial: boolean, nextTruncated: boolean, prevTruncated: boolean): string | null {
-  if (!next) return prev;
-  if (!prev) return next;
-  if (partial) return prev;
-  if (nextTruncated && !prevTruncated) return prev;
-  if (next.length < prev.length && nextTruncated) return prev;
-  return next;
+function storedKind(snap: PublicJobSnapshot): 'body' | 'fragment' | null {
+  if (!snap.description) return null;
+  return snap.descriptionKind === 'fragment' ? 'fragment' : 'body';
 }
 
-function descriptionFlag(prev: PublicJobSnapshot, next: PublicJobSnapshot, partial: boolean): boolean {
-  const kept = longer(prev.description, next.description, partial, next.descriptionTruncated, prev.descriptionTruncated);
-  if (kept === prev.description) return prev.descriptionTruncated;
-  return next.descriptionTruncated;
+// A fragment or a cut text must not replace a fuller post. A complete body may replace a longer one: length is not proof.
+function pickDescription(prev: PublicJobSnapshot, next: PublicJobSnapshot, partial: boolean): { text: string | null; truncated: boolean; kind: 'body' | 'fragment' | null } {
+  const keep = (snap: PublicJobSnapshot) => ({ text: snap.description, truncated: snap.descriptionTruncated, kind: storedKind(snap) });
+  if (!next.description) return keep(prev);
+  if (!prev.description) return keep(next);
+  if (partial) return keep(prev);
+  const prevKind = storedKind(prev);
+  const nextKind = storedKind(next);
+  if (nextKind === 'fragment' && prevKind === 'body') return keep(prev);
+  if (nextKind === 'fragment' && prevKind === 'fragment' && next.description.length < prev.description.length) return keep(prev);
+  if (next.descriptionTruncated && !prev.descriptionTruncated && prevKind === 'body') return keep(prev);
+  if (nextKind === 'body' && !next.descriptionTruncated) return { text: next.description, truncated: false, kind: 'body' };
+  if (next.description.length < prev.description.length && next.descriptionTruncated) return keep(prev);
+  return { text: next.description, truncated: next.descriptionTruncated, kind: nextKind };
 }
 
 export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSnapshot, partial: boolean): PublicJobSnapshot {
   if (!prev) return next;
+  const description = pickDescription(prev, next, partial);
   return {
     ...next,
     id: prev.id,
     sourceId: prev.sourceId ?? next.sourceId,
     title: partial ? (prev.title ?? next.title) : (next.title ?? prev.title),
     url: partial ? (prev.url ?? next.url) : (next.url ?? prev.url),
-    description: longer(prev.description, next.description, partial, next.descriptionTruncated, prev.descriptionTruncated),
-    descriptionTruncated: descriptionFlag(prev, next, partial),
+    description: description.text,
+    descriptionTruncated: description.truncated,
+    descriptionKind: description.kind,
     jobType: partial ? (prev.jobType ?? next.jobType) : (next.jobType ?? prev.jobType),
     budgetText: partial ? (prev.budgetText ?? next.budgetText) : (next.budgetText ?? prev.budgetText),
     amountSource: partial ? (prev.amountSource ?? next.amountSource) : next.amountSource,
@@ -293,21 +321,120 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
 // Listed USD is applied only by hyperbachListing. This refuses a conflict, a bad amount, and any other feed.
 export function unverifiedPriceHold(snap: PublicJobSnapshot, _s: Settings): string | null {
   if (snap.budgetFault === 'currency-conflict') return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
-  if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero, blank, or not a single positive amount. Nothing is drafted or sent.';
+  if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.';
   if (snap.listedCurrency === 'USD' || snap.explicitCurrency === 'USD') return null;
   if (snap.amountSource) return `Held: ${snap.budgetText ?? 'this price'} is not from the documented Hyperbach public Upwork listing. Nothing is drafted or sent.`;
   return null;
 }
 
-export function snapshotHoldReason(snap: PublicJobSnapshot, s: Settings): string | null {
+export function snapshotHoldReason(snap: PublicJobSnapshot, _s: Settings): string | null {
   if (!snap.title) return 'Held: the saved snapshot has no job title.';
-  if (!snap.description) return 'Held: the saved snapshot has no job description.';
-  if (s.verifiedOnly && !snap.verification) return 'Held: client payment verification was not in the saved snapshot.';
-  if (s.maxExistingProposals > 0 && snap.proposalCount === null && !snap.proposalsTier) return 'Held: the current proposal count was not in the saved snapshot.';
-  const priceHold = unverifiedPriceHold(snap, s);
-  if (priceHold) return priceHold;
-  if (computeBid(snap.jobType, snap.budgetText, s) === null) return 'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.';
+  if (snap.budgetFault === 'currency-conflict') return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
+  if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.';
   return null;
+}
+
+// Rafa's own hourly rate. It is used only when the client stated no hourly band. It is never stored as the client budget.
+export const BIDDER_HOURLY_USD = 30;
+
+export type SubmissionGap =
+  | 'description-missing'
+  | 'description-fragment'
+  | 'job-type-missing'
+  | 'client-hourly-band-missing'
+  | 'client-fixed-amount-missing'
+  | 'currency-undocumented'
+  | 'explicit-currency-not-usd'
+  | 'applicant-count-missing'
+  | 'verification-missing';
+
+const GAP_LABEL: Record<SubmissionGap, string> = {
+  'description-missing': 'job description',
+  'description-fragment': 'full job post (the stored text is only a snippet)',
+  'job-type-missing': 'job type',
+  'client-hourly-band-missing': 'client hourly rate',
+  'client-fixed-amount-missing': 'client fixed price',
+  'currency-undocumented': 'documented currency for the stated price',
+  'explicit-currency-not-usd': 'a USD client price (the feed named another currency)',
+  'applicant-count-missing': 'applicant count',
+  'verification-missing': 'client payment verification',
+};
+
+export function submissionGaps(snap: PublicJobSnapshot, s: Settings): SubmissionGap[] {
+  const gaps: SubmissionGap[] = [];
+  if (!snap.description) gaps.push('description-missing');
+  else if (snap.descriptionKind === 'fragment') gaps.push('description-fragment');
+  if (!snap.jobType) gaps.push('job-type-missing');
+  const parsed = parseBudget(snap.jobType ?? undefined, snap.budgetText ?? undefined);
+  if (snap.jobType === 'hourly' && parsed?.kind !== 'hourly') gaps.push('client-hourly-band-missing');
+  if (snap.jobType === 'fixed' && !(parsed?.kind === 'fixed' && parsed.amount > 0)) gaps.push('client-fixed-amount-missing');
+  const documentedUsd = snap.listedCurrency === 'USD' || snap.explicitCurrency === 'USD';
+  if (snap.explicitCurrency && snap.explicitCurrency !== 'USD') gaps.push('explicit-currency-not-usd');
+  else if (snap.amountSource && !documentedUsd) gaps.push('currency-undocumented');
+  if (snap.proposalCount === null && !snap.proposalsTier) gaps.push('applicant-count-missing');
+  if (s.verifiedOnly && !snap.verification) gaps.push('verification-missing');
+  return gaps;
+}
+
+export function submissionBlock(snap: PublicJobSnapshot, s: Settings): string | null {
+  const gaps = submissionGaps(snap, s);
+  if (!gaps.length) return null;
+  return `Not sent: source data is still missing (${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}). Approval does not bypass that.`;
+}
+
+export type DraftBasis = 'client' | 'bidder-hourly-usd' | 'unavailable';
+
+// A stated client band uses the saved bid settings. A missing hourly band uses Rafa's USD 30 rate and does not relabel it as the client's.
+export function draftBid(snap: PublicJobSnapshot, s: Settings): { amount: number | null; basis: DraftBasis } {
+  if (snap.budgetFault) return { amount: null, basis: 'unavailable' };
+  const parsed = parseBudget(snap.jobType ?? undefined, snap.budgetText ?? undefined);
+  if (snap.jobType === 'hourly' && parsed?.kind !== 'hourly') {
+    if (snap.explicitCurrency && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
+    return { amount: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd' };
+  }
+  if (snap.jobType === 'fixed' && !(parsed?.kind === 'fixed' && parsed.amount > 0)) return { amount: null, basis: 'unavailable' };
+  if (!snap.jobType) return { amount: null, basis: 'unavailable' };
+  if (snap.amountSource && snap.listedCurrency !== 'USD' && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
+  const amount = computeBid(snap.jobType, snap.budgetText, s);
+  return amount === null ? { amount: null, basis: 'unavailable' } : { amount, basis: 'client' };
+}
+
+export function draftReviewNote(base: string, gaps: SubmissionGap[], basis: DraftBasis): string {
+  const extra: string[] = [];
+  if (basis === 'bidder-hourly-usd') extra.push(`Bid USD ${BIDDER_HOURLY_USD}/hour is Rafa's rate because the client stated no hourly rate. It is not the client's budget.`);
+  if (basis === 'unavailable' && gaps.includes('client-fixed-amount-missing')) extra.push('No fixed price was stated, and none was invented.');
+  if (basis === 'unavailable' && gaps.includes('job-type-missing')) extra.push('No job type was stated, so no hourly rate and no fixed price were assumed.');
+  if (basis === 'unavailable' && gaps.includes('explicit-currency-not-usd')) extra.push('The feed named a non-USD currency and no usable rate, so USD 30 was not applied.');
+  if (basis === 'unavailable' && gaps.includes('currency-undocumented')) extra.push('The stated price has no documented USD currency, so it was not copied into the bid.');
+  if (gaps.length) extra.push(`Still missing in the source: ${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}. This draft stays pending and cannot be sent while those fields are missing. The letter is not rewritten automatically if they arrive later.`);
+  return [base, ...extra].filter(Boolean).join(' ');
+}
+
+// Older rows stored a blank price as malformed. A blank field is missing data; zero and other bad values stay malformed.
+export function relaxBlankMalformed(snap: PublicJobSnapshot, rawPayload: string, rawTruncated = false): PublicJobSnapshot {
+  if (snap.budgetFault !== 'malformed' || snap.budgetText || rawTruncated) return snap;
+  let raw: unknown;
+  try { raw = JSON.parse(rawPayload); } catch { return snap; }
+  const src = object(raw) ?? {};
+  const blank = (value: unknown) => value == null || value === '';
+  if (!blank(src.price) || !blank(src.price_min) || !blank(src.price_max)) return snap;
+  if (text(src.budget ?? src.budget_text ?? src.budgetText, 120)) return snap;
+  return { ...snap, budgetFault: null, amountSource: null, listedCurrency: null };
+}
+
+const DRAFTABLE_HELD = new Set([
+  'Held: the saved snapshot has no job description.',
+  'Held: client payment verification was not in the saved snapshot.',
+  'Held: the current proposal count was not in the saved snapshot.',
+  'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.',
+  'Held: the feed price was zero, blank, or not a single positive amount. Nothing is drafted or sent.',
+  'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.',
+]);
+
+export function heldReasonCanDraft(reason: string | null): boolean {
+  if (!reason) return false;
+  if (DRAFTABLE_HELD.has(reason)) return true;
+  return reason.startsWith('Held: ') && reason.includes('not from the documented Hyperbach public Upwork listing');
 }
 
 function readRow(row: Record<string, unknown> | null): SnapshotRow | null {
@@ -318,7 +445,7 @@ function readRow(row: Record<string, unknown> | null): SnapshotRow | null {
     sourceSeenAt: row.source_seen_at ? String(row.source_seen_at) : null,
     provenance: JSON.parse(String(row.provenance)), rawPayload: String(row.raw_payload),
     rawTruncated: Number(row.raw_truncated) === 1, rawOriginalBytes: Number(row.raw_original_bytes),
-    normalized: JSON.parse(String(row.normalized)) as PublicJobSnapshot,
+    normalized: relaxBlankMalformed(JSON.parse(String(row.normalized)) as PublicJobSnapshot, String(row.raw_payload), Number(row.raw_truncated) === 1),
   };
 }
 
@@ -366,7 +493,7 @@ export async function persistSnapshot(env: Env, input: PersistInput, now = new D
         keepRaw ? existing.rawPayload : raw.json, keepRaw ? (existing.rawTruncated ? 1 : 0) : (raw.truncated ? 1 : 0),
         keepRaw ? existing.rawOriginalBytes : raw.originalBytes, JSON.stringify(normalized), now.toISOString()).run();
     // A full import that now has the public fields can be drafted. A partial hit cannot revive a held job.
-    if (!input.partial && !snapshotHoldReason(normalized, await loadSettings(env))) {
+    if (!input.partial && normalized.descriptionKind !== 'fragment' && !snapshotHoldReason(normalized, await loadSettings(env))) {
       await env.DB.prepare(`UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status = 'error' AND reason LIKE 'Held:%'
         AND NOT EXISTS (SELECT 1 FROM proposals WHERE proposals.job_id = jobs.id)`).bind(RECOVERED_SNAPSHOT, input.jobId).run();
     }

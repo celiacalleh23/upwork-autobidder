@@ -113,7 +113,7 @@ export function cannotApply(canApply: boolean | null, cost: number | null, balan
 export const CLOSED_REASON = 'Job closed on Upwork (no longer takes proposals)';
 export const reopenable = (reason: string | null) => !!reason && REOPENABLE.some((p) => reason.startsWith(p));
 
-export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>): Verdict {
+export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<string>, policy?: { allowMissingVerification?: boolean }): Verdict {
   const title = stripUntrusted(job.title);
   const body = stripUntrusted(job.description || job.description_snippet);
   const keywords = s.keywords.filter((k) => containsTerm(title, k) || (!s.titleOnly && containsTerm(body, k)));
@@ -131,7 +131,11 @@ export function evaluateJob(job: UpworkJob, s: Settings, invitedJobIds: Set<stri
     if (country && !s.allowedCountries.some((c) => normalizeCountry(c) === country)) return no(`Client country: ${job.client?.country}`);
   }
 
-  if (s.verifiedOnly && job.client?.verification_status !== 'VERIFIED') return no('Client payment not verified');
+  if (s.verifiedOnly) {
+    const verification = job.client?.verification_status;
+    if (verification && verification !== 'VERIFIED') return no('Client payment not verified');
+    if (!verification && !policy?.allowMissingVerification) return no('Client payment not verified');
+  }
 
   const budget = parseBudget(job.job_type, job.budget);
   if (budget?.kind === 'fixed' && s.minFixedBudget > 0 && budget.amount < s.minFixedBudget) {

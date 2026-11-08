@@ -31,7 +31,7 @@ export type AddResult =
 // (someone chose it on purpose). `title` is a placeholder until the writer reads the job.
 export async function addJob(env: Env, input: {
   jobUrl?: unknown; title?: unknown; postedAt?: unknown; automatic?: boolean;
-  description?: unknown; jobType?: unknown; budget?: unknown; proposalsTier?: unknown;
+  description?: unknown; descriptionKind?: unknown; jobType?: unknown; budget?: unknown; proposalsTier?: unknown;
   client?: unknown; skills?: unknown;
 }): Promise<AddResult> {
   const id = jobIdFromUrl(String(input.jobUrl ?? ''));
@@ -53,7 +53,10 @@ export async function addJob(env: Env, input: {
     const posted = Number.isFinite(date) && date <= Date.now() + 300_000 ? new Date(date).toISOString() : null;
     // Fill only gaps. A thin link or search hit must not erase a richer Apify snapshot already stored.
     const raw: Record<string, unknown> = { url: jobUrl(id), title: input.title, date_posted: posted };
-    if (typeof input.description === 'string' && input.description.trim()) raw.description = input.description;
+    if (typeof input.description === 'string' && input.description.trim()) {
+      raw.description = input.description;
+      if (input.descriptionKind === 'fragment' || input.descriptionKind === 'body') raw.description_kind = input.descriptionKind;
+    }
     if (typeof input.jobType === 'string' && input.jobType.trim()) raw.job_type = input.jobType;
     if (typeof input.budget === 'string' && input.budget.trim()) raw.budget = input.budget;
     if (typeof input.proposalsTier === 'string' && input.proposalsTier.trim()) raw.proposals_tier = input.proposalsTier;
