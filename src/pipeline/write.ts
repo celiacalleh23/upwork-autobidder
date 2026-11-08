@@ -7,11 +7,11 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, MISSING_DESCRIPTION_OPENING, swapLoomLink, type Answer } from './letter';
+import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, metaLanguageIn, openingFromTitle, swapLoomLink, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
-import { BIDDER_HOURLY_USD, draftBid, draftReviewNote, heldReasonCanDraft, loadSnapshot, RECOVERED_SNAPSHOT, snapshotHoldReason, submissionGaps, type DraftBasis, type SubmissionGap } from './snapshot';
+import { BIDDER_HOURLY_USD, draftBid, draftReviewNote, heldReasonCanDraft, loadSnapshot, snapshotHoldReason, submissionGaps, type DraftBasis, type SubmissionGap } from './snapshot';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
@@ -308,7 +308,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     const sourceUrl = s.loom.sourceUrl || null;
     const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
     const withOpening = s.letter.opening !== 'off';
-    let opening = !withOpening ? '' : n.description ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : MISSING_DESCRIPTION_OPENING;
+    let opening = !withOpening ? '' : n.description ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : openingFromTitle(job.title ?? '');
     let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
     if (problem && withOpening && n.description) {
       opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
@@ -367,10 +367,11 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     await delKv(env, draftReadyKey(job.id));
     throw new McpError('Controls changed while preparing the proposal; retry after review.');
   }
-  // Review stays pending. A recovered public snapshot stays pending even in Auto, so it cannot be sent until someone approves it.
-  const recovered = (job.reason ?? '').startsWith(RECOVERED_SNAPSHOT);
-  const incomplete = ready.missing.length > 0;
-  const status = !incomplete && !recovered && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
+  // Review stays pending. Auto approves a future draft, including one with blank source fields.
+  // A fixed-price job with no amount stays pending. Internal wording stays pending.
+  const meta = metaLanguageIn(ready.letter);
+  const fixedWithoutAmount = fixed && ready.bid === null;
+  const status = !meta && !fixedWithoutAmount && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)

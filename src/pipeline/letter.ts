@@ -1,11 +1,11 @@
 import type { Settings } from '../settings';
-import { parseBudget } from './filters';
+import { parseBudget, stripUntrusted } from './filters';
 
 // Pure letter and bid logic: no network. Everything Claude writes passes through these checks before it is stored.
 
 export const MAX_LETTER = 5000;
-// Used when the source has no post text, so the opening cannot invent a requirement from a title alone.
-export const MISSING_DESCRIPTION_OPENING = 'The saved job post did not include a description, so this sentence adds no requirement that was not stated.';
+// Rafa's own hourly rate. Used only when an hourly job has no client band. Never stored as the client budget.
+export const BIDDER_HOURLY_USD = 30;
 export const MAX_OPENING = 300; // one sentence (Siv, Oct 27)
 export const MAX_OPENING_SENTENCES = 1;
 
@@ -31,11 +31,42 @@ export function problemsInWritten(text: string): string | null {
   return contactDetailsIn(text);
 }
 
+const META_PHRASES = [
+  'saved job post',
+  'saved snapshot',
+  'did not include a description',
+  'no requirement that was not stated',
+  'adds no requirement',
+  'this sentence',
+  'search snippet',
+  'not the full job',
+  'source did not include',
+  'template placeholder',
+  'internal note',
+  'missing in the source',
+];
+
+// Internal notes and template tokens must never be stored in a client letter.
+export function metaLanguageIn(text: string): string | null {
+  if (/\{[a-z_]+\}/i.test(text)) return 'a template placeholder';
+  const hit = META_PHRASES.find((phrase) => text.toLowerCase().includes(phrase));
+  return hit ? 'internal wording' : null;
+}
+
+// One natural sentence that uses the title and does not add a requirement the post did not state.
+export function openingFromTitle(title: string): string {
+  const clean = stripUntrusted(title).replace(/[.!?]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const tail = ' is the work I would take on, and I would start by confirming the details with you.';
+  const name = (clean || 'This').slice(0, MAX_OPENING - tail.length).trim();
+  return `${name}${tail}`;
+}
+
 export function checkOpening(opening: string): string | null {
   const t = opening.trim();
   if (t.length < 25) return 'the opening is too short';
   if (t.length > MAX_OPENING) return `the opening is longer than ${MAX_OPENING} characters`;
-  if (/\{[a-z_]+\}/i.test(t)) return 'the opening contains a template placeholder';
+  const meta = metaLanguageIn(t);
+  if (meta) return `the opening contains ${meta}`;
   const p = problemsInWritten(t);
   if (p) return `the opening contains ${p}`;
   const n = countSentences(t);
@@ -66,8 +97,37 @@ export function swapLoomLink(letter: string, loomUrl: string): string {
 export function checkLetter(letter: string, loomUrl: string | null): string | null {
   if (letter.length > MAX_LETTER) return `the letter is longer than ${MAX_LETTER} characters (${letter.length})`;
   const withoutLoom = loomUrl ? letter.replaceAll(loomUrl, '') : letter;
+  const meta = metaLanguageIn(withoutLoom);
+  if (meta) return `the letter contains ${meta}`;
   const found = contactDetailsIn(withoutLoom);
   return found ? `the letter contains ${found}` : null;
+}
+
+// The sender already reads contract terms. This only chooses the bid from that read and the saved draft.
+export function resolveSendBid(input: {
+  jobType: string | null;
+  bid: number | null;
+  bidBasis: string | null;
+  liveType: 'fixed' | 'hourly' | null;
+  liveBudget: string | null;
+  settings: Settings;
+}): { jobType: string | null; bid: number | null; basis: 'stored' | 'client' | 'bidder-hourly-usd'; hold: string | null } {
+  const jobType = input.jobType === 'fixed' || input.jobType === 'hourly' ? input.jobType : input.liveType;
+  if (jobType === 'hourly') {
+    const live = parseBudget('hourly', input.liveBudget ?? undefined);
+    const liveClient = live?.kind === 'hourly' ? computeBid('hourly', input.liveBudget, input.settings) : null;
+    if (input.bid != null && input.bidBasis !== 'bidder-hourly-usd') return { jobType, bid: input.bid, basis: 'stored', hold: null };
+    if (liveClient && (input.bid == null || input.bidBasis === 'bidder-hourly-usd')) return { jobType, bid: liveClient, basis: 'client', hold: null };
+    if (input.bid != null) return { jobType, bid: input.bid, basis: 'bidder-hourly-usd', hold: null };
+    return { jobType, bid: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd', hold: null };
+  }
+  if (jobType === 'fixed') {
+    if (input.bid != null) return { jobType, bid: input.bid, basis: 'stored', hold: null };
+    const live = parseBudget('fixed', input.liveBudget ?? undefined);
+    if (live?.kind === 'fixed' && live.amount > 0) return { jobType, bid: live.amount, basis: 'client', hold: null };
+    return { jobType, bid: null, basis: 'stored', hold: 'Not sent: this is a fixed-price job and no client amount was stated. None was invented.' };
+  }
+  return { jobType: null, bid: input.bid, basis: 'stored', hold: 'Not sent: the job type was not in the saved snapshot or the job read. No rate was assumed.' };
 }
 
 export interface Answer { question: string; answer: string }

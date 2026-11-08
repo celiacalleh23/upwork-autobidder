@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences, swapLoomLink } from '../src/pipeline/letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences, metaLanguageIn, openingFromTitle, resolveSendBid, swapLoomLink } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const s = (bid: Partial<Settings['bid']> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0, ...bid } });
@@ -34,6 +34,38 @@ describe('assembleLetter', () => {
   });
   it('rejects letters over 5,000 characters', () => {
     expect(checkLetter('x'.repeat(5001), null)).toMatch(/longer than 5000/);
+  });
+});
+
+describe('title-only opening', () => {
+  it('uses only the title and never the internal missing-description sentence', () => {
+    const leaked = 'The saved job post did not include a description, so this sentence adds no requirement that was not stated.';
+    for (const title of ['CAPES', 'Shopify']) {
+      const opening = openingFromTitle(title);
+      expect(opening).toBe(`${title} is the work I would take on, and I would start by confirming the details with you.`);
+      expect(checkOpening(opening)).toBeNull();
+      expect(metaLanguageIn(opening)).toBeNull();
+      expect(opening).not.toContain(leaked);
+      const letter = assembleLetter('Hi there,\n\n{opening}\n\nThe fixed letter.', opening, null);
+      expect(checkLetter(letter, null)).toBeNull();
+      expect(letter).toContain(title);
+      expect(letter).not.toContain('saved job post');
+    }
+    expect(checkLetter(leaked, null)).toMatch(/internal wording/);
+    expect(checkOpening(leaked)).toMatch(/internal wording/);
+    expect(checkLetter('Hi there,\n\n{opening}', null)).toMatch(/template placeholder/);
+  });
+});
+
+describe('resolveSendBid', () => {
+  it('uses the existing job read for an unknown type and does not invent a fixed amount', () => {
+    const settings = s();
+    expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: 'hourly', liveBudget: null, settings })).toEqual({ jobType: 'hourly', bid: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd', hold: null });
+    expect(resolveSendBid({ jobType: 'hourly', bid: null, bidBasis: null, liveType: null, liveBudget: null, settings }).bid).toBe(30);
+    expect(resolveSendBid({ jobType: 'hourly', bid: 30, bidBasis: 'bidder-hourly-usd', liveType: 'hourly', liveBudget: '40.00–55.00/hr', settings })).toMatchObject({ bid: 55, basis: 'client', hold: null });
+    expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: 'fixed', liveBudget: '80.00', settings })).toMatchObject({ jobType: 'fixed', bid: 80, basis: 'client', hold: null });
+    expect(resolveSendBid({ jobType: 'fixed', bid: null, bidBasis: null, liveType: 'fixed', liveBudget: null, settings }).hold).toMatch(/no client amount/);
+    expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: null, liveBudget: null, settings }).hold).toMatch(/job type was not/);
   });
 });
 

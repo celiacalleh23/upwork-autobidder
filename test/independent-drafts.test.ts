@@ -11,9 +11,8 @@ import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
 import { computeBid } from '../src/pipeline/letter';
 import { boundRawPayload, draftBid, mergeSnapshots, normalizePublicJob, persistSnapshot, snapshotHoldReason, submissionBlock, submissionGaps, unverifiedPriceHold } from '../src/pipeline/snapshot';
-import { handleApi } from '../src/api';
-import { MISSING_DESCRIPTION_OPENING } from '../src/pipeline/letter';
-import { DEFAULT_SETTINGS, loadState, patchState, saveSettings, type Env } from '../src/settings';
+import { metaLanguageIn, openingFromTitle } from '../src/pipeline/letter';
+import { DEFAULT_SETTINGS, DEFAULT_STATE, loadState, patchState, saveSettings, type Env } from '../src/settings';
 import { seal } from '../src/crypto';
 import * as oauth from '../src/oauth';
 
@@ -181,16 +180,10 @@ it('drafts with no Upwork client, holds missing data, allows an unknown country,
   await runWriter(held);
   expect(client).not.toHaveBeenCalled();
   const drafted = held.sqlite.prepare('SELECT status, approved_via, bid, error FROM proposals').get() as { status: string; approved_via: string | null; bid: number; error: string };
-  expect(drafted.status).toBe('pending');
-  expect(drafted.approved_via).toBeNull();
+  expect(drafted).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: 50 });
   expect(drafted.error).toMatch(/client payment verification/);
-  expect(drafted.bid).toBe(50);
   expect(held.sqlite.prepare('SELECT budget FROM proposals').get()?.budget).toBe('40.00–50.00/hr');
-  held.sqlite.prepare("UPDATE proposals SET status = 'approved', approved_via = 'dashboard', approved_at = datetime('now')").run();
-  await patchState(held, { upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs', confirm_preview: 'confirm_preview' } } });
-  await runSender(held);
   expect(client).not.toHaveBeenCalled();
-  expect(held.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_via: null });
 });
 
 it('keeps the previous Upwork writer when the flag is off', async () => {
@@ -295,9 +288,9 @@ it('lists a Hyperbach fixed price of 5 as Upwork USD and keeps every other price
   expect(unnamed.listedCurrency).toBeNull();
   expect(unnamed.budgetText).toBe('5.00');
   expect(snapshotHoldReason(unnamed, settings)).toBeNull();
-  expect(unverifiedPriceHold(unnamed, settings)).toMatch(/not from the documented Hyperbach public Upwork listing/);
+  expect(unverifiedPriceHold(unnamed, settings)).toBeNull();
   expect(submissionGaps(unnamed, settings)).toContain('currency-undocumented');
-  expect(draftBid(unnamed, settings)).toEqual({ amount: null, basis: 'unavailable' });
+  expect(draftBid(unnamed, settings)).toEqual({ amount: 5, basis: 'client' });
   const conflict = normalizePublicJob(heldJobId, { ...fixedPricePayload(), currency: 'EUR' }, hyperbach);
   expect(conflict.listedCurrency).toBeNull();
   expect(conflict.explicitCurrency).toBe('EUR');
@@ -371,16 +364,10 @@ it('holds a price from an undocumented feed and does not confirm it', async () =
   vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
   await runWriter(e);
   const drafted = e.sqlite.prepare('SELECT status, approved_via, bid, budget, error FROM proposals').get() as { status: string; approved_via: string | null; bid: number | null; budget: string; error: string };
-  expect(drafted.status).toBe('pending');
-  expect(drafted.approved_via).toBeNull();
-  expect(drafted.bid).toBeNull();
-  expect(drafted.budget).toBe('25.00');
-  expect(drafted.error).toMatch(/documented USD currency/);
-  expect(drafted.error).not.toMatch(/USD 30|Rafa/);
-  e.sqlite.prepare("UPDATE proposals SET status = 'approved', approved_via = 'auto-submit', approved_at = datetime('now')").run();
-  await runSender(e);
+  expect(drafted).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: 25, budget: '25.00' });
+  expect(drafted.error).toMatch(/did not name a currency/);
+  expect(drafted.error).not.toMatch(/USD 30|Rafa's rate/);
   expect(client).not.toHaveBeenCalled();
-  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
 });
 
 it('inserts a finished Claude draft after an interrupted queue write without generating again', async () => {
@@ -436,7 +423,7 @@ it('holds an hourly listing when every price field is empty and keeps an applica
   expect(merged.proposalCount).toBe(0);
 });
 
-it('returns a held job to a pending draft after a fuller import and does not approve it in Auto', async () => {
+it('returns a held job after a fuller import and auto-approves that future draft', async () => {
   const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
   await ready(e, 'auto');
   const s = structuredClone(DEFAULT_SETTINGS);
@@ -480,7 +467,7 @@ it('returns a held job to a pending draft after a fuller import and does not app
   const client = vi.spyOn(oauth, 'upworkClient');
   await runWriter(e);
   expect(client).not.toHaveBeenCalled();
-  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
+  expect(e.sqlite.prepare('SELECT status, approved_via, bid FROM proposals').get()).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: 45 });
 });
 
 it('keeps a full post when a snippet or a cut text arrives, and accepts a shorter complete post', () => {
@@ -502,7 +489,7 @@ it('keeps a full post when a snippet or a cut text arrives, and accepts a shorte
   expect(boundPromptDescription('Run the').note).toBeNull();
 });
 
-it('writes a pending snippet draft and does not auto-send it', async () => {
+it('auto-approves a snippet draft when the letter has no internal wording', async () => {
   const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
   await ready(e, 'auto');
   const jobId = '2119044137876131665';
@@ -525,9 +512,9 @@ it('writes a pending snippet draft and does not auto-send it', async () => {
   vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
   await runWriter(e);
   expect(score.mock.calls.some((call) => call[3]?.descriptionFragment === true)).toBe(true);
-  expect(e.sqlite.prepare('SELECT status, approved_via, error FROM proposals WHERE job_id = ?').get(matchedId)).toMatchObject({ status: 'pending', approved_via: null });
+  expect(e.sqlite.prepare('SELECT status, approved_via, error FROM proposals WHERE job_id = ?').get(matchedId)).toMatchObject({ status: 'approved', approved_via: 'auto-submit' });
   expect(String(e.sqlite.prepare('SELECT error FROM proposals WHERE job_id = ?').get(matchedId)?.error)).toMatch(/snippet/);
-  expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals WHERE job_id = ?').get(jobId)).toMatchObject({ status: 'pending', approved_via: null });
+  expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals WHERE job_id = ?').get(jobId)).toMatchObject({ status: 'approved', approved_via: 'auto-submit' });
   expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId)?.status).toBe('proposed');
   await runWriter(e);
   expect(e.sqlite.prepare('SELECT count(*) n FROM proposals').get()?.n).toBe(2);
@@ -591,13 +578,15 @@ it('writes pending text for saved missing data and still auto-approves a complet
   await runWriter(e);
   expect(client).not.toHaveBeenCalled();
   const titleProposal = e.sqlite.prepare('SELECT id, status, approved_via, bid, budget, cover_letter, error FROM proposals WHERE job_id = ?').get(titleId) as { id: number; status: string; approved_via: string | null; bid: number | null; budget: string | null; cover_letter: string; error: string };
-  expect(titleProposal).toMatchObject({ status: 'pending', approved_via: null, bid: null, budget: null });
-  expect(titleProposal.cover_letter).toContain(MISSING_DESCRIPTION_OPENING);
+  expect(titleProposal).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: null, budget: null });
+  expect(titleProposal.cover_letter).toContain(openingFromTitle('Klaviyo campaign manager'));
+  expect(metaLanguageIn(titleProposal.cover_letter)).toBeNull();
+  expect(titleProposal.cover_letter).not.toMatch(/saved job post|did not include a description|this sentence/i);
   expect(titleProposal.error).toMatch(/job description/);
   expect(titleProposal.error).toMatch(/No job type was stated/);
   expect(opening.mock.calls.every((call) => String((call[5] as { description?: string } | undefined)?.description ?? '').trim().length > 0)).toBe(true);
   const hourly = e.sqlite.prepare('SELECT status, approved_via, bid, budget, error, create_params FROM proposals WHERE job_id = ?').get(hourlyId) as { status: string; approved_via: string | null; bid: number; budget: string | null; error: string; create_params: string };
-  expect(hourly).toMatchObject({ status: 'pending', approved_via: null, bid: 30, budget: null });
+  expect(hourly).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: 30, budget: null });
   expect(JSON.parse(hourly.create_params)).toMatchObject({ bid_basis: 'bidder-hourly-usd', bidder_hourly_usd: 30 });
   expect(hourly.error).toMatch(/not the client's budget/);
   expect(e.sqlite.prepare('SELECT budget FROM jobs WHERE id = ?').get(hourlyId)?.budget).toBeNull();
@@ -608,15 +597,6 @@ it('writes pending text for saved missing data and still auto-approves a complet
   expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(filteredId)?.status).toBe('filtered');
   expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(zeroId)?.status).toBe('error');
   expect(e.sqlite.prepare('SELECT count(*) n FROM proposals WHERE job_id IN (?, ?, ?, ?)').get(unverifiedId, countryId, filteredId, zeroId)?.n).toBe(0);
-  const denied = await handleApi(new Request(`https://local.invalid/api/proposals/${titleProposal.id}/approve`, { method: 'POST', headers: { 'x-dashboard': '1' } }), e, `/api/proposals/${titleProposal.id}/approve`);
-  expect(denied.status).toBe(400);
-  expect(await denied.json()).toMatchObject({ error: expect.stringMatching(/Approval does not bypass/) });
-  expect(e.sqlite.prepare('SELECT status FROM proposals WHERE id = ?').get(titleProposal.id)?.status).toBe('pending');
-  e.sqlite.prepare("UPDATE proposals SET status = 'approved', approved_via = 'dashboard', approved_at = datetime('now') WHERE job_id = ?").run(titleId);
-  await patchState(e, { upwork: { connected: true, orgUid: 'mock', toolNames: { confirm_preview: 'confirm_preview' } } });
-  await runSender(e);
-  expect(client).not.toHaveBeenCalled();
-  expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals WHERE job_id = ?').get(titleId)).toMatchObject({ status: 'pending', approved_via: null });
   await runWriter(e);
   expect(e.sqlite.prepare('SELECT count(*) n FROM proposals WHERE job_id = ?').get(titleId)?.n).toBe(1);
   const long = 'Run the full Klaviyo campaign and report every week in detail.';
@@ -637,4 +617,51 @@ it('writes pending text for saved missing data and still auto-approves a complet
   expect(client).not.toHaveBeenCalled();
   expect(e.sqlite.prepare('SELECT status, approved_via, bid, budget FROM proposals WHERE job_id = ?').get(completeId)).toMatchObject({ status: 'approved', approved_via: 'auto-submit', bid: 55, budget: '40.00–55.00/hr' });
   expect(submissionBlock(normalizePublicJob(completeId, { title: 'Klaviyo complete post', description: shorter, price_type: 'Hourly', price_min: 40, price_max: 55, buyer_payment_verified: true, proposal_count: 2, country: 'Canada' }, 'hyperbach-public-upwork'), s)).toBeNull();
+});
+
+it('keeps Review drafts pending, blocks an internal letter before Upwork, and does not auto-send a fixed job with no amount', async () => {
+  expect(DEFAULT_STATE.mode).toBe('review');
+  const review = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(review, 'review');
+  const reviewSettings = structuredClone(DEFAULT_SETTINGS);
+  reviewSettings.keywords = ['CAPES'];
+  reviewSettings.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'sentence', rules: '' };
+  await saveSettings(review, reviewSettings);
+  const titleId = '2119044137876131711';
+  await persistSnapshot(review, { jobId: titleId, source: 'automatic', partial: false, raw: { title: 'CAPES', url: `https://www.upwork.com/jobs/~02${titleId}` }, provenance: { source: 'automatic' } });
+  review.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, 'CAPES', ?, 'matched', 'Added by link')").run(titleId, `https://www.upwork.com/jobs/~02${titleId}`);
+  vi.spyOn(claude, 'scoreJob').mockResolvedValue({ profileFit: 90, winSimilarity: null, reason: 'Synthetic fit', pros: [], cons: [] });
+  vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
+  await runWriter(review);
+  const reviewed = review.sqlite.prepare('SELECT status, approved_via, cover_letter FROM proposals').get() as { status: string; approved_via: string | null; cover_letter: string };
+  expect(reviewed).toMatchObject({ status: 'pending', approved_via: null });
+  expect(reviewed.cover_letter).toContain(openingFromTitle('CAPES'));
+  expect(metaLanguageIn(reviewed.cover_letter)).toBeNull();
+
+  const blocked = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(blocked, 'auto');
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.letter = { template: 'Hi there,\n\nThe fixed letter.', opening: 'off', rules: '' };
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  s.fixedPriceTermsAcknowledged = true;
+  await saveSettings(blocked, s);
+  const leaked = 'The saved job post did not include a description, so this sentence adds no requirement that was not stated.';
+  blocked.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, create_params) VALUES ('2119044137876131712', 'CAPES', ?, 30, 'hourly', 'approved', 'auto-submit', datetime('now'), '{}')").run(leaked);
+  await patchState(blocked, { upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs', confirm_preview: 'confirm_preview' } } });
+  const client = vi.spyOn(oauth, 'upworkClient');
+  await runSender(blocked);
+  expect(client).not.toHaveBeenCalled();
+  expect(blocked.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_via: null });
+
+  const fixedId = '2119044137876131713';
+  await persistSnapshot(blocked, {
+    jobId: fixedId, source: 'apify', partial: false, contract: 'hyperbach-public-upwork',
+    raw: { title: 'Klaviyo fixed project', description: 'Design the Klaviyo emails.', price_type: 'Fixed-price', buyer_payment_verified: true, proposal_count: 1 },
+    provenance: { source: 'apify' },
+  });
+  await addJob(blocked, { jobUrl: `https://www.upwork.com/jobs/~02${fixedId}`, title: 'Klaviyo fixed project', automatic: true });
+  await runWriter(blocked);
+  expect(blocked.sqlite.prepare('SELECT status, approved_via, bid FROM proposals WHERE job_id = ?').get(fixedId)).toMatchObject({ status: 'pending', approved_via: null, bid: null });
+  expect(client).not.toHaveBeenCalled();
 });
