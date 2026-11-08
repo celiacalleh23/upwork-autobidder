@@ -1,5 +1,5 @@
 import { acquireLease, releaseLease } from '../kv';
-import type { Env, Settings } from '../settings';
+import { loadSettings, type Env, type Settings } from '../settings';
 import { normalizeCountry, stripUntrusted } from './filters';
 import { computeBid } from './letter';
 
@@ -9,6 +9,8 @@ const snapshotUrl = (id: string) => `https://www.upwork.com/jobs/~02${id}`;
 // applied, can_apply, Connects balance, Connects cost, and boost stay null even if a feed includes them.
 
 export const RAW_PAYLOAD_LIMIT = 100_000;
+// A later full import may return a held job to the writer. The writer leaves that draft pending, so Auto cannot send it.
+export const RECOVERED_SNAPSHOT = 'Recovered public snapshot';
 export const DESCRIPTION_STORE_LIMIT = 50_000;
 
 export interface PublicJobSnapshot {
@@ -234,7 +236,7 @@ export function normalizePublicJob(jobId: string, raw: unknown, contract?: Budge
     budgetFault: (listing ?? unscoped)?.budgetFault ?? null,
     currency: null,
     country: countryOf(src), verification: verificationOf(src),
-    proposalCount: asNumber(src.proposal_count ?? src.proposalCount ?? src.applicants),
+    proposalCount: asNumber(src.proposal_count ?? src.proposalCount ?? src.applicants ?? src.client_total_applicants),
     proposalsTier: text(src.proposals_tier ?? src.proposalsTier, 40),
     postedAt: iso(src.date_posted ?? src.published_date ?? src.publishedDate ?? src.postedAt ?? src.posted_at),
     skills: skills?.length ? skills : null,
@@ -363,7 +365,11 @@ export async function persistSnapshot(env: Env, input: PersistInput, now = new D
       .bind(input.jobId, existing?.source ?? input.source, fetchedAt, sourcePostedAt, sourceSeenAt, JSON.stringify(provenance),
         keepRaw ? existing.rawPayload : raw.json, keepRaw ? (existing.rawTruncated ? 1 : 0) : (raw.truncated ? 1 : 0),
         keepRaw ? existing.rawOriginalBytes : raw.originalBytes, JSON.stringify(normalized), now.toISOString()).run();
-    // A corrected snapshot does not put a held job back in the writer. Pasting the link is the explicit retry.
+    // A full import that now has the public fields can be drafted. A partial hit cannot revive a held job.
+    if (!input.partial && !snapshotHoldReason(normalized, await loadSettings(env))) {
+      await env.DB.prepare(`UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status = 'error' AND reason LIKE 'Held:%'
+        AND NOT EXISTS (SELECT 1 FROM proposals WHERE proposals.job_id = jobs.id)`).bind(RECOVERED_SNAPSHOT, input.jobId).run();
+    }
   } finally { await releaseLease(env, `snapshot:${input.jobId}`, lease); }
 }
 

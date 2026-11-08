@@ -11,7 +11,7 @@ import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, sw
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
-import { loadSnapshot, snapshotHoldReason } from './snapshot';
+import { loadSnapshot, RECOVERED_SNAPSHOT, snapshotHoldReason } from './snapshot';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
@@ -355,8 +355,9 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     await delKv(env, draftReadyKey(job.id));
     throw new McpError('Controls changed while preparing the proposal; retry after review.');
   }
-  // Review stays pending. Auto is only eligible for the sender, which still runs the live checks before confirm.
-  const status = current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
+  // Review stays pending. A recovered public snapshot stays pending even in Auto, so it cannot be sent until someone approves it.
+  const recovered = (job.reason ?? '').startsWith(RECOVERED_SNAPSHOT);
+  const status = !recovered && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
