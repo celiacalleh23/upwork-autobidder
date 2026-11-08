@@ -452,3 +452,49 @@ it('returns a held job to a pending draft after a fuller import and does not app
   expect(client).not.toHaveBeenCalled();
   expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
 });
+
+it('keeps a full post when a snippet or a cut text arrives, and accepts a shorter complete post', () => {
+  const full = normalizePublicJob(id, { title: 'Klaviyo', description: 'Run the full Klaviyo campaign and report every week.' });
+  const snippet = normalizePublicJob(id, { title: 'Klaviyo', description_snippet: 'Run the' });
+  const shorter = normalizePublicJob(id, { title: 'Klaviyo', description: 'Shorter complete post.' });
+  const cut = normalizePublicJob(id, { title: 'Klaviyo', description: 'x'.repeat(50_001) });
+  expect(full.descriptionKind).toBe('body');
+  expect(snippet.descriptionKind).toBe('fragment');
+  expect(cut.descriptionTruncated).toBe(true);
+  expect(mergeSnapshots(full, snippet, false).description).toBe(full.description);
+  expect(mergeSnapshots(full, snippet, false).descriptionKind).toBe('body');
+  expect(mergeSnapshots(snippet, full, false).description).toBe(full.description);
+  expect(mergeSnapshots(full, shorter, false).description).toBe('Shorter complete post.');
+  expect(mergeSnapshots(full, cut, false).description).toBe(full.description);
+  expect(mergeSnapshots(full, full, false).description).toBe(full.description);
+  expect(mergeSnapshots(full, snippet, true).description).toBe(full.description);
+  expect(boundPromptDescription('Run the', false, true).note).toMatch(/search snippet or fragment, not the full job post/);
+  expect(boundPromptDescription('Run the').note).toBeNull();
+});
+
+it('does not revive a held job from a snippet, and a normal snippet draft is not blocked', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
+  await ready(e, 'auto');
+  const jobId = '2119044137876131665';
+  const url = `https://www.upwork.com/jobs/~02${jobId}`;
+  e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason) VALUES (?, 'Klaviyo campaign manager', ?, 'error', 'Held: the saved snapshot has no job description.')").run(jobId, url);
+  await persistSnapshot(e, {
+    jobId, source: 'automatic', partial: false,
+    raw: { title: 'Klaviyo campaign manager', description: 'Run the', description_kind: 'fragment', buyer_payment_verified: true, proposal_count: 1, job_type: 'hourly', budget: '30.00–40.00/hr' },
+    provenance: { source: 'automatic' },
+  });
+  expect(e.sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId)?.status).toBe('error');
+  const matchedId = '2119044137876131666';
+  await persistSnapshot(e, {
+    jobId: matchedId, source: 'automatic', partial: false,
+    raw: { title: 'Klaviyo campaign manager', description: 'Run the weekly snippet.', description_kind: 'fragment', buyer_payment_verified: true, proposal_count: 1, job_type: 'hourly', budget: '30.00–40.00/hr' },
+    provenance: { source: 'automatic' },
+  });
+  e.sqlite.prepare("INSERT INTO jobs (id, title, url, status, reason, posted_at) VALUES (?, 'Klaviyo campaign manager', ?, 'matched', 'Added by link', ?)").run(matchedId, `https://www.upwork.com/jobs/~02${matchedId}`, new Date().toISOString());
+  const score = vi.spyOn(claude, 'scoreJob').mockResolvedValue({ profileFit: 90, winSimilarity: null, reason: 'Synthetic fit', pros: [], cons: [] });
+  vi.spyOn(loom, 'copyForJob').mockResolvedValue(null);
+  await runWriter(e);
+  expect(score.mock.calls[0][3]).toMatchObject({ descriptionFragment: true });
+  expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals WHERE job_id = ?').get(matchedId)).toMatchObject({ status: 'approved', approved_via: 'auto-submit' });
+  expect(e.sqlite.prepare('SELECT count(*) n FROM proposals WHERE job_id = ?').get(jobId)?.n).toBe(0);
+});

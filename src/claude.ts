@@ -16,6 +16,7 @@ export interface JobForClaude {
   description: string;
   clientFeedbackNames: string[];
   descriptionTruncated?: boolean;
+  descriptionFragment?: boolean;
 }
 
 // Rafa is a woman (Celia, Oct 26): Claude's notes on the dashboard must say she/her.
@@ -38,18 +39,19 @@ export const PROMPT_DESCRIPTION_LIMIT = 12_000;
 
 // The model sees at most 12,000 characters of the description. A longer source is cut, and the cut is written
 // into the data block so a draft cannot look like the whole post arrived.
-export function boundPromptDescription(description: string, storedTruncated = false): { text: string; note: string | null } {
+export function boundPromptDescription(description: string, storedTruncated = false, fragment = false): { text: string; note: string | null } {
   const overPrompt = description.length > PROMPT_DESCRIPTION_LIMIT;
   const text = description.slice(0, PROMPT_DESCRIPTION_LIMIT);
-  if (!overPrompt && !storedTruncated) return { text, note: null };
-  const note = storedTruncated
+  const notes: string[] = [];
+  if (fragment) notes.push('[This text is a search snippet or fragment, not the full job post.]');
+  if (overPrompt || storedTruncated) notes.push(storedTruncated
     ? `[description truncated: stored text was already cut, and this prompt keeps at most ${PROMPT_DESCRIPTION_LIMIT} characters]`
-    : `[description truncated at ${PROMPT_DESCRIPTION_LIMIT} characters for this prompt]`;
-  return { text, note };
+    : `[description truncated at ${PROMPT_DESCRIPTION_LIMIT} characters for this prompt]`);
+  return { text, note: notes.length ? notes.join('\n') : null };
 }
 
 const jobBlock = (j: JobForClaude) => {
-  const description = boundPromptDescription(j.description, j.descriptionTruncated);
+  const description = boundPromptDescription(j.description, j.descriptionTruncated, j.descriptionFragment);
   return `<job_post>
 Title: ${dataText(j.title)}
 Type: ${j.jobType ?? 'unknown'} · Budget: ${j.budget ?? 'not stated'} · Client country: ${j.country ?? 'unknown'} · Currency: unknown

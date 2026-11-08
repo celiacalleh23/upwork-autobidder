@@ -281,7 +281,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   if (!ready) {
     const forClaude: JobForClaude = {
       title: stripUntrusted(job.title), jobType: job.job_type, budget: job.budget, country: job.client_country,
-      description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, clientFeedbackNames: [],
+      description: n.description ?? '', descriptionTruncated: n.descriptionTruncated, descriptionFragment: n.descriptionKind === 'fragment', clientFeedbackNames: [],
     };
     const { profileFit, winSimilarity, reason: why, pros, cons } = await scoreJob(env, who.profile, who.wins, forClaude);
     const keywords = verdict.keywords;

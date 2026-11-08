@@ -21,6 +21,7 @@ export interface PublicJobSnapshot {
   url: string | null;
   description: string | null;
   descriptionTruncated: boolean;
+  descriptionKind: 'body' | 'fragment' | null;
   jobType: 'fixed' | 'hourly' | null;
   budgetText: string | null;
   amountSource: 'price' | 'hourly-band' | null;
@@ -210,12 +211,29 @@ function countryOf(raw: Record<string, unknown>): string | null {
   return normalizeCountry(value) ? value : null;
 }
 
+function clipDescription(source: string | null): { text: string | null; truncated: boolean } {
+  if (!source) return { text: null, truncated: false };
+  return { text: source.slice(0, DESCRIPTION_STORE_LIMIT), truncated: source.length > DESCRIPTION_STORE_LIMIT };
+}
+
+// A labeled snippet stays a fragment. A description field is the post body from that source, not proof it is the whole post.
+function readDescription(src: Record<string, unknown>): { text: string | null; truncated: boolean; kind: 'body' | 'fragment' | null } {
+  const labeled = src.description_kind === 'fragment' || src.description_kind === 'body' ? src.description_kind : null;
+  const body = passage(src.description ?? src.description_text ?? src.job_description, DESCRIPTION_STORE_LIMIT + 1);
+  const fragment = passage(src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
+  if (labeled === 'fragment') {
+    const chosen = clipDescription(body ?? fragment);
+    return { ...chosen, kind: chosen.text ? 'fragment' : null };
+  }
+  if (body) return { ...clipDescription(body), kind: 'body' };
+  if (fragment) return { ...clipDescription(fragment), kind: 'fragment' };
+  return { text: null, truncated: false, kind: null };
+}
+
 // Feed questions that are missing or an empty list stay unknown. AI-written fields are hints, not questions.
 export function normalizePublicJob(jobId: string, raw: unknown, contract?: BudgetContract | null): PublicJobSnapshot {
   const src = object(raw) ?? {};
-  const descriptionSource = passage(src.description ?? src.description_text ?? src.job_description ?? src.description_snippet ?? src.snippet, DESCRIPTION_STORE_LIMIT + 1);
-  const descriptionTruncated = !!descriptionSource && descriptionSource.length > DESCRIPTION_STORE_LIMIT;
-  const description = descriptionSource ? descriptionSource.slice(0, DESCRIPTION_STORE_LIMIT) : null;
+  const description = readDescription(src);
   const directBudget = text(src.budget ?? src.budget_text ?? src.budgetText, 120);
   const shaped = directBudget ? null : hyperbachListing(src);
   const listing = shaped && contract === 'hyperbach-public-upwork' ? shaped : null;
@@ -229,7 +247,7 @@ export function normalizePublicJob(jobId: string, raw: unknown, contract?: Budge
   return {
     v: 1, id: jobId, sourceId, title: text(src.title ?? src.jobTitle, 300),
     url: text(typeof src.url === 'object' ? object(src.url)?.href ?? object(src.url)?.url : src.url ?? src.link ?? src.jobUrl, 400) ?? snapshotUrl(jobId),
-    description, descriptionTruncated, jobType, budgetText: budget,
+    description: description.text, descriptionTruncated: description.truncated, descriptionKind: description.kind, jobType, budgetText: budget,
     amountSource: (listing ?? unscoped)?.amountSource ?? null,
     explicitCurrency: (listing ?? unscoped)?.explicitCurrency ?? null,
     listedCurrency: listing?.listedCurrency ?? null,
@@ -246,31 +264,39 @@ export function normalizePublicJob(jobId: string, raw: unknown, contract?: Budge
   };
 }
 
-function longer(prev: string | null, next: string | null, partial: boolean, nextTruncated: boolean, prevTruncated: boolean): string | null {
-  if (!next) return prev;
-  if (!prev) return next;
-  if (partial) return prev;
-  if (nextTruncated && !prevTruncated) return prev;
-  if (next.length < prev.length && nextTruncated) return prev;
-  return next;
+function storedKind(snap: PublicJobSnapshot): 'body' | 'fragment' | null {
+  if (!snap.description) return null;
+  return snap.descriptionKind === 'fragment' ? 'fragment' : 'body';
 }
 
-function descriptionFlag(prev: PublicJobSnapshot, next: PublicJobSnapshot, partial: boolean): boolean {
-  const kept = longer(prev.description, next.description, partial, next.descriptionTruncated, prev.descriptionTruncated);
-  if (kept === prev.description) return prev.descriptionTruncated;
-  return next.descriptionTruncated;
+// A fragment or a cut text must not replace a fuller post. A complete body may replace a longer one: length is not proof.
+function pickDescription(prev: PublicJobSnapshot, next: PublicJobSnapshot, partial: boolean): { text: string | null; truncated: boolean; kind: 'body' | 'fragment' | null } {
+  const keep = (snap: PublicJobSnapshot) => ({ text: snap.description, truncated: snap.descriptionTruncated, kind: storedKind(snap) });
+  if (!next.description) return keep(prev);
+  if (!prev.description) return keep(next);
+  if (partial) return keep(prev);
+  const prevKind = storedKind(prev);
+  const nextKind = storedKind(next);
+  if (nextKind === 'fragment' && prevKind === 'body') return keep(prev);
+  if (nextKind === 'fragment' && prevKind === 'fragment' && next.description.length < prev.description.length) return keep(prev);
+  if (next.descriptionTruncated && !prev.descriptionTruncated && prevKind === 'body') return keep(prev);
+  if (nextKind === 'body' && !next.descriptionTruncated) return { text: next.description, truncated: false, kind: 'body' };
+  if (next.description.length < prev.description.length && next.descriptionTruncated) return keep(prev);
+  return { text: next.description, truncated: next.descriptionTruncated, kind: nextKind };
 }
 
 export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSnapshot, partial: boolean): PublicJobSnapshot {
   if (!prev) return next;
+  const description = pickDescription(prev, next, partial);
   return {
     ...next,
     id: prev.id,
     sourceId: prev.sourceId ?? next.sourceId,
     title: partial ? (prev.title ?? next.title) : (next.title ?? prev.title),
     url: partial ? (prev.url ?? next.url) : (next.url ?? prev.url),
-    description: longer(prev.description, next.description, partial, next.descriptionTruncated, prev.descriptionTruncated),
-    descriptionTruncated: descriptionFlag(prev, next, partial),
+    description: description.text,
+    descriptionTruncated: description.truncated,
+    descriptionKind: description.kind,
     jobType: partial ? (prev.jobType ?? next.jobType) : (next.jobType ?? prev.jobType),
     budgetText: partial ? (prev.budgetText ?? next.budgetText) : (next.budgetText ?? prev.budgetText),
     amountSource: partial ? (prev.amountSource ?? next.amountSource) : next.amountSource,
@@ -366,7 +392,7 @@ export async function persistSnapshot(env: Env, input: PersistInput, now = new D
         keepRaw ? existing.rawPayload : raw.json, keepRaw ? (existing.rawTruncated ? 1 : 0) : (raw.truncated ? 1 : 0),
         keepRaw ? existing.rawOriginalBytes : raw.originalBytes, JSON.stringify(normalized), now.toISOString()).run();
     // A full import that now has the public fields can be drafted. A partial hit cannot revive a held job.
-    if (!input.partial && !snapshotHoldReason(normalized, await loadSettings(env))) {
+    if (!input.partial && normalized.descriptionKind !== 'fragment' && !snapshotHoldReason(normalized, await loadSettings(env))) {
       await env.DB.prepare(`UPDATE jobs SET status = 'matched', reason = ? WHERE id = ? AND status = 'error' AND reason LIKE 'Held:%'
         AND NOT EXISTS (SELECT 1 FROM proposals WHERE proposals.job_id = jobs.id)`).bind(RECOVERED_SNAPSHOT, input.jobId).run();
     }
