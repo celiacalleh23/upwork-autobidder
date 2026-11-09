@@ -4,6 +4,7 @@ import { sendDue } from '../src/pipeline/pace';
 describe('pace (no Upwork search since Oct 30)', () => {
   it('sends at minute 0, 5, 10… in Review and every minute in Auto', () => {
     expect([0, 1, 4, 5, 10, 55, 59].map((m) => sendDue(m, 'review'))).toEqual([true, false, false, true, true, true, false]);
+    expect(sendDue(1, 'review', true)).toBe(true);
     expect([0, 1, 2, 3, 59].every((m) => sendDue(m, 'auto'))).toBe(true);
   });
 });
@@ -48,4 +49,18 @@ it('blocks the actual sender before any Upwork request during its random wait',a
   expect(client).not.toHaveBeenCalled();
   const state=JSON.parse(String(e.sqlite.prepare("SELECT value FROM kv WHERE key='state'").get()?.value));
   expect(state.senderNote).toContain('3 min');
+});
+it('does not hold a clicked Approve for the random Auto wait or the gap', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-02T12:06:00Z'));
+  const e = env(); vi.spyOn(Math, 'random').mockReturnValue(0.999);
+  await patchState(e, { mode: 'auto', paused: false, lastSendAt: '2026-11-02T12:05:00Z', upwork: { connected: true, orgUid: 'primary' } });
+  const s = { ...structuredClone(DEFAULT_SETTINGS), sendingEnabled: true };
+  s.caps.activeStart = s.caps.activeEnd = '00:00'; s.caps.gapMinutes = 5;
+  await e.DB.prepare("INSERT INTO kv(key,value) VALUES ('settings',?)").bind(JSON.stringify(s)).run();
+  await e.DB.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, create_params) VALUES ('2119000000000000001', 'Klaviyo', 'Hi there, a normal letter for this job.', 30, 'hourly', 'approved', 'dashboard', '2026-11-02 12:05:00', '{}')").run();
+  const client = vi.spyOn(oauth, 'upworkClient');
+  await runSender(e);
+  expect(client).toHaveBeenCalled();
+  const state = JSON.parse(String(e.sqlite.prepare("SELECT value FROM kv WHERE key='state'").get()?.value));
+  expect(state.senderNote ?? '').not.toMatch(/random|min apart/);
 });
