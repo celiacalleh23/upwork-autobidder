@@ -11,13 +11,11 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
-import { checkAnswers, contactDetailsIn, swapLoomLink } from './pipeline/letter';
+import { checkAnswers, contactDetailsIn, FIXED_AMOUNT_MESSAGE, metaLanguageIn, swapLoomLink } from './pipeline/letter';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
-import { loadSnapshot, submissionBlock, unverifiedPriceHold } from './pipeline/snapshot';
-
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
@@ -343,14 +341,11 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
         return json({ ok: true });
       }
       if (method === 'POST' && action === 'approve') {
-        const proposal = await env.DB.prepare("SELECT job_id, create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ job_id: string; create_params: string }>();
+        const proposal = await env.DB.prepare("SELECT job_id, cover_letter, job_type, bid, create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ job_id: string; cover_letter: string; job_type: string | null; bid: number | null; create_params: string }>();
         if (!proposal) return fail('This proposal is no longer waiting for review', 409);
-        const snap = await loadSnapshot(env, proposal.job_id);
-        if (snap) {
-          const s = await loadSettings(env);
-          const blocked = unverifiedPriceHold(snap.normalized, s) ?? submissionBlock(snap.normalized, s);
-          if (blocked) return fail(blocked);
-        }
+        const meta = metaLanguageIn(proposal.cover_letter);
+        if (meta) return fail(`The letter contains ${meta}. It was not approved.`);
+        if (proposal.job_type === 'fixed' && proposal.bid === null) return fail(FIXED_AMOUNT_MESSAGE);
         const answers = answersOf(proposal.create_params);
         const problem = checkAnswers(answers.map(a => a.question), answers);
         if (problem) return fail('Review screening answers: ' + problem);

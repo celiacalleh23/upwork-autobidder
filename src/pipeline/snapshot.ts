@@ -1,7 +1,9 @@
 import { acquireLease, releaseLease } from '../kv';
 import { loadSettings, type Env, type Settings } from '../settings';
 import { normalizeCountry, parseBudget, stripUntrusted } from './filters';
-import { computeBid } from './letter';
+import { BIDDER_HOURLY_USD, computeBid } from './letter';
+
+export { BIDDER_HOURLY_USD };
 
 const snapshotUrl = (id: string) => `https://www.upwork.com/jobs/~02${id}`;
 
@@ -9,7 +11,7 @@ const snapshotUrl = (id: string) => `https://www.upwork.com/jobs/~02${id}`;
 // applied, can_apply, Connects balance, Connects cost, and boost stay null even if a feed includes them.
 
 export const RAW_PAYLOAD_LIMIT = 100_000;
-// A later full import may return a held job to the writer. The writer leaves that draft pending, so Auto cannot send it.
+// A later full import may return a held job to the writer. Auto then treats it like any other future draft.
 export const RECOVERED_SNAPSHOT = 'Recovered public snapshot';
 export const DESCRIPTION_STORE_LIMIT = 50_000;
 
@@ -320,22 +322,15 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
 
 // Listed USD is applied only by hyperbachListing. This refuses a conflict, a bad amount, and any other feed.
 export function unverifiedPriceHold(snap: PublicJobSnapshot, _s: Settings): string | null {
-  if (snap.budgetFault === 'currency-conflict') return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
+  if (snap.budgetFault === 'currency-conflict' || (snap.explicitCurrency && snap.explicitCurrency !== 'USD')) return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
   if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.';
-  if (snap.listedCurrency === 'USD' || snap.explicitCurrency === 'USD') return null;
-  if (snap.amountSource) return `Held: ${snap.budgetText ?? 'this price'} is not from the documented Hyperbach public Upwork listing. Nothing is drafted or sent.`;
   return null;
 }
 
-export function snapshotHoldReason(snap: PublicJobSnapshot, _s: Settings): string | null {
+export function snapshotHoldReason(snap: PublicJobSnapshot, s: Settings): string | null {
   if (!snap.title) return 'Held: the saved snapshot has no job title.';
-  if (snap.budgetFault === 'currency-conflict') return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
-  if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.';
-  return null;
+  return unverifiedPriceHold(snap, s);
 }
-
-// Rafa's own hourly rate. It is used only when the client stated no hourly band. It is never stored as the client budget.
-export const BIDDER_HOURLY_USD = 30;
 
 export type SubmissionGap =
   | 'description-missing'
@@ -376,10 +371,10 @@ export function submissionGaps(snap: PublicJobSnapshot, s: Settings): Submission
   return gaps;
 }
 
-export function submissionBlock(snap: PublicJobSnapshot, s: Settings): string | null {
-  const gaps = submissionGaps(snap, s);
-  if (!gaps.length) return null;
-  return `Not sent: source data is still missing (${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}). Approval does not bypass that.`;
+// Missing description, band, count, verification, or currency does not stop a send. A fixed price with no amount still cannot be invented.
+export function submissionBlock(snap: PublicJobSnapshot, _s: Settings): string | null {
+  if (snap.jobType === 'fixed' && !snap.budgetText) return 'This fixed-price job has no amount. Set the amount with Edit, then approve. None was invented.';
+  return null;
 }
 
 export type DraftBasis = 'client' | 'bidder-hourly-usd' | 'unavailable';
@@ -392,9 +387,9 @@ export function draftBid(snap: PublicJobSnapshot, s: Settings): { amount: number
     if (snap.explicitCurrency && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
     return { amount: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd' };
   }
+  if (snap.explicitCurrency && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
   if (snap.jobType === 'fixed' && !(parsed?.kind === 'fixed' && parsed.amount > 0)) return { amount: null, basis: 'unavailable' };
   if (!snap.jobType) return { amount: null, basis: 'unavailable' };
-  if (snap.amountSource && snap.listedCurrency !== 'USD' && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
   const amount = computeBid(snap.jobType, snap.budgetText, s);
   return amount === null ? { amount: null, basis: 'unavailable' } : { amount, basis: 'client' };
 }
@@ -405,8 +400,8 @@ export function draftReviewNote(base: string, gaps: SubmissionGap[], basis: Draf
   if (basis === 'unavailable' && gaps.includes('client-fixed-amount-missing')) extra.push('No fixed price was stated, and none was invented.');
   if (basis === 'unavailable' && gaps.includes('job-type-missing')) extra.push('No job type was stated, so no hourly rate and no fixed price were assumed.');
   if (basis === 'unavailable' && gaps.includes('explicit-currency-not-usd')) extra.push('The feed named a non-USD currency and no usable rate, so USD 30 was not applied.');
-  if (basis === 'unavailable' && gaps.includes('currency-undocumented')) extra.push('The stated price has no documented USD currency, so it was not copied into the bid.');
-  if (gaps.length) extra.push(`Still missing in the source: ${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}. This draft stays pending and cannot be sent while those fields are missing. The letter is not rewritten automatically if they arrive later.`);
+  if (basis === 'client' && gaps.includes('currency-undocumented')) extra.push('The feed did not name a currency. The stated number is the bid.');
+  if (gaps.length) extra.push(`Still blank in the source: ${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}. Approving still sends with the data saved here.${basis === 'bidder-hourly-usd' || gaps.includes('client-hourly-band-missing') ? ` An hourly job with no client rate uses Rafa's USD ${BIDDER_HOURLY_USD}/hour.` : ''}`);
   return [base, ...extra].filter(Boolean).join(' ');
 }
 

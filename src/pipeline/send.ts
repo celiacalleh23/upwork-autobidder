@@ -6,10 +6,9 @@ import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
-import { checkAnswers, checkLetter, type Answer } from './letter';
+import { checkAnswers, checkLetter, metaLanguageIn, resolveSendBid, type Answer } from './letter';
 import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
-import { loadSnapshot, submissionBlock, unverifiedPriceHold } from './snapshot';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
 
@@ -208,9 +207,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
   let confirmAttempted = false;
   try {
     if (row) {
-      const snap = await loadSnapshot(env, row.job_id);
-      const blocked = snap ? (unverifiedPriceHold(snap.normalized, s) ?? submissionBlock(snap.normalized, s)) : null;
-      if (blocked) return await holdForReview(env, row.id, blocked, summary);
+      const meta = metaLanguageIn(row.cover_letter);
+      if (meta) return await holdForReview(env, row.id, `Not sent: the letter contains ${meta}.`, summary);
     }
     const client = await upworkClient(env);
     if (hasUnknown) await verifyUnknown(env, client, state);
@@ -238,7 +236,16 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     // The job details carry the balance too; use it when the account read failed.
     const wait = connectsGate(balance ?? d.connectsBalance, d.connectsCost, s);
     if (wait) { summary.note = wait; await holdRetries(env); return summary; }
-    if (row.bid === null) { await setProposal(env, row.id, { status: 'failed', error: 'No bid amount stored' }); return summary; }
+    const storedBasis = (() => { try { const p = JSON.parse(row.create_params || '{}') as { bid_basis?: unknown }; return typeof p.bid_basis === 'string' ? p.bid_basis : null; } catch { return null; } })();
+    const decision = resolveSendBid({ jobType: row.job_type, bid: row.bid, bidBasis: storedBasis, liveType: d.jobType, liveBudget: d.budget, settings: s });
+    if (decision.hold || decision.bid === null) return await holdForReview(env, row.id, decision.hold ?? 'Not sent: no bid amount is available.', summary);
+    if (decision.bid !== row.bid || decision.jobType !== row.job_type) {
+      await setProposal(env, row.id, { bid: decision.bid, job_type: decision.jobType });
+      if (decision.basis === 'bidder-hourly-usd' || !d.budget) await env.DB.prepare('UPDATE jobs SET job_type = ? WHERE id = ?').bind(decision.jobType, row.job_id).run();
+      else await env.DB.prepare('UPDATE jobs SET job_type = ?, budget = ? WHERE id = ?').bind(decision.jobType, d.budget, row.job_id).run();
+      row.bid = decision.bid;
+      row.job_type = decision.jobType;
+    }
 
     // Claim it, so a parallel run or an Undo can't race this send.
     const claimed = await env.DB.prepare("UPDATE proposals SET status = 'submitting', submitted_at = ? WHERE id = ? AND status = 'approved' AND cover_letter = ? AND bid IS ? AND create_params = ? AND approved_at IS ?").bind(sql(new Date()), row.id, row.cover_letter, row.bid, row.create_params, row.approved_at).run();
