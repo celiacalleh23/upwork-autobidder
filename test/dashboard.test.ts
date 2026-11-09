@@ -10,6 +10,11 @@ describe('dashboard.html ids', () => {
     const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
     expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
   });
+  it('tells the reviewer that missing source fields do not block approval', () => {
+    expect(html).toContain('Approving still sends with the data on this card');
+    expect(html).toContain('cannot be sent while those fields are missing');
+    expect(html).toContain('shownNote(p.error)');
+  });
   it('looks up only ids that exist', () => {
     const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
     const used = [...new Set([...html.matchAll(/\$\('([A-Za-z0-9_-]+)'\)/g)].map((m) => m[1]))];

@@ -7,6 +7,7 @@ import * as claude from '../src/claude';
 import { getKv, putKv } from '../src/kv';
 import * as loom from '../src/loom';
 import { addJob } from '../src/pipeline/jobs';
+import { handleApi } from '../src/api';
 import { draftReadyKey, runWriter } from '../src/pipeline/write';
 import { runSender } from '../src/pipeline/send';
 import { computeBid } from '../src/pipeline/letter';
@@ -649,6 +650,32 @@ it('uses the letter model for a title-only opener and falls back when the title 
   expect(titleOnlyOpeningProblem(fallbackTitleOpening(capesTitle), capesTitle)).toBeNull();
   expect(metaLanguageIn(capesLetter)).toBeNull();
   expect(metaLanguageIn(shopifyLetter)).toBeNull();
+});
+
+it('lets a person approve a proposal when the applicant count and other source fields are missing', async () => {
+  const e = { ...env(), INDEPENDENT_DRAFTS: 'true' };
+  await ready(e, 'review');
+  const jobId = '2119044137876131801';
+  await persistSnapshot(e, { jobId, source: 'automatic', partial: false, raw: { title: 'Klaviyo campaign manager' }, provenance: { source: 'automatic' } });
+  const letter = 'Hi there,\n\nThe email marketing work in your post is where I would start.';
+  const oldNote = 'Still missing in the source: applicant count. This draft stays pending and cannot be sent while those fields are missing. The letter is not rewritten automatically if they arrive later.';
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, error, create_params) VALUES (?, 'Klaviyo campaign manager', ?, NULL, 'hourly', 'pending', ?, '{}')").run(jobId, letter, oldNote);
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, create_params) VALUES ('2119044137876131802', 'Klaviyo fixed project', 'Hi there, the fixed letter is ready for review today.', NULL, 'fixed', 'pending', '{}')").run();
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, create_params) VALUES ('2119044137876131803', 'Klaviyo meta', ?, 30, 'hourly', 'pending', '{}')").run('The saved job post did not include a description, so this sentence adds no requirement that was not stated.');
+  const client = vi.spyOn(oauth, 'upworkClient');
+  const post = (path: string) => new Request('https://local.invalid' + path, { method: 'POST', headers: { 'x-dashboard': '1' } });
+  const ok = await handleApi(post('/api/proposals/1/approve'), e, '/api/proposals/1/approve');
+  expect(ok.status).toBe(200);
+  expect(e.sqlite.prepare('SELECT status, approved_via, error FROM proposals WHERE id = 1').get()).toMatchObject({ status: 'approved', approved_via: 'dashboard', error: null });
+  expect((await loadState(e)).mode).toBe('review');
+  const fixed = await handleApi(post('/api/proposals/2/approve'), e, '/api/proposals/2/approve');
+  expect(fixed.status).toBe(400);
+  expect(String((await fixed.json()).error)).toMatch(/Set the amount with Edit/);
+  expect(e.sqlite.prepare('SELECT status FROM proposals WHERE id = 2').get()?.status).toBe('pending');
+  const meta = await handleApi(post('/api/proposals/3/approve'), e, '/api/proposals/3/approve');
+  expect(meta.status).toBe(400);
+  expect(e.sqlite.prepare('SELECT status FROM proposals WHERE id = 3').get()?.status).toBe('pending');
+  expect(client).not.toHaveBeenCalled();
 });
 
 it('keeps Review drafts pending, blocks an internal letter before Upwork, and does not auto-send a fixed job with no amount', async () => {

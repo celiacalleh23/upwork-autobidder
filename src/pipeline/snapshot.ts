@@ -373,7 +373,7 @@ export function submissionGaps(snap: PublicJobSnapshot, s: Settings): Submission
 
 // Missing description, band, count, verification, or currency does not stop a send. A fixed price with no amount still cannot be invented.
 export function submissionBlock(snap: PublicJobSnapshot, _s: Settings): string | null {
-  if (snap.jobType === 'fixed' && !snap.budgetText) return 'Not sent: this is a fixed-price job and no client amount was stated. None was invented.';
+  if (snap.jobType === 'fixed' && !snap.budgetText) return 'This fixed-price job has no amount. Set the amount with Edit, then approve. None was invented.';
   return null;
 }
 
@@ -401,7 +401,7 @@ export function draftReviewNote(base: string, gaps: SubmissionGap[], basis: Draf
   if (basis === 'unavailable' && gaps.includes('job-type-missing')) extra.push('No job type was stated, so no hourly rate and no fixed price were assumed.');
   if (basis === 'unavailable' && gaps.includes('explicit-currency-not-usd')) extra.push('The feed named a non-USD currency and no usable rate, so USD 30 was not applied.');
   if (basis === 'client' && gaps.includes('currency-undocumented')) extra.push('The feed did not name a currency. The stated number is the bid.');
-  if (gaps.length) extra.push(`Still blank in the source: ${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}. Nothing was invented to fill those fields.`);
+  if (gaps.length) extra.push(`Still blank in the source: ${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}. Approving still sends with the data saved here.${basis === 'bidder-hourly-usd' || gaps.includes('client-hourly-band-missing') ? ` An hourly job with no client rate uses Rafa's USD ${BIDDER_HOURLY_USD}/hour.` : ''}`);
   return [base, ...extra].filter(Boolean).join(' ');
 }
 

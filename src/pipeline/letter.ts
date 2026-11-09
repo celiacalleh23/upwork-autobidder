@@ -120,6 +120,8 @@ export function checkLetter(letter: string, loomUrl: string | null): string | nu
   return found ? `the letter contains ${found}` : null;
 }
 
+export const FIXED_AMOUNT_MESSAGE = 'This fixed-price job has no amount. Set the amount with Edit, then approve. None was invented.';
+
 // The sender already reads contract terms. This only chooses the bid from that read and the saved draft.
 export function resolveSendBid(input: {
   jobType: string | null;
@@ -142,7 +144,7 @@ export function resolveSendBid(input: {
     if (input.bid != null) return { jobType, bid: input.bid, basis: 'stored', hold: null };
     const live = parseBudget('fixed', input.liveBudget ?? undefined);
     if (live?.kind === 'fixed' && live.amount > 0) return { jobType, bid: live.amount, basis: 'client', hold: null };
-    return { jobType, bid: null, basis: 'stored', hold: 'Not sent: this is a fixed-price job and no client amount was stated. None was invented.' };
+    return { jobType, bid: null, basis: 'stored', hold: FIXED_AMOUNT_MESSAGE };
   }
   return { jobType: null, bid: input.bid, basis: 'stored', hold: 'Not sent: the job type was not in the saved snapshot or the job read. No rate was assumed.' };
 }

@@ -76,7 +76,7 @@ describe('resolveSendBid', () => {
     expect(resolveSendBid({ jobType: 'hourly', bid: null, bidBasis: null, liveType: null, liveBudget: null, settings }).bid).toBe(30);
     expect(resolveSendBid({ jobType: 'hourly', bid: 30, bidBasis: 'bidder-hourly-usd', liveType: 'hourly', liveBudget: '40.00–55.00/hr', settings })).toMatchObject({ bid: 55, basis: 'client', hold: null });
     expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: 'fixed', liveBudget: '80.00', settings })).toMatchObject({ jobType: 'fixed', bid: 80, basis: 'client', hold: null });
-    expect(resolveSendBid({ jobType: 'fixed', bid: null, bidBasis: null, liveType: 'fixed', liveBudget: null, settings }).hold).toMatch(/no client amount/);
+    expect(resolveSendBid({ jobType: 'fixed', bid: null, bidBasis: null, liveType: 'fixed', liveBudget: null, settings }).hold).toMatch(/Set the amount with Edit/);
     expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: null, liveBudget: null, settings }).hold).toMatch(/job type was not/);
   });
 });

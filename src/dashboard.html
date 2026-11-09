@@ -528,6 +528,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
     return data;
   }
+  function shownNote(text) {
+    return String(text).replace(
+      /This draft stays pending and cannot be sent while those fields are missing\. The letter is not rewritten automatically if they arrive later\./g,
+      'Approving still sends with the data on this card. An hourly job with no client rate uses Rafa\'s USD 30/hour. A fixed-price job with no amount needs an amount in Edit.',
+    );
+  }
   function toast(msg, bad = false) {
     const t = $('toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : ''); t.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 7000 : 4000);
@@ -755,7 +761,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       letterBox, editWrap,
       p.answers && p.answers.length ? h('details', { class: 'small' }, h('summary', { text: `Screening answers (${p.answers.length})` }),
         ...p.answers.map((a) => h('p', { style: 'margin:8px 0 0' }, h('b', { text: a.question }), h('br'), a.answer))) : null,
-      p.error ? h('p', { class: 'small muted', style: 'margin:0', text: p.error }) : null,
+      p.error ? h('p', { class: 'small muted', style: 'margin:0', text: shownNote(p.error) }) : null,
       h('div', { class: 'card-foot' },
         h('div', { class: 'loom' },
           h('span', { 'aria-hidden': 'true', text: '▶' }),
@@ -811,7 +817,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }),
         r.boost_connects ? h('span', { class: 'chip pink', title: 'Boosted: Upwork charges the bid only if the proposal lands in a paid spot', text: `Boosted · ${r.boost_connects} Connects` }) : null,
         !r.boost_connects && r.boost_note ? h('span', { class: 'small muted', text: `Not boosted: ${r.boost_note}` }) : null,
-        r.error ? h('span', { class: 'err', text: r.error }) : null,
+        r.error ? h('span', { class: 'err', text: shownNote(r.error) }) : null,
         r.approved_at && via ? h('span', { class: 'sub-time', style: 'flex-basis:100%', text: `approved ${when(r.approved_at)} ${via}` }) : null);
       if (r.status === 'unknown') {
         const resolve = async (outcome) => {
