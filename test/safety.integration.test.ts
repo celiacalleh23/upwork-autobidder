@@ -12,6 +12,7 @@ import { seal } from '../src/crypto';
 import { drainApify, receiveApify, requestApifySync, syncApify, apifySyncStatus, discoveryInput, mergeDiscoveryInput } from '../src/apify';
 import { sendDailyReport } from '../src/pipeline/report';
 import { cleanupLoomCopies } from '../src/loom';
+import * as claude from '../src/claude';
 
 const databases: ReturnType<typeof environment>[] = [];
 const env = () => { const e = environment(); databases.push(e); return e; };
@@ -55,6 +56,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
   if (opts.score !== undefined) e.sqlite.prepare('UPDATE proposals SET score = ? WHERE id=1').run(opts.score);
   if (opts.pending) e.sqlite.exec("UPDATE proposals SET status='pending',approved_via=NULL WHERE id=1");
   if (opts.unknown) e.sqlite.exec("INSERT INTO proposals(job_id,title,cover_letter,status,submitted_at) VALUES ('2115559352186121362','Unclear','Letter','unknown',datetime('now','-2 days'))");
+  vi.spyOn(claude, 'answerQuestions').mockImplementation(async (_env, _profile, _job, questions: string[]) => questions.map((question) => ({ question, answer: 'I can start on this next week.' })));
   let confirms = 0;
   const boostBids: number[] = [];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
@@ -158,16 +160,22 @@ describe('submission boundary (mocked upstream only)', () => {
   it('stops and holds on an account warning', async () => {
     const r = await sender({ warning: true }); expect(r.confirms).toBe(0); expect((await loadState(r.e)).paused).toBe(true);
   });
-  it('does not confirm when the live preview omits screening questions', async () => {
-    const r = await sender({ omitQuestions: true, score: 90, boost: 4 });
-    expect(r.confirms).toBe(0);
-    expect(r.boostBids).toEqual([]);
-    expect(r.row?.status).toBe('pending');
-    expect(r.e.sqlite.prepare('SELECT error FROM proposals WHERE id=1').get()?.error).toMatch(/did not return screening questions/);
+  it('sends and can boost when the live preview omits screening questions', async () => {
+    const r = await sender({ omitQuestions: true, score: 90, boost: 2 });
+    expect(r.confirms).toBe(1);
+    expect(r.boostBids).toEqual([2]);
+    expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
   });
-  it('invalidates answers when question content changes without a count change', async () => {
+  it('answers changed screening questions and still sends', async () => {
     const r = await sender({ questions: ['New question'], answers: [{ question: 'Old question', answer: 'Old answer' }] });
-    expect(r.confirms).toBe(0); expect(r.row?.status).toBe('pending');
+    expect(r.confirms).toBe(1);
+    expect(r.row?.status).toBe('submitted');
+  });
+  it('boosts when the match score was not stored', async () => {
+    const r = await sender({ omitQuestions: true, boost: 2 });
+    expect(r.confirms).toBe(1);
+    expect(r.boostBids).toEqual([2]);
+    expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
   });
   it('keeps an unrecognized confirm response unknown', async () => {
     const r = await sender({ response: { processing: true } }); expect(r.confirms).toBe(1); expect(r.row?.status).toBe('unknown');

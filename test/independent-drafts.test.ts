@@ -198,7 +198,7 @@ it('keeps the previous Upwork writer when the flag is off', async () => {
   expect(client).toHaveBeenCalled();
 });
 
-it('holds a live question mismatch in Review and does not confirm', async () => {
+it('answers a live question mismatch and confirms', async () => {
   vi.useFakeTimers();
   const e = { ...env(), INDEPENDENT_DRAFTS: 'true', ANTHROPIC_API_KEY: 'synthetic' };
   await ready(e, 'auto');
@@ -231,17 +231,14 @@ it('holds a live question mismatch in Review and does not confirm', async () => 
       if (name === 'find_jobs') data = { connects_cost: 8, connects_balance: 40, can_apply: true, applied: false };
       if (name === 'list_freelancer_proposals') data = { invitations: [] };
       if (name === 'manage_proposals') data = { preview_id: 'synthetic-preview', connects_cost: 8, can_apply: true, questions: ['A different live question'] };
-      if (name === 'confirm_preview') confirms++;
+      if (name === 'confirm_preview') { confirms++; data = { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: 'synthetic', error: null } } }; }
       result = { structuredContent: data };
     }
     return new Response(m.id === undefined ? null : JSON.stringify({ jsonrpc: '2.0', id: m.id, result }), { status: m.id === undefined ? 202 : 200, headers: { 'content-type': 'application/json' } });
   });
   await finishPipeline(runSender(e));
-  expect(confirms).toBe(0);
-  expect(e.sqlite.prepare('SELECT status, approved_at, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_at: null, approved_via: null });
-  await finishPipeline(runSender(e));
-  expect(confirms).toBe(0);
-  expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'pending', approved_via: null });
+  expect(confirms).toBe(1);
+  expect(e.sqlite.prepare('SELECT status FROM proposals').get()?.status).toBe('submitted');
 });
 
 const heldJobId = '2118988132749471492';

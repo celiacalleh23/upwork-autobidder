@@ -91,7 +91,8 @@ export function readBoost(b: unknown): BoostInfo | null {
 // boostInAuto is the persisted legacy name of the shared boosting switch.
 export function boostBid(score: number | null, b: BoostInfo | null, s: Settings, left: number | null): number | null {
   const c = s.caps;
-  if (!c.boostInAuto || score === null || score < c.boostMinScore) return null;
+  // A missing score is not a reason to skip. A score that was actually computed still has to clear the threshold.
+  if (!c.boostInAuto || (score !== null && score < c.boostMinScore)) return null;
   if (!b || !b.available || b.skip || b.recommended === null) return null;
   const bid = Math.max(1, Math.ceil(b.recommended));
   if (bid > c.boostMaxConnects || (b.max !== null && bid > b.max)) return null;
@@ -103,8 +104,7 @@ export function boostBid(score: number | null, b: BoostInfo | null, s: Settings,
 export function boostSkipReason(score: number | null, b: BoostInfo | null, s: Settings, left: number | null): string | null {
   const c = s.caps;
   if (!c.boostInAuto) return 'boosting_disabled';
-  if (score === null) return 'missing_score';
-  if (score < c.boostMinScore) return 'score_below_minimum';
+  if (score !== null && score < c.boostMinScore) return 'score_below_minimum';
   if (!b) return 'upwork_boost_metadata_missing';
   if (!b.available) return 'upwork_boost_not_available';
   if (b.skip) return 'upwork_recommends_skip';
