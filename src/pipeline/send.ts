@@ -6,7 +6,10 @@ import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
+import { answerQuestions, type JobForClaude } from '../claude';
 import { checkAnswers, checkLetter, metaLanguageIn, resolveSendBid, type Answer } from './letter';
+import { loadTrackRecord, profileForClaude } from './profile';
+import { loadSnapshot } from './snapshot';
 import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
@@ -140,12 +143,29 @@ async function holdForReview(env: Env, id: number, message: string, summary: Sen
   return summary;
 }
 
-function screeningHold(questions: string[] | null, answers: Answer[]): string | null {
-  if (questions === null) return 'Upwork did not return screening questions. Nothing was sent.';
-  if (checkAnswers(questions, answers) || questions.some((q, i) => answers[i]?.question !== q)) {
-    return `Upwork now shows ${questions.length} screening question(s); review the answers and approve again`;
+function questionsDiffer(questions: string[] | null, answers: Answer[]): boolean {
+  if (!questions?.length) return false;
+  return !!checkAnswers(questions, answers) || questions.some((q, i) => answers[i]?.question !== q);
+}
+
+// The preview the sender already requested is where the question list arrives. A missing or empty list means there
+// are no questions. A real list is answered here and attached by rebuilding that same preview, not by a new read.
+async function answerLiveQuestions(env: Env, row: Row, questions: string[], s: Settings): Promise<Answer[] | null> {
+  const snap = await loadSnapshot(env, row.job_id);
+  const job: JobForClaude = {
+    title: row.title, jobType: row.job_type, budget: null, country: null,
+    description: snap?.normalized.description ?? '', clientFeedbackNames: [],
+  };
+  const profile = profileForClaude(await loadTrackRecord(env), s);
+  let answers = await answerQuestions(env, profile, job, questions);
+  if (answers.length === questions.length) answers = questions.map((question, i) => ({ question, answer: answers[i]?.answer ?? '' }));
+  let bad = checkAnswers(questions, answers);
+  if (bad) {
+    answers = await answerQuestions(env, profile, job, questions, bad);
+    if (answers.length === questions.length) answers = questions.map((question, i) => ({ question, answer: answers[i]?.answer ?? '' }));
+    bad = checkAnswers(questions, answers);
   }
-  return null;
+  return bad ? null : answers;
 }
 
 function storedParams(row: Row): { extra: Record<string, string>; answers: Answer[] } {
@@ -258,7 +278,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     const claimed = await env.DB.prepare("UPDATE proposals SET status = 'submitting', submitted_at = ? WHERE id = ? AND status = 'approved' AND cover_letter = ? AND bid IS ? AND create_params = ? AND approved_at IS ?").bind(sql(new Date()), row.id, row.cover_letter, row.bid, row.create_params, row.approved_at).run();
     if (!claimed.meta.changes) return summary;
 
-    const { extra, answers } = storedParams(row);
+    const { extra } = storedParams(row);
+    let { answers } = storedParams(row);
     const fixed = row.job_type === 'fixed';
     const boostKey = `boostRefused:${row.id}`;
     const boostRefusals = Number(await getKv(env, boostKey) ?? 0);
@@ -268,8 +289,18 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     try {
       let p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra, answers });
       if (cannotApply(p.canApply, p.connectsCost, balance) === 'closed') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: CLOSED_REASON }); return summary; }
-      const screening = screeningHold(p.questions, answers);
-      if (screening) return await holdForReview(env, row.id, screening, summary);
+      if (questionsDiffer(p.questions, answers)) {
+        const answered = await answerLiveQuestions(env, row, p.questions ?? [], s);
+        if (answered) {
+          answers = answered;
+          const params = JSON.parse(row.create_params || '{}') as Record<string, unknown>;
+          params.answers = answers;
+          params.questions_state = 'live';
+          row.create_params = JSON.stringify(params);
+          await setProposal(env, row.id, { create_params: row.create_params });
+          p = await createPreview(client, state, { jobId: row.job_id, letter: row.cover_letter, bid: row.bid, fixed, extra: p.extra, answers });
+        }
+      }
       if (p.connectsCost !== null && balance !== null && p.connectsCost > balance) {
         await setProposal(env, row.id, { status: 'approved', submitted_at: null }); summary.note = `Waiting for Connects: balance ${balance}, this job costs ${p.connectsCost}.`;
         await holdRetries(env); return summary;
@@ -300,8 +331,6 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       }
       previewId = p.previewId;
       finalCost = p.connectsCost;
-      const finalScreening = screeningHold(p.questions, answers);
-      if (finalScreening) return await holdForReview(env, row.id, finalScreening, summary);
       const violation = cannotApply(p.canApply, p.connectsCost, balance) ? 'The final preview is not eligible.'
         : connectsOverLimit(p.connectsCost, s)
         ?? connectsGate(balance, p.connectsCost === null ? null : p.connectsCost + (boost ?? 0), s)

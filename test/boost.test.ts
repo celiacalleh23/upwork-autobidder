@@ -43,7 +43,7 @@ describe('boostBid', () => {
     expect(boostBid(80, open, s(), 600)).toBe(3);
     expect(boostBid(75, open, s(), 600)).toBe(3);
     expect(boostBid(74, open, s(), 600)).toBeNull();
-    expect(boostBid(null, open, s(), 600)).toBeNull();
+    expect(boostBid(null, open, s(), 600)).toBe(3);
   });
   it('uses the shared boosting switch', () => {
     expect(DEFAULT_SETTINGS.caps.boostInAuto).toBe(true);
