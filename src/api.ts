@@ -16,6 +16,7 @@ import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
+import { displayNote } from './pipeline/proposalNote';
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
@@ -39,10 +40,20 @@ interface ProposalRow {
 const answersOf = (s: string | null): { question: string; answer: string }[] => {
   try { const v = JSON.parse(s ?? '{}').answers; return Array.isArray(v) ? v.map((x) => ({ question: String(x.question), answer: String(x.answer) })) : []; } catch { return []; }
 };
+const draftFields = (s: string | null): { bidBasis: string | null; missing: string[] } => {
+  try {
+    const v = JSON.parse(s ?? '{}') as { bid_basis?: unknown; missing?: unknown };
+    return {
+      bidBasis: typeof v.bid_basis === 'string' ? v.bid_basis : null,
+      missing: Array.isArray(v.missing) ? v.missing.filter((item): item is string => typeof item === 'string') : [],
+    };
+  } catch { return { bidBasis: null, missing: [] }; }
+};
 const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
   ...r,
   analysis: parseAnalysis(analysis),
   answers: answersOf(create_params),
+  ...(() => { const note = displayNote({ error: r.error, status: r.status, ...draftFields(create_params) }); return { note: note.text, note_error: note.error }; })(),
   keywords: safeList(r.keywords),
   is_example: r.is_example === 1,
   created_at: toIso(r.created_at),
