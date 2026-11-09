@@ -3,7 +3,8 @@ import type { Env, Mode, State } from '../settings';
 
 // Check eligibility every minute in Auto; the persisted random wait controls actual sending.
 // Review retains its five-minute checks. Discovery scheduling is independent.
-export const sendDue = (minute: number, mode: Mode) => mode === 'auto' || minute % 5 === 0;
+// Review normally checks every five minutes. A proposal a person just approved is due on the next minute.
+export const sendDue = (minute: number, mode: Mode, manualWaiting = false) => mode === 'auto' || manualWaiting || minute % 5 === 0;
 
 // Called under the sender lease. Anchor one random interval to the last confirmed send,
 // so retries, deployments and repeated cron deliveries never redraw or shorten it.

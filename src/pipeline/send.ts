@@ -184,18 +184,25 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     const at = `${latest.at.replace(' ', 'T')}Z`;
     if (!state.lastSendAt || Date.parse(at) > Date.parse(state.lastSendAt)) state.lastSendAt = at;
   }
-  const gate = sendGate(state, s, await countSent(env, s)) ?? await autoSendWait(env, state);
+  const fixedOk = s.fixedPriceTermsAcknowledged ? 1 : 0;
+  const manualRow = await env.DB.prepare(
+    `SELECT p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at, p.approved_at, p.approved_via
+     FROM proposals p WHERE p.status = 'approved' AND p.approved_via = 'dashboard' AND p.is_example = 0
+     AND (p.job_type IS NOT 'fixed' OR ? = 1) ORDER BY p.approved_at ASC LIMIT 1`,
+  ).bind(fixedOk).first<Row>();
+  const counts = await countSent(env, s);
+  // A clicked Approve skips the random 3–9 minute Auto spacing and the configured gap. Caps and active hours still apply.
+  const gate = manualRow ? sendGate(state, s, counts, new Date(), true) : sendGate(state, s, counts) ?? await autoSendWait(env, state);
   const hasUnknown = await env.DB.prepare("SELECT 1 FROM proposals WHERE status = 'unknown' LIMIT 1").first();
   if (gate && !(hasUnknown && s.sendingEnabled && !state.paused && state.upwork.connected)) { await setNote(env, gate); return null; }
 
-  const fixedOk = s.fixedPriceTermsAcknowledged ? 1 : 0;
   // Review: the closest match first. Auto: the newest job first, since speed after posting matters most (Siv, Oct 27).
   const order = state.mode === 'auto' ? 'j.posted_at DESC, p.created_at DESC' : 'p.score DESC, p.created_at ASC';
-  const row = gate ? null : await env.DB.prepare(
+  const row = manualRow ?? (gate ? null : await env.DB.prepare(
     `SELECT p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at, p.approved_at, p.approved_via
      FROM proposals p LEFT JOIN jobs j ON j.id = p.job_id
      WHERE p.status = 'approved' AND p.is_example = 0 AND (p.job_type IS NOT 'fixed' OR ? = 1) ORDER BY ${order} LIMIT 1`,
-  ).bind(fixedOk).first<Row>();
+  ).bind(fixedOk).first<Row>());
   if (!gate && !row) {
     const fixedWaiting = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'approved' AND job_type = 'fixed'").first<{ n: number }>();
     await setNote(env, fixedWaiting?.n ? `${fixedWaiting.n} fixed-price proposal(s) wait for the Upwork terms acknowledgement (Settings → Sending).` : 'Nothing approved to send.');
@@ -331,7 +338,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     // This attempt is claimed but has not been transmitted; exclude its own reservation.
     counts.sentToday = Math.max(0, counts.sentToday - 1);
     counts.sentLastHour = Math.max(0, counts.sentLastHour - 1);
-    const blocked = sendGate(current, settings, counts) ?? await autoSendWait(env, current)
+    const manual = row.approved_via === 'dashboard';
+    const blocked = (manual ? sendGate(current, settings, counts, new Date(), true) : sendGate(current, settings, counts) ?? await autoSendWait(env, current))
       ?? (current.controlsVersion !== state.controlsVersion ? 'Controls changed while preparing this send.' : null)
       ?? (JSON.stringify(settings) !== JSON.stringify(s) ? 'Settings changed while preparing this send.' : null)
       ?? (current.mode === 'review' && row.approved_via !== 'dashboard' ? 'Manual approval is required in Review mode.' : null);

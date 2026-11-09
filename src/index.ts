@@ -223,7 +223,11 @@ export default {
     )`).run();
     if (event.cron === SEND_CRON) {
       if (discoveryDue(minute)) await runScan(env, event.scheduledTime).catch(log('Upwork discovery'));
-      if (!sendDue(minute, (await loadState(env)).mode)) return;
+      const mode = (await loadState(env)).mode;
+      const manualWaiting = mode !== 'auto' && minute % 5 !== 0
+        ? !!(await env.DB.prepare("SELECT 1 AS n FROM proposals WHERE status = 'approved' AND approved_via = 'dashboard' AND is_example = 0 LIMIT 1").first())
+        : false;
+      if (!sendDue(minute, mode, manualWaiting)) return;
       await runSender(env).catch(log('sender'));
     } else if (event.cron === WRITE_CRON) {
       await drainApify(env).catch(log('Apify import'));

@@ -8,14 +8,15 @@ import { findKey } from '../oauth';
 export interface SendCounts { sentToday: number; sentLastHour: number }
 
 // Why the sender must wait right now, or null when it may send. Connects and the job itself are checked later, live.
-export function sendGate(state: State, s: Settings, counts: SendCounts, now = new Date()): string | null {
+export function sendGate(state: State, s: Settings, counts: SendCounts, now = new Date(), manual = false): string | null {
   if (!s.sendingEnabled) return 'Sending is off (Settings → Sending).';
   if (state.paused) return `Paused: ${state.pausedReason ?? 'from the dashboard'}`;
   if (!state.upwork.connected) return 'Upwork is not connected.';
   if (!isActiveNow(s.caps.activeStart, s.caps.activeEnd, s.caps.timezone, now)) return `Outside active hours (${s.caps.activeStart}–${s.caps.activeEnd}).`;
   if (s.caps.daily > 0 && counts.sentToday >= s.caps.daily) return `Daily cap reached (${s.caps.daily}).`;
   if (s.caps.hourly > 0 && counts.sentLastHour >= s.caps.hourly) return `Hourly cap reached (${s.caps.hourly}).`;
-  if (state.lastSendAt) {
+  // The configured gap spaces automatic sends. A person who clicked Approve is not held for it.
+  if (!manual && state.lastSendAt) {
     const wait = s.caps.gapMinutes * 60_000 - (now.getTime() - Date.parse(state.lastSendAt));
     // 30 s slack: the sender runs on the minute (every 5 minutes in Review) and a 5-minute gap should not skip a run.
     if (wait > 0) return `Next proposal in ${Math.ceil(wait / 60_000)} min (${s.caps.gapMinutes} min apart).`;
