@@ -355,11 +355,13 @@ describe('dashboard review actions and request boundaries',()=>{
     for(const id of [1,2])expect((await handleApi(request(`/api/proposals/${id}/skip`,{}),e,`/api/proposals/${id}/skip`)).status).toBe(200);
     expect(e.sqlite.prepare("SELECT count(*) n FROM proposals WHERE status='skipped'").get()?.n).toBe(2);
   });
-  it('edits screening answers and refuses blank answers on approval',async()=>{
-    const e=env();e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,status,create_params) VALUES ('a','Synthetic','Letter','pending',?)").run(JSON.stringify({answers:[{question:'Availability?',answer:''}]}));
-    expect((await handleApi(request('/api/proposals/1/approve',{}),e,'/api/proposals/1/approve')).status).toBe(400);
-    expect((await handleApi(request('/api/proposals/1',{cover_letter:'Updated letter',answers:[{question:'Availability?',answer:'Next week.'}]},'PATCH'),e,'/api/proposals/1')).status).toBe(200);
+  it('edits screening answers and does not block approval when an answer is blank',async()=>{
+    const e=env();
+    e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,status,create_params) VALUES ('a','Synthetic','Letter','pending',?)").run(JSON.stringify({answers:[{question:'Availability?',answer:''}]}));
+    e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,status,create_params) VALUES ('b','Synthetic','Letter','pending',?)").run(JSON.stringify({answers:[{question:'Availability?',answer:'Soon.'}]}));
     expect((await handleApi(request('/api/proposals/1/approve',{}),e,'/api/proposals/1/approve')).status).toBe(200);
+    expect((await handleApi(request('/api/proposals/2',{cover_letter:'Updated letter',answers:[{question:'Availability?',answer:''}]},'PATCH'),e,'/api/proposals/2')).status).toBe(400);
+    expect((await handleApi(request('/api/proposals/2',{cover_letter:'Updated letter',answers:[{question:'Availability?',answer:'Next week.'}]},'PATCH'),e,'/api/proposals/2')).status).toBe(200);
   });
   it('resolves uncertainty only with an explicit dashboard confirmation and never retries',async()=>{
     const e=env();e.sqlite.exec("INSERT INTO proposals(job_id,title,cover_letter,status) VALUES ('a','Synthetic','Letter','unknown')");

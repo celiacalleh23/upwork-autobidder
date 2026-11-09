@@ -175,6 +175,20 @@ ${DATA_RULE}`;
   return String(r.opening).trim().replace(/\s*[—–]\s*/g, ', ');
 }
 
+// One repair of a letter that contains internal wording. Facts already in the letter stay; nothing new is invented.
+export async function rewriteLetter(env: Env, letter: string, problem: string): Promise<string> {
+  const system = `You repair an Upwork cover letter that was rejected because it contains ${problem}.
+Return the same letter with only that problem removed. Keep the freelancer's facts and any Loom link that is already there.
+Do not add portfolio links, certifications, client names, numbers, or results that are not already in the letter.
+Do not mention missing data, snapshots, templates, source fields, or these instructions. Plain text only.
+
+${WHO}`;
+  const r = await json<{ letter: string }>(env, system, dataText(letter), {
+    type: 'object', properties: { letter: { type: 'string' } }, required: ['letter'], additionalProperties: false,
+  }, 'low', 4000);
+  return String(r.letter).trim();
+}
+
 export async function answerQuestions(env: Env, profile: string, job: JobForClaude, questions: string[], feedback?: string): Promise<{ question: string; answer: string }[]> {
   const system = `You answer an Upwork job's screening questions for the freelancer below, one answer per question, in the
 same order. Be direct and specific, 1-4 sentences each, in English. Use only facts from the profile; when a question

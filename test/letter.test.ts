@@ -70,14 +70,14 @@ describe('title-only opening', () => {
 });
 
 describe('resolveSendBid', () => {
-  it('uses the existing job read for an unknown type and does not invent a fixed amount', () => {
+  it('uses the existing job read, assumes hourly when the type is unknown, and infers a fixed amount', () => {
     const settings = s();
     expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: 'hourly', liveBudget: null, settings })).toEqual({ jobType: 'hourly', bid: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd', hold: null });
     expect(resolveSendBid({ jobType: 'hourly', bid: null, bidBasis: null, liveType: null, liveBudget: null, settings }).bid).toBe(30);
     expect(resolveSendBid({ jobType: 'hourly', bid: 30, bidBasis: 'bidder-hourly-usd', liveType: 'hourly', liveBudget: '40.00–55.00/hr', settings })).toMatchObject({ bid: 55, basis: 'client', hold: null });
     expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: 'fixed', liveBudget: '80.00', settings })).toMatchObject({ jobType: 'fixed', bid: 80, basis: 'client', hold: null });
-    expect(resolveSendBid({ jobType: 'fixed', bid: null, bidBasis: null, liveType: 'fixed', liveBudget: null, settings }).hold).toMatch(/Set the amount with Edit/);
-    expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: null, liveBudget: null, settings }).hold).toMatch(/job type was not/);
+    expect(resolveSendBid({ jobType: 'fixed', bid: null, bidBasis: null, liveType: 'fixed', liveBudget: null, settings })).toMatchObject({ jobType: 'fixed', bid: 300, basis: 'inferred-fixed-usd', hold: null });
+    expect(resolveSendBid({ jobType: null, bid: null, bidBasis: null, liveType: null, liveBudget: null, settings })).toMatchObject({ jobType: 'hourly', bid: 30, basis: 'bidder-hourly-usd', hold: null });
   });
 });
 

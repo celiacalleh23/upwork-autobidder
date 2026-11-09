@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS proposals (
   error TEXT,
   is_example INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  submitted_at TEXT
+  submitted_at TEXT,
+  skipped_at TEXT,                   -- when Skip was pressed
+  skipped_by TEXT                    -- session identity, when the session names a person
 );
 CREATE INDEX IF NOT EXISTS proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS proposals_created ON proposals(created_at);
