@@ -6,7 +6,7 @@ import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
-import { answerQuestions, type JobForClaude } from '../claude';
+import { answerQuestions, rewriteLetter, type JobForClaude } from '../claude';
 import { checkAnswers, checkLetter, metaLanguageIn, resolveSendBid, type Answer } from './letter';
 import { loadTrackRecord, profileForClaude } from './profile';
 import { loadSnapshot } from './snapshot';
@@ -14,6 +14,7 @@ import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
+import { confirmProposalId, markSubmitted, recoverSubmittedRows } from './submitted';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
 // newest job first in Auto (pace.ts), only when Settings → Sending is on (Siv or Celia switch it on in the dashboard;
@@ -193,10 +194,13 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
 }
 
 async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | null> {
+  // A returned Upwork proposal id means the proposal is submitted, even if the previous run died before the status update.
+  await recoverSubmittedRows(env);
   // A run that died mid-send (Workers limit, deploy) leaves 'submitting' behind: it may have been sent, so never resend.
   await env.DB.prepare(
     `UPDATE proposals SET status = 'unknown', error = 'Interrupted while sending; checking on Upwork, not resending'
-     WHERE status = 'submitting' AND (submitted_at IS NULL OR submitted_at < datetime('now', '-15 minutes'))`,
+     WHERE status = 'submitting' AND (submitted_at IS NULL OR submitted_at < datetime('now', '-15 minutes'))
+       AND (upwork_proposal_id IS NULL OR length(trim(upwork_proposal_id)) = 0)`,
   ).run();
   const [state, s] = await Promise.all([loadState(env), loadSettings(env)]);
   const latest = await env.DB.prepare("SELECT MAX(submitted_at) AS at FROM proposals WHERE status = 'submitted' AND is_example = 0").first<{ at: string | null }>();
@@ -235,7 +239,16 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
   try {
     if (row) {
       const meta = metaLanguageIn(row.cover_letter);
-      if (meta) return await holdForReview(env, row.id, `Not sent: the letter contains ${meta}.`, summary);
+      if (meta) {
+        let cleaned: string | null = null;
+        try { cleaned = await rewriteLetter(env, row.cover_letter, meta); } catch { cleaned = null; }
+        const loom = cleaned?.replace(/https:\/\/(?:www\.)?loom\.com\/share\/\S+/g, '') ?? '';
+        if (!cleaned || metaLanguageIn(cleaned) || checkLetter(loom, null)) {
+          return await holdForReview(env, row.id, `Not sent: the letter contains ${meta}.`, summary);
+        }
+        await setProposal(env, row.id, { cover_letter: cleaned, error: null });
+        row.cover_letter = cleaned;
+      }
     }
     const client = await upworkClient(env);
     if (hasUnknown) await verifyUnknown(env, client, state);
@@ -434,7 +447,21 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       return summary;
     }
 
+    const proposalId = confirmProposalId(r);
+    if (proposalId) {
+      await markSubmitted(env, row.id, attemptAt, proposalId, finalCost, boost);
+    }
     const out = readConfirm(r);
+    if (proposalId) {
+      if (boostRefusals) await delKv(env, boostKey);
+      await clearThrottle(env);
+      summary.sent = 1; summary.note = `last proposal sent at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: s.caps.timezone })}${boost ? ` (boosted, bid ${boost} Connects)` : ''}`;
+      const after = await readBalance(client, state).catch(() => null) ?? (balance !== null && finalCost !== null ? balance - finalCost - (boost ?? 0) : null);
+      await patchState(env, { lastSendAt: new Date().toISOString(), consecutiveErrors: 0, ...(after !== null ? { connectsBalance: after } : {}) });
+      await checkConnectsAlert(env, after);
+      await env.DB.prepare("INSERT INTO runs (finished_at, submitted, note) VALUES (datetime('now'), 1, ?)").bind(summary.note).run();
+      return summary;
+    }
     if (!out.ok) {
       if (out.uncertain) {
         await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, error: 'Unrecognized confirmation result; checking, never resending.' });

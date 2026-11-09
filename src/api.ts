@@ -11,7 +11,9 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
-import { checkAnswers, contactDetailsIn, FIXED_AMOUNT_MESSAGE, metaLanguageIn, swapLoomLink } from './pipeline/letter';
+import { checkAnswers, contactDetailsIn, metaLanguageIn, swapLoomLink } from './pipeline/letter';
+import { rewriteLetter } from './claude';
+import { recoverSubmittedRows } from './pipeline/submitted';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
@@ -23,6 +25,7 @@ const fail = (message: string, status = 400) => json({ error: message }, status)
 
 const PROPOSAL_COLS = `id, job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, loom_url,
   connects, boost_connects, score, status, upwork_proposal_id, error, is_example, created_at, submitted_at, create_params, approved_at, approved_via,
+  skipped_at, skipped_by,
   (SELECT json_extract(value, '$.note') FROM kv WHERE key = 'boost:decision:' || proposals.id) AS boost_note,
   (SELECT reason FROM jobs WHERE jobs.id = proposals.job_id) AS score_reason,
   (SELECT posted_at FROM jobs WHERE jobs.id = proposals.job_id) AS posted_at,
@@ -35,6 +38,7 @@ interface ProposalRow {
   connects: number | null; boost_connects: number | null; boost_note: string | null; score: number | null; status: string; upwork_proposal_id: string | null; error: string | null;
   is_example: number; created_at: string; submitted_at: string | null; create_params: string | null; score_reason: string | null; analysis: string | null;
   posted_at: string | null; found_at: string | null; approved_at: string | null; approved_via: string | null;
+  skipped_at: string | null; skipped_by: string | null;
 }
 
 const answersOf = (s: string | null): { question: string; answer: string }[] => {
@@ -49,11 +53,13 @@ const draftFields = (s: string | null): { bidBasis: string | null; missing: stri
     };
   } catch { return { bidBasis: null, missing: [] }; }
 };
+const shownStatus = (status: string, proposalId: string | null) => proposalId && (status === 'submitting' || status === 'sending') ? 'submitted' : status;
 const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
   ...r,
+  status: shownStatus(r.status, r.upwork_proposal_id),
   analysis: parseAnalysis(analysis),
   answers: answersOf(create_params),
-  ...(() => { const note = displayNote({ error: r.error, status: r.status, ...draftFields(create_params) }); return { note: note.text, note_error: note.error }; })(),
+  ...(() => { const note = displayNote({ error: r.error, status: shownStatus(r.status, r.upwork_proposal_id), ...draftFields(create_params) }); return { note: note.text, note_error: note.error }; })(),
   keywords: safeList(r.keywords),
   is_example: r.is_example === 1,
   created_at: toIso(r.created_at),
@@ -61,6 +67,7 @@ const shape = ({ create_params, analysis, ...r }: ProposalRow) => ({
   posted_at: postedIso(r.posted_at),
   found_at: toIso(r.found_at),
   approved_at: toIso(r.approved_at),
+  skipped_at: toIso(r.skipped_at),
 });
 const safeList = (s: string | null): string[] => {
   try { const v = JSON.parse(s ?? '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
@@ -258,6 +265,7 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
     }
 
     if (path === '/api/log' && method === 'GET') {
+      await recoverSubmittedRows(env);
       const url = new URL(req.url);
       const status = url.searchParams.get('status');
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
@@ -354,15 +362,20 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
       if (method === 'POST' && action === 'approve') {
         const proposal = await env.DB.prepare("SELECT job_id, cover_letter, job_type, bid, create_params FROM proposals WHERE id = ? AND status = 'pending'").bind(id).first<{ job_id: string; cover_letter: string; job_type: string | null; bid: number | null; create_params: string }>();
         if (!proposal) return fail('This proposal is no longer waiting for review', 409);
-        const meta = metaLanguageIn(proposal.cover_letter);
-        if (meta) return fail(`The letter contains ${meta}. It was not approved.`);
-        if (proposal.job_type === 'fixed' && proposal.bid === null) return fail(FIXED_AMOUNT_MESSAGE);
-        const answers = answersOf(proposal.create_params);
-        const problem = checkAnswers(answers.map(a => a.question), answers);
-        if (problem) return fail('Review screening answers: ' + problem);
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(id, proposal.create_params).run();
+        let letter = proposal.cover_letter;
+        const meta = metaLanguageIn(letter);
+        if (meta) {
+          let cleaned: string | null = null;
+          try { cleaned = await rewriteLetter(env, letter, meta); } catch { cleaned = null; }
+          if (!cleaned || metaLanguageIn(cleaned)) return fail(`The letter contains ${meta}. It was not approved.`);
+          letter = cleaned;
+        }
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', cover_letter = ?, error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(letter, id, proposal.create_params).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
-        
+        if (ctx) {
+          const { runSender } = await import('./pipeline/send');
+          ctx.waitUntil(runSender(env).catch((e) => console.error('approve send failed', e instanceof Error ? e.message : e)));
+        }
         return json({ ok: true, status: 'approved' });
       }
       if (method === 'POST' && action === 'unapprove') {
@@ -371,7 +384,8 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
         return json({ ok: true, status: 'pending' });
       }
       if (method === 'POST' && action === 'skip') {
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'skipped' WHERE id = ? AND status IN ('pending', 'approved')").bind(id).run();
+        // The session cookie proves a signed-in dashboard user and carries no person name, so skipped_by stays empty.
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'skipped', skipped_at = datetime('now'), skipped_by = NULL WHERE id = ? AND status IN ('pending', 'approved')").bind(id).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting', 409);
         return json({ ok: true, status: 'skipped' });
       }

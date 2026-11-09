@@ -1,7 +1,7 @@
 import { acquireLease, releaseLease } from '../kv';
 import { loadSettings, type Env, type Settings } from '../settings';
 import { normalizeCountry, parseBudget, stripUntrusted } from './filters';
-import { BIDDER_HOURLY_USD, computeBid } from './letter';
+import { BIDDER_HOURLY_USD, FIXED_ESTIMATE_USD, computeBid } from './letter';
 
 export { BIDDER_HOURLY_USD };
 
@@ -320,16 +320,14 @@ export function mergeSnapshots(prev: PublicJobSnapshot | null, next: PublicJobSn
   };
 }
 
-// Listed USD is applied only by hyperbachListing. This refuses a conflict, a bad amount, and any other feed.
-export function unverifiedPriceHold(snap: PublicJobSnapshot, _s: Settings): string | null {
-  if (snap.budgetFault === 'currency-conflict' || (snap.explicitCurrency && snap.explicitCurrency !== 'USD')) return 'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.';
-  if (snap.budgetFault === 'malformed') return 'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.';
+// A blank title, a named non-USD currency, or a zero price used to stop the draft. Missing or unusable price data is filled
+// in draftBid instead, so none of those are holds.
+export function unverifiedPriceHold(_snap: PublicJobSnapshot, _s: Settings): string | null {
   return null;
 }
 
-export function snapshotHoldReason(snap: PublicJobSnapshot, s: Settings): string | null {
-  if (!snap.title) return 'Held: the saved snapshot has no job title.';
-  return unverifiedPriceHold(snap, s);
+export function snapshotHoldReason(_snap: PublicJobSnapshot, _s: Settings): string | null {
+  return null;
 }
 
 export type SubmissionGap =
@@ -342,18 +340,6 @@ export type SubmissionGap =
   | 'explicit-currency-not-usd'
   | 'applicant-count-missing'
   | 'verification-missing';
-
-const GAP_LABEL: Record<SubmissionGap, string> = {
-  'description-missing': 'job description',
-  'description-fragment': 'full job post (the stored text is only a snippet)',
-  'job-type-missing': 'job type',
-  'client-hourly-band-missing': 'client hourly rate',
-  'client-fixed-amount-missing': 'client fixed price',
-  'currency-undocumented': 'documented currency for the stated price',
-  'explicit-currency-not-usd': 'a USD client price (the feed named another currency)',
-  'applicant-count-missing': 'applicant count',
-  'verification-missing': 'client payment verification',
-};
 
 export function submissionGaps(snap: PublicJobSnapshot, s: Settings): SubmissionGap[] {
   const gaps: SubmissionGap[] = [];
@@ -371,38 +357,36 @@ export function submissionGaps(snap: PublicJobSnapshot, s: Settings): Submission
   return gaps;
 }
 
-// Missing description, band, count, verification, or currency does not stop a send. A fixed price with no amount still cannot be invented.
-export function submissionBlock(snap: PublicJobSnapshot, _s: Settings): string | null {
-  if (snap.jobType === 'fixed' && !snap.budgetText) return 'This fixed-price job has no amount. Set the amount with Edit, then approve. None was invented.';
+// Missing description, band, count, verification, currency, or amount does not stop a send.
+export function submissionBlock(_snap: PublicJobSnapshot, _s: Settings): string | null {
   return null;
 }
 
-export type DraftBasis = 'client' | 'bidder-hourly-usd' | 'unavailable';
+export type DraftBasis = 'client' | 'bidder-hourly-usd' | 'inferred-fixed-usd';
 
-// A stated client band uses the saved bid settings. A missing hourly band uses Rafa's USD 30 rate and does not relabel it as the client's.
-export function draftBid(snap: PublicJobSnapshot, s: Settings): { amount: number | null; basis: DraftBasis } {
-  if (snap.budgetFault) return { amount: null, basis: 'unavailable' };
-  const parsed = parseBudget(snap.jobType ?? undefined, snap.budgetText ?? undefined);
-  if (snap.jobType === 'hourly' && parsed?.kind !== 'hourly') {
-    if (snap.explicitCurrency && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
-    return { amount: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd' };
-  }
-  if (snap.explicitCurrency && snap.explicitCurrency !== 'USD') return { amount: null, basis: 'unavailable' };
-  if (snap.jobType === 'fixed' && !(parsed?.kind === 'fixed' && parsed.amount > 0)) return { amount: null, basis: 'unavailable' };
-  if (!snap.jobType) return { amount: null, basis: 'unavailable' };
-  const amount = computeBid(snap.jobType, snap.budgetText, s);
-  return amount === null ? { amount: null, basis: 'unavailable' } : { amount, basis: 'client' };
+function priceUnusable(snap: PublicJobSnapshot): boolean {
+  return snap.budgetFault === 'malformed' || snap.budgetFault === 'currency-conflict' || (!!snap.explicitCurrency && snap.explicitCurrency !== 'USD');
 }
 
-export function draftReviewNote(base: string, gaps: SubmissionGap[], basis: DraftBasis): string {
-  const extra: string[] = [];
-  if (basis === 'bidder-hourly-usd') extra.push(`Bid USD ${BIDDER_HOURLY_USD}/hour is Rafa's rate because the client stated no hourly rate. It is not the client's budget.`);
-  if (basis === 'unavailable' && gaps.includes('client-fixed-amount-missing')) extra.push('No fixed price was stated, and none was invented.');
-  if (basis === 'unavailable' && gaps.includes('job-type-missing')) extra.push('No job type was stated, so no hourly rate and no fixed price were assumed.');
-  if (basis === 'unavailable' && gaps.includes('explicit-currency-not-usd')) extra.push('The feed named a non-USD currency and no usable rate, so USD 30 was not applied.');
-  if (basis === 'client' && gaps.includes('currency-undocumented')) extra.push('The feed did not name a currency. The stated number is the bid.');
-  if (gaps.length) extra.push(`Still blank in the source: ${gaps.map((gap) => GAP_LABEL[gap]).join('; ')}. Approving still sends with the data saved here.${basis === 'bidder-hourly-usd' || gaps.includes('client-hourly-band-missing') ? ` An hourly job with no client rate uses Rafa's USD ${BIDDER_HOURLY_USD}/hour.` : ''}`);
-  return [base, ...extra].filter(Boolean).join(' ');
+// A stated USD band uses the saved bid settings. Anything else is filled here: hourly or unknown type at Rafa's
+// USD 30/hr, fixed-price with no usable amount at ten hours of that rate. The foreign or zero number is not relabeled as USD.
+export function draftBid(snap: PublicJobSnapshot, s: Settings): { amount: number; basis: DraftBasis } {
+  if (!priceUnusable(snap)) {
+    if (snap.jobType === 'fixed') {
+      const amount = computeBid('fixed', snap.budgetText, s);
+      if (amount !== null) return { amount, basis: 'client' };
+    } else if (snap.jobType === 'hourly' || /\/hr\b/i.test(snap.budgetText ?? '')) {
+      const amount = computeBid('hourly', snap.budgetText, s);
+      if (amount !== null) return { amount, basis: 'client' };
+    }
+  }
+  if (snap.jobType === 'fixed') return { amount: FIXED_ESTIMATE_USD, basis: 'inferred-fixed-usd' };
+  return { amount: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd' };
+}
+
+// Informational gaps are not shown. The dashboard renders a note only for a real failure.
+export function draftReviewNote(_base: string, _gaps: SubmissionGap[], _basis: DraftBasis): string {
+  return '';
 }
 
 // Older rows stored a blank price as malformed. A blank field is missing data; zero and other bad values stay malformed.
@@ -419,11 +403,13 @@ export function relaxBlankMalformed(snap: PublicJobSnapshot, rawPayload: string,
 
 const DRAFTABLE_HELD = new Set([
   'Held: the saved snapshot has no job description.',
+  'Held: the saved snapshot has no job title.',
   'Held: client payment verification was not in the saved snapshot.',
   'Held: the current proposal count was not in the saved snapshot.',
   'Held: no bid can be computed from the saved snapshot. No budget or rate was stated.',
   'Held: the feed price was zero, blank, or not a single positive amount. Nothing is drafted or sent.',
   'Held: the feed price was zero or not a single positive amount. Nothing is drafted or sent.',
+  'Held: the feed named a different currency. It was not replaced with USD. Nothing is drafted or sent.',
 ]);
 
 export function heldReasonCanDraft(reason: string | null): boolean {

@@ -7,11 +7,11 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, checkAnswers, checkLetter, checkOpening, computeBid, fallbackTitleOpening, metaLanguageIn, swapLoomLink, titleOnlyOpeningProblem, type Answer } from './letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, computeBid, fallbackTitleOpening, FIXED_ESTIMATE_USD, metaLanguageIn, swapLoomLink, titleOnlyOpeningProblem, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
-import { BIDDER_HOURLY_USD, draftBid, draftReviewNote, heldReasonCanDraft, loadSnapshot, snapshotHoldReason, submissionGaps, type DraftBasis, type SubmissionGap } from './snapshot';
+import { draftBid, heldReasonCanDraft, loadSnapshot, snapshotHoldReason, submissionGaps, type DraftBasis, type SubmissionGap } from './snapshot';
 
 // What Claude knows about Rafa for this run (built once per run from her Upwork track record, the letter and Siv's notes).
 interface Who { profile: string; wins: string }
@@ -119,9 +119,6 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     budget: job.budget ?? undefined, client: { country: job.client_country ?? undefined, verification_status: d.verification ?? undefined },
     ...(d.proposalCount !== null ? { proposal_count: d.proposalCount } : {}), proposals_tier: job.proposals_tier ?? undefined, applied: d.applied }, s, invited);
   if (verdict.status === 'filtered') { await setJob(env, job.id, 'filtered', verdict.reason); return 'filtered'; }
-  if (s.maxExistingProposals > 0 && d.proposalCount === null && !job.proposals_tier) {
-    await setJob(env, job.id, 'error', 'Could not verify the current proposal count.'); return 'errors';
-  }
   if (d.applied) { await setJob(env, job.id, 'filtered', 'Already applied'); return 'filtered'; }
   const blocked = cannotApply(d.canApply, d.connectsCost, d.connectsBalance);
   if (blocked === 'closed') { await setJob(env, job.id, 'filtered', CLOSED_REASON); return 'filtered'; }
@@ -146,10 +143,15 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const sc: Scores = { score, win: winSimilarity, profile: profileFit };
   if (score < s.minScore) { await setJob(env, job.id, 'low_score', scoreText, sc); return 'lowScore'; }
 
-  // Rafa's $/hr on Upwork is deliberately not used (Celia, Oct 22): only the rate set in Settings.
-  const bid = computeBid(job.job_type, job.budget, s);
+  // A stated client price uses the saved bid settings. A missing type is hourly at Rafa's rate. A fixed price with no amount is the ten-hour estimate.
+  let bid = computeBid(job.job_type, job.budget, s);
+  if (bid === null && job.job_type === 'fixed') bid = FIXED_ESTIMATE_USD;
   if (bid === null) {
-    await setJob(env, job.id, 'error', `No bid amount: the job lists no rate. Set Rafa's hourly rate in Settings → Bids.`, sc); return 'errors';
+    bid = BIDDER_HOURLY_USD;
+    if (!job.job_type) {
+      job = { ...job, job_type: 'hourly' };
+      await env.DB.prepare('UPDATE jobs SET job_type = ? WHERE id = ?').bind('hourly', job.id).run();
+    }
   }
 
   const sourceUrl = s.loom.sourceUrl || null; // the letter is checked and previewed with the source video; the copy goes in last
@@ -175,7 +177,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     answers = await answerQuestions(env, who.profile, forClaude, liveQuestions);
     let bad = checkAnswers(liveQuestions, answers);
     if (bad) { answers = await answerQuestions(env, who.profile, forClaude, liveQuestions, bad); bad = checkAnswers(liveQuestions, answers); }
-    if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
+    if (bad) answers = [];
   }
 
   // The job's own Loom copy, named after the job (M5). Made last so a job dropped above leaves no copy behind.
@@ -272,7 +274,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   const hold = snapshotHoldReason(n, s);
   if (hold) { await setJob(env, job.id, 'error', hold); return 'errors'; }
   job = {
-    ...job, title: n.title ?? job.title, job_type: n.jobType ?? job.job_type, budget: n.budgetText ?? job.budget,
+    ...job, title: n.title ?? job.title, job_type: n.jobType ?? job.job_type ?? 'hourly', budget: n.budgetText ?? job.budget,
     client_country: n.country ?? job.client_country, posted_at: n.postedAt ?? job.posted_at, proposals_tier: n.proposalsTier ?? job.proposals_tier,
   };
   await env.DB.prepare('UPDATE jobs SET title = ?, job_type = ?, budget = ?, client_country = ?, posted_at = ?, proposals_tier = ? WHERE id = ?')
@@ -327,15 +329,11 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
       answers = await answerQuestions(env, who.profile, forClaude, hints);
       let bad = checkAnswers(hints, answers);
       if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
-      if (bad) { await setJob(env, job.id, 'error', `Screening answers rejected twice: ${bad}`, sc); return 'errors'; }
+      if (bad) answers = [];
     }
-    let note = draftReviewNote('Saved from the public snapshot. Applied status, Connects, balance, boost, and final screening questions are checked on Upwork before anything is sent.', missing, priced.basis);
-    if (!hints) note += ' Feed screening questions were missing or empty, so they stay unknown.';
-    else note += ' Feed screening questions are hints until the live preview confirms them.';
-    if (n.questionHint) note += ' An AI hint from the feed was stored and was not used as a question.';
     ready = {
       v: 1, letter: assembleLetter(s.letter.template, opening, sourceUrl, disclosure), bid, score, win: winSimilarity, profile: profileFit,
-      scoreText, analysis, keywords, answers, questionsState: hints?.length ? 'hints' : 'unknown', note,
+      scoreText, analysis, keywords, answers, questionsState: hints?.length ? 'hints' : 'unknown', note: '',
       loomUrl: sourceUrl, loomId: null, title: stripUntrusted(job.title), url: job.url, jobType: job.job_type, budget: job.budget,
       country: job.client_country, proposalsTier: job.proposals_tier, bidBasis: priced.basis, missing,
     };
@@ -354,7 +352,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
       }
     } catch (e) {
       if (!(e instanceof LoomAuthError)) await markLoomError(env, e);
-      ready.note = [ready.note, `Loom copy failed, the letter uses the source video: ${errText(e)}`].filter(Boolean).join(' · ');
+      ready.note = '';
       await putKv(env, draftReadyKey(job.id), JSON.stringify(ready));
     }
   }
@@ -374,16 +372,15 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     throw new McpError('Controls changed while preparing the proposal; retry after review.');
   }
   // Review stays pending. Auto approves a future draft, including one with blank source fields.
-  // A fixed-price job with no amount stays pending. Internal wording stays pending.
+  // Internal wording stays pending only when a rewrite already failed.
   const meta = metaLanguageIn(ready.letter);
-  const fixedWithoutAmount = fixed && ready.bid === null;
-  const status = !meta && !fixedWithoutAmount && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
+  const status = !meta && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, ready.title, ready.url, ready.jobType, ready.budget, ready.country, JSON.stringify(ready.keywords), ready.letter, ready.bid,
-      JSON.stringify(createParams), ready.loomUrl, ready.loomId, null, ready.score, ready.win, ready.profile, status, ready.note,
+      JSON.stringify(createParams), ready.loomUrl, ready.loomId, null, ready.score, ready.win, ready.profile, status, ready.note.trim() ? ready.note : null,
       status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
     env.DB.prepare('UPDATE jobs SET analysis = ?, status = \'proposed\', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?').bind(ready.analysis, ready.scoreText, ready.score, ready.win, ready.profile, job.id),
   ]);

@@ -56,6 +56,7 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['proposals', 'loom_deleted_at', 'TEXT'],
   ['proposals', 'approved_at', 'TEXT'], ['proposals', 'approved_via', 'TEXT'],
   ['proposals', 'boost_connects', 'INTEGER'],
+  ['proposals', 'skipped_at', 'TEXT'], ['proposals', 'skipped_by', 'TEXT'],
   ['jobs', 'skills', 'TEXT'],
 ];
 

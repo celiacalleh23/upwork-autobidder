@@ -6,6 +6,8 @@ import { parseBudget, stripUntrusted } from './filters';
 export const MAX_LETTER = 5000;
 // Rafa's own hourly rate. Used only when an hourly job has no client band. Never stored as the client budget.
 export const BIDDER_HOURLY_USD = 30;
+// A fixed-price post with no usable amount is bid as ten hours of that rate. It is an estimate, not a client budget.
+export const FIXED_ESTIMATE_USD = BIDDER_HOURLY_USD * 10;
 export const MAX_OPENING = 300; // one sentence (Siv, Oct 27)
 export const MAX_OPENING_SENTENCES = 1;
 
@@ -122,7 +124,8 @@ export function checkLetter(letter: string, loomUrl: string | null): string | nu
 
 export const FIXED_AMOUNT_MESSAGE = 'This fixed-price job has no amount. Set the amount with Edit, then approve. None was invented.';
 
-// The sender already reads contract terms. This only chooses the bid from that read and the saved draft.
+// The sender already reads contract terms. A missing type is hourly at Rafa's rate. A fixed price with no usable
+// amount uses the ten-hour estimate. Neither case holds the send.
 export function resolveSendBid(input: {
   jobType: string | null;
   bid: number | null;
@@ -130,8 +133,8 @@ export function resolveSendBid(input: {
   liveType: 'fixed' | 'hourly' | null;
   liveBudget: string | null;
   settings: Settings;
-}): { jobType: string | null; bid: number | null; basis: 'stored' | 'client' | 'bidder-hourly-usd'; hold: string | null } {
-  const jobType = input.jobType === 'fixed' || input.jobType === 'hourly' ? input.jobType : input.liveType;
+}): { jobType: 'fixed' | 'hourly'; bid: number; basis: 'stored' | 'client' | 'bidder-hourly-usd' | 'inferred-fixed-usd'; hold: null } {
+  const jobType = input.jobType === 'fixed' || input.jobType === 'hourly' ? input.jobType : (input.liveType ?? 'hourly');
   if (jobType === 'hourly') {
     const live = parseBudget('hourly', input.liveBudget ?? undefined);
     const liveClient = live?.kind === 'hourly' ? computeBid('hourly', input.liveBudget, input.settings) : null;
@@ -140,13 +143,10 @@ export function resolveSendBid(input: {
     if (input.bid != null) return { jobType, bid: input.bid, basis: 'bidder-hourly-usd', hold: null };
     return { jobType, bid: BIDDER_HOURLY_USD, basis: 'bidder-hourly-usd', hold: null };
   }
-  if (jobType === 'fixed') {
-    if (input.bid != null) return { jobType, bid: input.bid, basis: 'stored', hold: null };
-    const live = parseBudget('fixed', input.liveBudget ?? undefined);
-    if (live?.kind === 'fixed' && live.amount > 0) return { jobType, bid: live.amount, basis: 'client', hold: null };
-    return { jobType, bid: null, basis: 'stored', hold: FIXED_AMOUNT_MESSAGE };
-  }
-  return { jobType: null, bid: input.bid, basis: 'stored', hold: 'Not sent: the job type was not in the saved snapshot or the job read. No rate was assumed.' };
+  if (input.bid != null) return { jobType, bid: input.bid, basis: 'stored', hold: null };
+  const live = parseBudget('fixed', input.liveBudget ?? undefined);
+  if (live?.kind === 'fixed' && live.amount > 0) return { jobType, bid: live.amount, basis: 'client', hold: null };
+  return { jobType, bid: FIXED_ESTIMATE_USD, basis: 'inferred-fixed-usd', hold: null };
 }
 
 export interface Answer { question: string; answer: string }
