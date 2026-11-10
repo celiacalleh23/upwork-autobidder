@@ -11,7 +11,7 @@ import { runSender } from '../src/pipeline/send';
 import { autoSendWait } from '../src/pipeline/pace';
 import { sendGate } from '../src/pipeline/sendRules';
 import { displayNote } from '../src/pipeline/proposalNote';
-import { recoverSubmittedRows, requeueNeverConfirmed } from '../src/pipeline/submitted';
+import { STALL_NOTE, recoverSubmittedRows, requeueNeverConfirmed } from '../src/pipeline/submitted';
 import { BIDDER_HOURLY_USD, FIXED_ESTIMATE_USD, NATURAL_SCREENING_ANSWER, cleanScreeningAnswer, resolveSendBid } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, DEFAULT_STATE, patchState, saveSettings, type Env } from '../src/settings';
 import { environment } from './support/db';
@@ -335,6 +335,56 @@ it('a screening answer that says it cannot paste links is replaced with a natura
   const params = JSON.parse(String(e.sqlite.prepare('SELECT create_params FROM proposals').get()?.create_params)) as { answers: { answer: string }[] };
   expect(params.answers[0].answer).toBe(NATURAL_SCREENING_ANSWER);
   expect(params.answers[0].answer).not.toMatch(/paste links/i);
+});
+
+it('a stalled pre-preview send is retried automatically and submits', async () => {
+  const e = env();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  s.caps.gapMinutes = 10;
+  s.caps.boostInAuto = false;
+  await saveSettings(e, s);
+  await connected(e);
+  await patchState(e, { lastSendAt: new Date().toISOString() });
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, submitted_at)
+    VALUES ('2119920699600682101', 'Stalled Klaviyo send', 'Hi there, the letter is ready for this Klaviyo job.', 30, 'hourly', 'submitting', 'dashboard', '2026-11-10 00:25:25', '2026-11-10 00:25:48')`).run();
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at)
+    VALUES ('2119920699600682102', 'Later manual send', 'Hi there, the letter is ready for this Klaviyo job.', 30, 'hourly', 'approved', 'dashboard', '2026-11-10 14:00:00')`).run();
+  await putKv(e, 'send:stall:1', JSON.stringify({ open: true, n: 0 }));
+  const sent = await sendApproved(e, { questions: [] });
+  expect(sent.confirms).toBe(1);
+  expect(e.sqlite.prepare('SELECT status, upwork_proposal_id FROM proposals WHERE id = 1').get()).toMatchObject({ status: 'submitted' });
+  expect(e.sqlite.prepare('SELECT status FROM proposals WHERE id = 2').get()?.status).toBe('approved');
+});
+
+it('pre-preview retries are bounded and then show a short neutral note', async () => {
+  const e = env();
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, status, approved_via, approved_at, submitted_at)
+    VALUES ('2119920699600682103', 'Stalled Klaviyo send', 'Hi there, the letter is ready for this Klaviyo job.', 'submitting', 'dashboard', '2026-11-10 00:25:25', '2026-11-10 00:25:48')`).run();
+  await putKv(e, 'send:stall:1', JSON.stringify({ open: true, n: 2 }));
+  await runSender(e);
+  const row = e.sqlite.prepare('SELECT status, approved_via, error FROM proposals').get() as { status: string; approved_via: string | null; error: string };
+  expect(row).toMatchObject({ status: 'pending', approved_via: null, error: STALL_NOTE });
+  expect(displayNote({ error: row.error, status: row.status })).toEqual({ text: STALL_NOTE, error: false });
+});
+
+it('a possibly-sent attempt is not blindly resent', async () => {
+  const e = env();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.sendingEnabled = true;
+  s.caps.activeStart = s.caps.activeEnd = '00:00';
+  s.caps.boostInAuto = false;
+  await saveSettings(e, s);
+  await connected(e);
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, submitted_at, preview_id)
+    VALUES ('2119920699600682104', 'Maybe sent', 'Hi there, the letter is ready for this Klaviyo job.', 30, 'hourly', 'submitting', 'dashboard', '2026-11-10 00:25:25', datetime('now'), 'preview-already')`).run();
+  await putKv(e, 'send:stall:1', JSON.stringify({ open: true, n: 0 }));
+  const sent = await sendApproved(e, { questions: [] });
+  expect(sent.confirms).toBe(0);
+  expect(e.sqlite.prepare('SELECT status, preview_id, upwork_proposal_id FROM proposals').get()).toMatchObject({
+    status: 'submitting', preview_id: 'preview-already', upwork_proposal_id: null,
+  });
 });
 
 it('recovers a Sending row directly when it already has an Upwork proposal id', async () => {

@@ -169,6 +169,7 @@ td .err{display:block; font-size:12.5px; color:var(--bad-fg); margin-top:3px}
 .note{border-radius:8px; padding:12px 14px; font-size:14px; background:var(--warn-bg); color:var(--warn-fg)}
 .card .note, .st-cell .note{background:transparent; padding:0; border-radius:0}
 .card .note.bad, .st-cell .note.bad{color:var(--bad-fg)}
+.card .note.neutral, .st-cell .note.neutral{color:var(--muted); background:transparent}
 .note.info{background:var(--info-bg); color:var(--info-fg)}
 .why{display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:6px 18px; background:var(--bg); border:1px solid var(--line-soft); border-radius:10px; padding:10px 14px; font-size:13.5px}
 .why h4{margin:0 0 4px; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted)}
@@ -766,7 +767,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       letterBox, editWrap,
       p.answers && p.answers.length ? h('details', { class: 'small' }, h('summary', { text: `Screening answers (${p.answers.length})` }),
         ...p.answers.map((a) => h('p', { style: 'margin:8px 0 0' }, h('b', { text: a.question }), h('br'), a.answer))) : null,
-      p.note && p.note_error ? h('p', { class: 'small note bad', style: 'margin:0', text: p.note }) : null,
+      p.note ? h('p', { class: p.note_error ? 'small note bad' : 'small note neutral', style: 'margin:0', text: p.note }) : null,
       h('div', { class: 'card-foot' },
         h('div', { class: 'loom' },
           h('span', { 'aria-hidden': 'true', text: '▶' }),
@@ -823,7 +824,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }),
         r.boost_connects ? h('span', { class: 'chip pink', title: 'Boosted: Upwork charges the bid only if the proposal lands in a paid spot', text: `Boosted · ${r.boost_connects} Connects` }) : null,
         !r.boost_connects && r.boost_note && !/missing/i.test(r.boost_note) ? h('span', { class: 'small muted', text: `Not boosted: ${r.boost_note}` }) : null,
-        r.note && r.note_error ? h('span', { class: 'note bad', text: r.note }) : null,
+        r.note ? h('span', { class: r.note_error ? 'note bad' : 'note neutral', text: r.note }) : null,
         r.approved_at && via ? h('span', { class: 'sub-time', style: 'flex-basis:100%', text: `approved ${when(r.approved_at)} ${via}` }) : null,
         r.status === 'skipped' && r.skipped_at ? h('span', { class: 'sub-time', style: 'flex-basis:100%', text: skippedLine(r.skipped_at, r.skipped_by) }) : null);
       if (r.status === 'unknown') {

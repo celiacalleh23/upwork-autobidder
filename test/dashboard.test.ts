@@ -11,8 +11,8 @@ describe('dashboard.html ids', () => {
     expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
   });
   it('shows a note only for a real failure and never an amber missing note', () => {
-    expect(html).toContain("p.note && p.note_error ? h('p', { class: 'small note bad'");
-    expect(html).toContain("r.note && r.note_error ? h('span', { class: 'note bad'");
+    expect(html).toContain("p.note_error ? 'small note bad' : 'small note neutral'");
+    expect(html).toContain("r.note_error ? 'note bad' : 'note neutral'");
     expect(html).toContain('.card .note, .st-cell .note{background:transparent');
     expect(html).not.toContain('note quiet');
     expect(html).not.toContain('shownNote');

@@ -14,7 +14,7 @@ import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
-import { confirmProposalId, markSubmitted, recoverSubmittedRows, requeueNeverConfirmed } from './submitted';
+import { clearStall, confirmProposalId, markStallOpen, markSubmitted, recoverSubmittedRows, requeueNeverConfirmed } from './submitted';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
 // newest job first in Auto (pace.ts), only when Settings → Sending is on (Siv or Celia switch it on in the dashboard;
@@ -238,6 +238,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
   if (held && !hasUnknown) return null; // the note from the last try stays
   const summary: SendSummary = { sent: 0, note: gate ?? (row ? null : 'Nothing approved to send.') };
   let confirmAttempted = false;
+  let stallId: number | null = null;
+  let previewStored = false;
   try {
     if (row) {
       const meta = metaLanguageIn(row.cover_letter);
@@ -259,6 +261,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     // An unclear attempt remains reserved until it is reconciled or explicitly resolved.
     const unclear = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'unknown'").first<{ n: number }>();
     if (unclear?.n) { summary.note = `Checking ${unclear.n} unclear send(s) on Upwork before sending more.`; return summary; }
+    await markStallOpen(env, row.id);
+    stallId = row.id;
 
     const balance = await readBalance(client, state);
     if (balance !== null) await patchState(env, { connectsBalance: balance });
@@ -402,6 +406,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       summary.note = blocked ?? 'Proposal needs review again.'; return summary;
     }
     const attemptAt = sql(new Date());
+    previewStored = true;
+    await clearStall(env, row.id);
     await env.DB.prepare("UPDATE proposals SET connects = ?, boost_connects = ?, preview_id = ? WHERE id = ? AND status = 'submitting'")
       .bind(finalCost, boost, previewId, row.id).run();
     const attemptKey = `send:attempt:${crypto.randomUUID()}`;
@@ -522,6 +528,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     }
     return summary;
   } finally {
+    if (stallId !== null && !previewStored) await clearStall(env, stallId);
     await setNote(env, summary.note);
   }
 }
