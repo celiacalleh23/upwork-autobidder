@@ -84,7 +84,7 @@ export interface State {
     lastError: string | null;
     checkedAt: string | null;
   };
-  loom: { connected: boolean; lastError: string | null; checkedAt: string | null; expiresAt: string | null }; // expiresAt: the session cookie's, when Loom sends it
+  loom: { connected: boolean; lastError: string | null; checkedAt: string | null; expiresAt: string | null; renewedAt?: string | null }; // expiresAt: the session cookie's, when Loom sends it
   lastRun: RunSummary | null;
   trackRecordSyncedAt: string | null;
   lastSendAt: string | null;
@@ -151,7 +151,7 @@ export const DEFAULT_STATE: State = {
   lastScanAt: null,
   consecutiveErrors: 0,
   upwork: { connected: false, account: null, orgUid: null, toolNames: {}, lastError: null, checkedAt: null },
-  loom: { connected: false, lastError: null, checkedAt: null, expiresAt: null },
+  loom: { connected: false, lastError: null, checkedAt: null, expiresAt: null, renewedAt: null },
   lastRun: null,
   trackRecordSyncedAt: null,
   lastSendAt: null,
