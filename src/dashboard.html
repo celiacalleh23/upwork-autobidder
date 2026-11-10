@@ -793,7 +793,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       approveBtn.disabled = skipBtn.disabled = editBtn.disabled = true;
       try {
         await api(`/api/proposals/${p.id}/approve`, { method: 'POST' });
-        el.remove(); toast('Approved. Sending now.');
+        el.remove(); toast('Approved. It sends on the next check.');
         refresh();
       } catch (e) { toast(e.message, true); approveBtn.disabled = skipBtn.disabled = editBtn.disabled = false; }
     });

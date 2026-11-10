@@ -364,11 +364,11 @@ describe('dashboard review actions and request boundaries',()=>{
     expect((await handleApi(request('/api/proposals/2',{cover_letter:'Updated letter',answers:[{question:'Availability?',answer:'Next week.'}]},'PATCH'),e,'/api/proposals/2')).status).toBe(200);
   });
   it('resolves uncertainty only with an explicit dashboard confirmation and never retries',async()=>{
-    const e=env();e.sqlite.exec("INSERT INTO proposals(job_id,title,cover_letter,status) VALUES ('a','Synthetic','Letter','unknown')");
+    const e=env();e.sqlite.exec("INSERT INTO proposals(job_id,title,cover_letter,status,preview_id) VALUES ('a','Synthetic','Letter','unknown','preview-1')");
     const path='/api/proposals/1/resolve-unknown';
     expect((await handleApi(request(path,{outcome:'not_sent'}),e,path)).status).toBe(400);
     expect((await handleApi(request(path,{outcome:'not_sent',confirm:true}),e,path)).status).toBe(200);
-    expect(e.sqlite.prepare('SELECT status FROM proposals').get()?.status).toBe('failed');
+    expect(e.sqlite.prepare('SELECT status, error FROM proposals').get()).toMatchObject({ status: 'failed', error: 'Manually checked on Upwork: not sent. No automatic retry.' });
   });
   it('rejects an oversized webhook without relying on Content-Length',async()=>{
     const e={...env(),APIFY_WEBHOOK_SECRET:'synthetic-secret-with-32-characters'};

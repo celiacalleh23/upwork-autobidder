@@ -150,12 +150,28 @@ export function resolveSendBid(input: {
 }
 
 export interface Answer { question: string; answer: string }
+
+// The model sometimes explains its own limits ("I can't paste links here"). That is internal wording, not an answer.
+const ANSWER_META = /can(?:not|'t|’t)\s+paste\s+links|paste links here|i can(?:not|'t|’t)\s+paste\b/i;
+export const NATURAL_SCREENING_ANSWER = 'I can share examples of that work on a call or in a message.';
+
+export function screeningAnswerProblem(answer: string): string | null {
+  if (metaLanguageIn(answer) || ANSWER_META.test(answer)) return 'internal wording';
+  return null;
+}
+
+export function cleanScreeningAnswer(answer: string): string {
+  const text = answer.trim();
+  return text && screeningAnswerProblem(text) ? NATURAL_SCREENING_ANSWER : text;
+}
+
 export function checkAnswers(questions: string[], answers: Answer[]): string | null {
   if (answers.length !== questions.length) return `expected ${questions.length} answers, got ${answers.length}`;
   for (const a of answers) {
     const t = a.answer.trim();
     if (!t) return 'an answer is empty';
     if (t.length > 2000) return 'an answer is longer than 2,000 characters';
+    if (screeningAnswerProblem(t)) return 'an answer contains internal wording';
     const p = problemsInWritten(t);
     if (p) return `an answer contains ${p}`;
   }

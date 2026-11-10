@@ -307,6 +307,17 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
       if (action === 'resolve-unknown' && method === 'POST') {
         const body = await readJson(req);
         if (body.confirm !== true || !['submitted', 'not_sent'].includes(String(body.outcome))) return fail('Check the proposal on Upwork first, then explicitly confirm its outcome');
+        if (body.outcome === 'not_sent') {
+          const open = await env.DB.prepare("SELECT preview_id, upwork_proposal_id, approved_via FROM proposals WHERE id = ? AND status = 'unknown'")
+            .bind(id).first<{ preview_id: string | null; upwork_proposal_id: string | null; approved_via: string | null }>();
+          if (!open) return fail('This proposal is no longer awaiting verification', 409);
+          if (!open.preview_id && !open.upwork_proposal_id) {
+            const via = open.approved_via || 'dashboard';
+            const restored = await env.DB.prepare("UPDATE proposals SET status = 'approved', submitted_at = NULL, error = NULL, approved_via = ?, approved_at = COALESCE(approved_at, datetime('now')) WHERE id = ? AND status = 'unknown'")
+              .bind(via, id).run();
+            return restored.meta.changes ? json({ ok: true, status: 'approved' }) : fail('This proposal is no longer awaiting verification', 409);
+          }
+        }
         const status = body.outcome === 'submitted' ? 'submitted' : 'failed';
         const reference = body.proposalId === undefined ? null : String(body.proposalId).slice(0, 100);
         const r = await env.DB.prepare("UPDATE proposals SET status = ?, upwork_proposal_id = COALESCE(?, upwork_proposal_id), submitted_at = COALESCE(submitted_at, datetime('now')), error = ? WHERE id = ? AND status = 'unknown'")
@@ -372,10 +383,8 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
         }
         const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', cover_letter = ?, error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(letter, id, proposal.create_params).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
-        if (ctx) {
-          const { runSender } = await import('./pipeline/send');
-          ctx.waitUntil(runSender(env).catch((e) => console.error('approve send failed', e instanceof Error ? e.message : e)));
-        }
+        // The sender runs on the cron. Starting it from this request gets cancelled after the response, which can
+        // leave the row claimed as sending before a preview exists.
         return json({ ok: true, status: 'approved' });
       }
       if (method === 'POST' && action === 'unapprove') {

@@ -7,7 +7,7 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, computeBid, fallbackTitleOpening, FIXED_ESTIMATE_USD, metaLanguageIn, swapLoomLink, titleOnlyOpeningProblem, type Answer } from './letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, fallbackTitleOpening, FIXED_ESTIMATE_USD, metaLanguageIn, swapLoomLink, titleOnlyOpeningProblem, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
@@ -177,7 +177,8 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     answers = await answerQuestions(env, who.profile, forClaude, liveQuestions);
     let bad = checkAnswers(liveQuestions, answers);
     if (bad) { answers = await answerQuestions(env, who.profile, forClaude, liveQuestions, bad); bad = checkAnswers(liveQuestions, answers); }
-    if (bad) answers = [];
+    answers = answers.map((answer) => ({ ...answer, answer: cleanScreeningAnswer(answer.answer) }));
+    if (checkAnswers(liveQuestions, answers)) answers = [];
   }
 
   // The job's own Loom copy, named after the job (M5). Made last so a job dropped above leaves no copy behind.
@@ -329,7 +330,8 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
       answers = await answerQuestions(env, who.profile, forClaude, hints);
       let bad = checkAnswers(hints, answers);
       if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
-      if (bad) answers = [];
+      answers = answers.map((answer) => ({ ...answer, answer: cleanScreeningAnswer(answer.answer) }));
+      if (checkAnswers(hints, answers)) answers = [];
     }
     ready = {
       v: 1, letter: assembleLetter(s.letter.template, opening, sourceUrl, disclosure), bid, score, win: winSimilarity, profile: profileFit,
