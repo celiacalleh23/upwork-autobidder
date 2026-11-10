@@ -4,6 +4,8 @@ import { loadSettings, loadState, patchState, type Env } from '../settings';
 import { addJob, jobUrl } from './jobs';
 
 export const discoveryDue = (minute: number) => minute % 15 === 0;
+// Unset keeps Upwork search. Only an explicit false turns it off (Apify/manual coverage is a separate decision).
+export const upworkDiscoveryEnabled = (env: { UPWORK_DISCOVERY?: string }) => env.UPWORK_DISCOVERY !== 'false';
 export const DISCOVERY_WINDOW_MS = 60 * 60_000;
 const MAX_QUERIES = 12; // 576 base requests/day; quota guard also counts retries.
 
@@ -52,6 +54,7 @@ export async function runScan(env: Env, scheduledTime: number): Promise<void> {
 }
 
 export async function scanAccount(env: Env, scheduledTime: number, purpose: UpworkPurpose, accept = addJob): Promise<void> {
+  if (!upworkDiscoveryEnabled(env)) return;
   if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') return;
   const scope = purpose === 'scan' ? ':scan' : '';
   const key = (name: string) => `discovery:${name}${scope}`;

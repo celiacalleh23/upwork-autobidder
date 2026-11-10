@@ -611,7 +611,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     ) : [h('tr', {}, h('td', {text:'No completed runs recorded yet.'}))]));
     renderApifySync(sync);
     $('account').textContent = s.upwork.connected ? `Bidding as ${s.upwork.account || 'connected account'}` : 'Upwork not connected yet';
-    $('connects').textContent = fmtNum(s.connectsBalance);
+    $('connects').textContent = s.connectsBalanceStale && s.connectsBalance !== null ? `${fmtNum(s.connectsBalance)} before last send` : fmtNum(s.connectsBalance);
     $('modeReview').setAttribute('aria-pressed', String(s.mode === 'review'));
     $('modeAuto').setAttribute('aria-pressed', String(s.mode === 'auto'));
     $('modeText').textContent = s.mode === 'auto' ? 'Auto-submit' : 'Review first';

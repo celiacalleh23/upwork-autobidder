@@ -59,12 +59,14 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
   vi.spyOn(claude, 'answerQuestions').mockImplementation(async (_env, _profile, _job, questions: string[]) => questions.map((question) => ({ question, answer: 'I can start on this next week.' })));
   let confirms = 0;
   const boostBids: number[] = [];
+  const calls: string[] = [];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     expect(String(url)).toBe(e.UPWORK_MCP_URL);
     const m = JSON.parse(String(init.body)); let result: unknown = {};
     if (m.method === 'initialize') result = { protocolVersion: '2025-06-18' };
     if (m.method === 'tools/call') {
       const name = m.params.name; let data: unknown = {};
+      calls.push(`${name}:${m.params.arguments?.action ?? ''}`);
       if (name === 'get_freelancer_dashboard') data = { connectsBalance: opts.balance ?? 30 };
       if (name === 'find_jobs') data = { connects_cost: 8, connects_balance: 30, can_apply: true, applied: false };
       if (name === 'list_freelancer_proposals') data = m.params.arguments.action === 'invitations' ? { invitations: [] } : { proposals: [] };
@@ -82,7 +84,7 @@ async function sender(opts: { pause?: boolean; pauseDuringDispatch?: boolean; of
   });
   await finishPipeline(runSender(e));
   vi.useRealTimers();
-  return { e, confirms, boostBids, row: e.sqlite.prepare('SELECT status,connects,boost_connects FROM proposals WHERE id=1').get() };
+  return { e, confirms, boostBids, calls, row: e.sqlite.prepare('SELECT status,connects,boost_connects FROM proposals WHERE id=1').get() };
 }
 
 describe('submission boundary (mocked upstream only)', () => {
@@ -90,7 +92,12 @@ describe('submission boundary (mocked upstream only)', () => {
     const r = await sender({ score: 90, boost: 2 });
     expect(r.confirms).toBe(1);
     expect(r.boostBids).toEqual([2]);
+    expect(r.calls.filter(c => c.startsWith('get_freelancer_dashboard'))).toEqual(['get_freelancer_dashboard:check']);
+    expect(r.calls.filter(c => c.startsWith('manage_proposals'))).toHaveLength(2);
+    expect(r.calls.filter(c => c.startsWith('find_jobs'))).toHaveLength(1);
+    expect(r.calls.filter(c => c.startsWith('list_freelancer_proposals'))).toHaveLength(1);
     expect(r.row).toMatchObject({ status: 'submitted', boost_connects: 2 });
+    expect(await loadState(r.e)).toMatchObject({ connectsBalance: 30, connectsBalanceStale: true });
     expect(JSON.parse((await getKv(r.e,'boost:decision:1'))!)).toMatchObject({bid:2,reason:null,mode:'review'});
   });
   it.each([false,true])('submits the 32-Connect boost with live-style metadata, auto=%s', async autoMode => {
@@ -146,6 +153,10 @@ describe('submission boundary (mocked upstream only)', () => {
 
   it('allows a valid, manually approved proposal and records its final cost', async () => {
     const r = await sender({ cost: 9 }); expect(r.confirms).toBe(1); expect(r.row).toMatchObject({ status: 'submitted', connects: 9 });
+    expect(r.calls.filter(c => c.startsWith('get_freelancer_dashboard'))).toEqual(['get_freelancer_dashboard:check']);
+    expect(r.calls.filter(c => c.startsWith('manage_proposals'))).toHaveLength(1);
+    expect(r.calls.filter(c => c.startsWith('confirm_preview'))).toHaveLength(1);
+    expect(await loadState(r.e)).toMatchObject({ connectsBalance: 30, connectsBalanceStale: true });
     expect(r.e.sqlite.prepare("SELECT count(*) n FROM kv WHERE key LIKE 'send:attempt:%'").get()?.n).toBe(1);
   });
   it.each([{ pause: true }, { off: true }])('does not confirm after controls change: %j', async opts => {

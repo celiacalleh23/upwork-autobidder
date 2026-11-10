@@ -1,5 +1,5 @@
 import { getKv, putKv } from '../kv';
-import { findKey, upworkClient } from '../oauth';
+import { cachedToolName, findKey, upworkClient } from '../oauth';
 import { loadState, patchState, type Env, type Settings } from '../settings';
 import { stripUntrusted } from './filters';
 
@@ -47,8 +47,7 @@ export async function syncTrackRecord(env: Env): Promise<TrackRecord> {
   const tools = state.upwork.toolNames;
   if (!state.upwork.orgUid || !tools.list_accounts) throw new Error('Upwork is not connected.');
   const client = await upworkClient(env);
-  const names = await client.listTools();
-  const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
+  const profileTool = await cachedToolName(env, client, 'get_profile');
   if (!profileTool) throw new Error('Upwork profile tool not found.');
   const org = state.upwork.orgUid;
 
