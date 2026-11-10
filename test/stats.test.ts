@@ -65,6 +65,8 @@ describe('spendKind (what Connects paid for)', () => {
   it('splits boosts, Profile Boost and the Availability Badge', () => {
     expect(spendKind('Boosted proposal', true)).toBe('proposalBoosts');
     expect(spendKind('Proposal boost bid', false)).toBe('proposalBoosts');
+    expect(spendKind('Sponsored proposal auction deposit', true)).toBe('proposalBoosts');
+    expect(spendKind('Sponsored proposal auction deposit', false)).toBe('proposalBoosts');
     expect(spendKind('Boosted profile', false)).toBe('profileBoost');
     expect(spendKind('Profile ad spend', false)).toBe('profileBoost');
     expect(spendKind('Availability badge', false)).toBe('badge');

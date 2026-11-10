@@ -19,6 +19,7 @@ import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/p
 import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
 import { displayNote } from './pipeline/proposalNote';
+import { loadMonthConnects } from './pipeline/connectsReport';
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
@@ -115,6 +116,8 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
     if (method !== 'GET' && req.headers.get('x-dashboard') !== '1') return fail('Missing dashboard header', 403);
 
     if (path === '/api/state' && method === 'GET') return json(await getState(env));
+
+    if (path === '/api/connects-report' && method === 'GET') return json(await loadMonthConnects(env));
 
     if (path === '/api/apify/status' && method === 'GET') return json(await apifySyncStatus(env));
 

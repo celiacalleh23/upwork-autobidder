@@ -250,6 +250,15 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="stat"><span class="label">Failed today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals Upwork refused today, for example because the job closed or Rafa already applied. The reason is in the Activity log.">i</button></span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
     </section>
 
+    <section aria-labelledby="moH">
+      <div class="row-head"><h2 id="moH">Connects this month</h2><span class="small muted" id="moWhen"></span></div>
+      <p class="small muted" id="moNote"></p>
+      <div class="tablewrap"><table>
+        <thead><tr><th> </th><th>Charges</th><th>Connects</th><th>Value</th></tr></thead>
+        <tbody id="moBody"></tbody>
+      </table></div>
+    </section>
+
     <div class="cols">
       <section class="queue" aria-labelledby="qH">
         <div class="row-head"><h2 id="qH">Review queue</h2><span class="small muted" id="qCount"></span></div>
@@ -1268,7 +1277,30 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   }
   window.addEventListener('hashchange', route);
 
-  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs()]); }
+  function connectsValue(n) { return usd(n); }
+  async function loadConnectsMonth() {
+    const box = $('moBody');
+    if (!box) return;
+    let r;
+    try { r = await api('/api/connects-report'); }
+    catch (e) { $('moNote').textContent = e.message; return; }
+    $('moWhen').textContent = r.month;
+    $('moNote').textContent = `From proposals submitted this month and the Connects history already saved here. Total subtracts refunds. Boost bids are the amounts placed with those proposals. Upwork records a boost as a Sponsored proposal auction deposit and may refund part of it. Deposits in the saved history this month: ${fmtNum(r.auctionDeposits.charges)} charges, ${fmtNum(r.auctionDeposits.connects)} Connects.`;
+    const row = (label, line) => h('tr', {},
+      h('td', { text: label }),
+      h('td', { class: 'mono', text: fmtNum(line.charges) }),
+      h('td', { class: 'mono', text: fmtNum(line.connects) }),
+      h('td', { class: 'mono', text: connectsValue(line.connects) }));
+    box.replaceChildren(
+      row('Proposals', r.proposals),
+      row('Proposal boosts', r.boosts),
+      row('Refunds', r.refunds),
+      row('Connects received', r.received),
+      h('tr', {}, h('td', {}, h('b', { text: 'Total' })), h('td', { class: 'mono', text: fmtNum(r.total.charges) }),
+        h('td', { class: 'mono' }, h('b', { text: fmtNum(r.total.connects) })),
+        h('td', { class: 'mono' }, h('b', { text: connectsValue(r.total.connects) }))));
+  }
+  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs(), loadConnectsMonth()]); }
   route(); refresh();
   setInterval(() => { if (!document.hidden) { if (location.hash === '#settings') loadState(); else refresh(); } }, 60000);
 })();

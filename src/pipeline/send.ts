@@ -447,12 +447,12 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
         return summary;
       }
       if (kind === 'throttle') {
-        await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, error: 'Rate limit during confirmation; checking Upwork before any retry.' });
+        await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, boost_connects: boost, error: 'Rate limit during confirmation; checking Upwork before any retry.' });
         await noteThrottle(env, 'sending', errText(e));
         summary.note = 'Upwork asked to slow down; sending again next round.'; return summary;
       }
       if (kind === 'warning') {
-        await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, error: 'Account warning during confirmation; checking Upwork before any retry.' });
+        await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, boost_connects: boost, error: 'Account warning during confirmation; checking Upwork before any retry.' });
         await pauseForWarning(env, 'sending', errText(e));
         summary.note = 'Paused: Upwork account warning.'; return summary;
       }
@@ -480,7 +480,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     }
     if (!out.ok) {
       if (out.uncertain) {
-        await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, error: 'Unrecognized confirmation result; checking, never resending.' });
+        await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, boost_connects: boost, error: 'Unrecognized confirmation result; checking, never resending.' });
         summary.note = 'Checking an unclear confirmation on Upwork.'; return summary;
       }
       // Upwork answered and said no: nothing was sent.

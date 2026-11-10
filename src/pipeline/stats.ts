@@ -79,7 +79,8 @@ export interface Spend { n: number; spent: number; refunded: number }
 // is not confirmed yet, so the patterns are broad and anything unrecognised is counted as "other", never dropped.
 export function spendKind(reason: string, hasJob: boolean): SpendKind {
   const r = reason.toLowerCase();
-  const boost = /boost|\bbid\b/.test(r);
+  // Upwork records a boost as "Sponsored proposal auction deposit", not as a boost.
+  const boost = /boost|\bbid\b|auction|sponsored proposal/.test(r);
   // Tied to a job: the application or its boost (a refund "job no longer available" must not read as the badge).
   if (hasJob || /proposal/.test(r)) return boost ? 'proposalBoosts' : 'applications';
   if (/availab|badge|\bpib\b/.test(r)) return 'badge';
