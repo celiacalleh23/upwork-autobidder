@@ -5,10 +5,9 @@ import { findKey, upworkClient } from '../oauth';
 import { loadState, type Env } from '../settings';
 import { heldByUpwork, paced } from '../upworkPace';
 
-// Rafa's Upwork account at a glance: proposals by status for a period, how many clients viewed them, contracts,
-// completed jobs, and Connects spent by kind (proposals, proposal boosts, Profile Boost, Availability Badge; Siv, Oct 27).
-// Read on demand from the dashboard and by itself twice a day (Celia, Oct 29), read-only, in small steps; capped counts
-// are shown as "N+".
+// Rafa's account tab is computed from this app's own records for the selected period: proposals submitted here
+// (connects, boost_connects) and the Connects history already saved (refunds, received). It does not call Upwork.
+// Profile Boost, the Availability Badge, client views, offers, hires and contracts are not stored.
 
 // The period to read (Celia, Oct 29: today, yesterday, last 7 days and a custom range besides 30 / 90 / 365 days).
 // Calendar days follow the Settings time zone. `to` is exclusive.
@@ -267,6 +266,81 @@ export function summarizeLedger(rows: { kind: string; type: string; n: number; a
   return { byKind, received, spent: kinds.reduce((t, k) => t + k.spent, 0), refunded: kinds.reduce((t, k) => t + k.refunded, 0) };
 }
 
+// One row of the account tab. `recorded: false` means this app does not store that figure (shown as 0, never as an Upwork read).
+export interface AccountLine { charges: number; connects: number; recorded: boolean }
+
+export interface LocalAccount {
+  source: 'records';
+  at: string;
+  range: { key: RangeKey; label: string; from: string; to: string };
+  proposalsSent: number;
+  applications: AccountLine;
+  boosts: AccountLine;
+  profileBoost: AccountLine;
+  badge: AccountLine;
+  refunds: AccountLine;
+  received: AccountLine;
+  total: AccountLine;
+  balance: number | null;
+  viewed: null;
+}
+
+export interface AccountProposal { connects: number | null; boostConnects: number | null }
+export interface AccountLedger { type: string; amount: number }
+
+const line = (charges: number, connects: number, recorded = true): AccountLine => ({ charges, connects, recorded });
+
+// Applications are the Connects recorded on submitted proposals. Boosts are the bids recorded on those same proposals.
+// Total is applications plus boosts. Refunds and Connects received come from the saved history and are not folded in.
+// An auction deposit in the history is not the boost row: Upwork records a bid that way, and may refund only part of it.
+export function buildLocalAccount(proposals: AccountProposal[], ledger: AccountLedger[]): Pick<LocalAccount, 'proposalsSent' | 'applications' | 'boosts' | 'profileBoost' | 'badge' | 'refunds' | 'received' | 'total' | 'viewed'> {
+  const connects = proposals.reduce((t, p) => t + (Number(p.connects) || 0), 0);
+  const boosted = proposals.filter((p) => (Number(p.boostConnects) || 0) > 0);
+  const boosts = boosted.reduce((t, p) => t + (Number(p.boostConnects) || 0), 0);
+  const refunds = ledger.filter((r) => r.type === 'refunded');
+  const received = ledger.filter((r) => r.type === 'received');
+  return {
+    proposalsSent: proposals.length,
+    applications: line(proposals.length, connects),
+    boosts: line(boosted.length, boosts),
+    profileBoost: line(0, 0, false),
+    badge: line(0, 0, false),
+    refunds: line(refunds.length, refunds.reduce((t, r) => t + (Number(r.amount) || 0), 0)),
+    received: line(received.length, received.reduce((t, r) => t + (Number(r.amount) || 0), 0)),
+    total: line(proposals.length + boosted.length, connects + boosts),
+    viewed: null,
+  };
+}
+
+const sqlStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+
+export async function loadLocalAccount(env: Env, range: Range, now = Date.now()): Promise<LocalAccount> {
+  const fromSql = sqlStamp(range.from);
+  const toSql = sqlStamp(range.to);
+  const [props, ledger, state] = await Promise.all([
+    env.DB.prepare(
+      `SELECT COALESCE(connects, 0) AS connects, COALESCE(boost_connects, 0) AS boost_connects
+       FROM proposals WHERE status = 'submitted' AND is_example = 0
+         AND replace(replace(submitted_at, 'T', ' '), 'Z', '') >= ?
+         AND replace(replace(submitted_at, 'T', ' '), 'Z', '') < ?`,
+    ).bind(fromSql, toSql).all<{ connects: number; boost_connects: number }>(),
+    env.DB.prepare(
+      `SELECT type, amount FROM connects_ledger WHERE at >= ? AND at < ?`,
+    ).bind(new Date(range.from).toISOString(), new Date(range.to).toISOString()).all<{ type: string; amount: number }>(),
+    loadState(env),
+  ]);
+  return {
+    source: 'records',
+    at: new Date(now).toISOString(),
+    range: { key: range.key, label: range.label, from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString() },
+    balance: state.connectsBalance,
+    ...buildLocalAccount(
+      (props.results ?? []).map((p) => ({ connects: p.connects, boostConnects: p.boost_connects })),
+      ledger.results ?? [],
+    ),
+  };
+}
+
 async function ledgerConnects(env: Env, from: number, to: number, balance: number | null): Promise<AccountStats['connects']> {
   const { results } = await env.DB.prepare(
     'SELECT kind, type, COUNT(*) AS n, SUM(amount) AS amt FROM connects_ledger WHERE at >= ? AND at < ? GROUP BY kind, type',
@@ -397,29 +471,21 @@ async function refreshStatsLocked(env: Env, range: Range, resume: boolean, slot:
   return { stats, done, phase: prog.phase };
 }
 
-// Upkeep cron (every 5 minutes): Rafa's account refreshes by itself twice a day (Celia, Oct 29), one step per run, and
-// the Connects history catches up on its first read, two slow pages per run. Nothing here touches bidding.
-const AUTO_EVERY_MS = 12 * 3600_000;
-export async function accountUpkeep(env: Env, tz: string, now = Date.now()): Promise<void> {
+// The account tab no longer reads Upwork. While the saved Connects history is still catching up, upkeep reads only
+// new ledger pages (refunds and Connects received). It does not refresh proposal counts, boosts, or the tab.
+export async function accountUpkeep(env: Env, _tz: string, now = Date.now()): Promise<void> {
   const state = await loadState(env);
   if (!state.upwork.connected || !state.upwork.orgUid || !state.upwork.toolNames.list_freelancer_proposals || heldByUpwork(state)) return;
   const sync = await loadLedgerSync(env);
-  if (!sync.complete || sync.cursor !== null) {
-    const lease = await acquireLease(env, 'ledger', 5 * 60_000);
-    if (lease) {
-      try {
-        const client = await upworkClient(env);
-        const names = await client.listTools();
-        const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
-        if (profileTool) await syncLedger(env, client, profileTool, state.upwork.orgUid, 2, now);
-      } finally { await releaseLease(env, 'ledger', lease); }
-    }
-    return; // one Upwork task per upkeep run
-  }
-  const last = Number(await getKv(env, 'account_stats:autoAt')) || 0;
-  if (now - last < AUTO_EVERY_MS) return;
-  const r = await refreshAccountStats(env, resolveRange({ range: '30' }, tz, now), true, 'auto');
-  if (r.done) await putKv(env, 'account_stats:autoAt', String(now));
+  if (sync.complete && sync.cursor === null) return;
+  const lease = await acquireLease(env, 'ledger', 5 * 60_000);
+  if (!lease) return;
+  try {
+    const client = await upworkClient(env);
+    const names = await client.listTools();
+    const profileTool = names.find((n) => n === 'get_profile' || n.endsWith('__get_profile'));
+    if (profileTool) await syncLedger(env, client, profileTool, state.upwork.orgUid, 2, now);
+  } finally { await releaseLease(env, 'ledger', lease); }
 }
 
 export async function loadAccountStats(env: Env): Promise<AccountStats | null> {

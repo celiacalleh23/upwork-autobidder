@@ -351,9 +351,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
           <label class="small muted" for="acctDays">Period</label>
           <select id="acctDays"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option><option value="custom">Custom range…</option></select>
           <span id="acctCustom" class="tools" hidden><label class="small muted" for="acctFrom">From</label><input type="date" id="acctFrom"><label class="small muted" for="acctTo">to</label><input type="date" id="acctTo"></span>
-          <button type="button" class="btn outline" id="acctRefresh">Refresh from Upwork</button></div>
+          <button type="button" class="btn outline" id="acctRefresh">Recalculate</button></div>
       </div>
-      <div id="acctBody"><p class="small muted">Not read yet. Pick a period and press Refresh to read it from Upwork (read-only).</p></div>
+      <div id="acctBody"><p class="small muted">Loading figures from this app's records…</p></div>
     </section>
   </div>
 
@@ -949,81 +949,51 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && tipEl) { const b = tipFor; closeTip(); b && b.focus(); } });
   window.addEventListener('resize', closeTip);
 
-  // ---------- Rafa's Upwork account ----------
-  const cnt = (c) => `${fmtNum(c.n)}${c.capped ? '+' : ''}`;
-  const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
-  function renderAccount(st, partial) {
+  // ---------- Rafa's account, from this app's records ----------
+  const dash = '–';
+  function renderAccount(st) {
     if (!st) return;
-    const period = st.range ? st.range.label.toLowerCase() : `last ${st.windowDays} days`;
-    $('acctWhen').textContent = partial ? `· ${period} · counting…` : `· ${period} · read ${ago(st.at)} · refreshes by itself twice a day`;
-    if (!partial) {
-      $('acctDays').value = st.range ? st.range.key : String(st.windowDays);
-      showCustom();
-    }
-    const P = st.proposals;
-    const sentKeys = ['Accepted', 'Pending', 'Declined', 'Withdrawn', 'Archived', 'Offered', 'Hired'];
-    const sent = sentKeys.reduce((t, k) => t + P[k].n, 0);
-    const capped = sentKeys.some((k) => P[k].capped);
-    const viewed = sentKeys.reduce((t, k) => t + P[k].viewed, 0);
-    const offers = P.Offered.n + P.Hired.n;
+    $('acctWhen').textContent = `· ${st.range.label} · from this app's records`;
     const stat = (label, value, sub, tip) => h('div', { class: 'stat' }, h('span', { class: 'label' }, label, infoBtn(tip)), h('span', { class: 'value', text: value }), sub ? h('span', { class: 'sub', text: sub }) : null);
-    const labels = { Accepted: 'Submitted, open', Pending: 'Processing', Declined: 'Declined', Withdrawn: 'Withdrawn', Archived: 'Archived', Offered: 'Offer received', Hired: 'Hired', Activated: 'Invitation accepted' };
-    const tips = {
-      Accepted: 'Sent and still open: the client has not hired, declined or closed the job yet.',
-      Pending: 'Upwork is still processing the proposal.',
-      Declined: 'The client declined the proposal.',
-      Withdrawn: 'Rafa withdrew the proposal.',
-      Archived: 'Moved to the archive by Upwork, usually because the job was filled or closed, or after a long time with no reply.',
-      Offered: 'The client sent Rafa an offer.',
-      Hired: 'The client hired Rafa.',
-      Activated: 'Proposals sent in reply to a client invitation.',
-    };
-    // replaceChildren would print a null child as the text "null"; drop optional parts that are absent.
-    $('acctBody').replaceChildren(...[
+    const moneyRow = (label, tip, line, strong) => h('tr', {},
+      h('td', {}, strong ? h('b', { text: label }) : label, infoBtn(tip), line.recorded ? null : h('span', { class: 'sub-time', text: 'not recorded' })),
+      h('td', { class: 'mono' }, strong ? h('b', { text: fmtNum(line.charges) }) : fmtNum(line.charges)),
+      h('td', { class: 'mono' }, strong ? h('b', { text: fmtNum(line.connects) }) : fmtNum(line.connects)),
+      h('td', { class: 'mono' }, strong ? h('b', { text: usd(line.connects) }) : usd(line.connects)));
+    const spend = [
+      ['applications', 'Proposals', 'Sum of Connects recorded on proposals this app submitted in the period.'],
+      ['boosts', 'Proposal boosts', 'Boost Connects recorded on those proposals when they were sent. This is the bid stored here, not an auction deposit from the Connects history.'],
+      ['profileBoost', 'Profile Boost', 'Not recorded in this app.'],
+      ['badge', 'Availability Badge', 'Not recorded in this app.'],
+    ];
+    const statuses = [
+      ['Submitted', fmtNum(st.proposalsSent)],
+      ['Viewed by client', dash],
+      ['Declined', dash],
+      ['Withdrawn', dash],
+      ['Archived', dash],
+      ['Offer received', dash],
+      ['Hired', dash],
+      ['Invitation accepted', dash],
+    ];
+    $('acctBody').replaceChildren(
       h('div', { class: 'stats' },
-        stat('Connects spent', `${fmtNum(st.connects.spent - st.connects.refunded)} · ${usd(st.connects.spent - st.connects.refunded)}`, `${cnt(st.connects.applications)} applications · ${fmtNum(st.connects.refunded)} refunded`, 'Everything Rafa\'s own balance paid for in this period (proposals, boosts, Profile Boost, Availability Badge), minus refunds, read from her Connects history. The table below splits it. Proposals sent with agency Connects do not appear here.'),
-        stat('Proposals sent', `${fmtNum(sent)}${capped ? '+' : ''}`, `${pct(viewed, sent)} viewed by the client`, 'Every proposal submitted from Rafa\'s account in this period, in any status (the table below, except invitations). Viewed means the client opened it.'),
-        stat('Offers or hires', fmtNum(offers), `${pct(offers, sent)} of proposals sent`, 'Proposals that led to an offer or a hire, and what share of all proposals sent that is.'),
-        stat('Contracts', `${cnt(st.contracts.active)} active`, `${cnt(st.contracts.closed)} closed · ${st.profile.totalJobs ?? '–'} completed jobs in total`, 'Contracts on Rafa\'s account right now: active and closed. Completed jobs is her all-time total shown on her Upwork profile.'),
-        stat('Connects balance', `${fmtNum(st.connects.balance)} · ${usd(st.connects.balance)}`, `${fmtNum(st.connects.received)} received (${usd(st.connects.received)})${st.connects.applications.capped ? ' (history read in part)' : ''}`, 'Connects available now in Rafa\'s account, and their value at $0.15 each. Received counts Connects bought or granted by Upwork in this period.')),
-      spendTable(st),
-      boostersLine(st),
+        stat('Connects spent', `${fmtNum(st.total.connects)} · ${usd(st.total.connects)}`, `${fmtNum(st.applications.charges)} proposals · ${fmtNum(st.boosts.connects)} boost Connects · ${fmtNum(st.refunds.connects)} refunded`, 'Connects recorded on proposals submitted in this period, plus the boost bids recorded on those proposals, at $0.15 each. Refunds from the saved history are listed separately and are not subtracted.'),
+        stat('Proposals sent', fmtNum(st.proposalsSent), 'Client views are not recorded here', 'Proposals this app submitted in the period.'),
+        stat('Offers or hires', dash, 'Not recorded here', 'Offers and hires are not stored in this app.'),
+        stat('Contracts', dash, 'Not recorded here', 'Contracts are not stored in this app.'),
+        stat('Connects balance', st.balance === null || st.balance === undefined ? dash : `${fmtNum(st.balance)} · ${usd(st.balance)}`, `${fmtNum(st.received.connects)} received in this period (${usd(st.received.connects)})`, 'The last Connects balance stored by the app. It changes when a proposal is sent or the Upwork connection is checked. Opening this tab does not read Upwork. Received counts Connects bought or granted in this period, from the history already saved.')),
       h('div', { class: 'tablewrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', {}, 'Viewed by client', infoBtn('How many of these proposals the client opened.')))),
-        h('tbody', {}, ...Object.keys(labels).map((k) => h('tr', {}, h('td', {}, labels[k], infoBtn(tips[k])), h('td', { class: 'mono', text: cnt(P[k]) }), h('td', { class: 'mono', text: k === 'Activated' ? '–' : fmtNum(P[k].viewed) })))))),
-      st.unreadableDates ? h('p', { class: 'small', style: 'color:var(--warn-fg)', text: `${st.unreadableDates} proposal dates could not be read; they are counted as inside the period.` }) : null,
-      h('p', { class: 'small muted', text: 'All figures come straight from Upwork for this account (read-only).' })].filter(Boolean));
-  }
-  // Connects by what they paid for (Siv, Oct 27): proposals, proposal boosts, Profile Boost, Availability Badge.
-  const SPEND = [
-    ['applications', 'Proposals', 'Connects charged to apply to jobs.'],
-    ['proposalBoosts', 'Proposal boosts', 'Boost bids Upwork charged: only for proposals that landed in a paid spot on the client\'s list.'],
-    ['profileBoost', 'Profile Boost', 'Connects spent on Profile Boost ads, which show Rafa\'s profile higher in client searches.'],
-    ['badge', 'Availability Badge', 'The weekly charge for the "Available now" badge.'],
-    ['other', 'Other', 'Connects spent on something not listed above, as Upwork labels it in the history.'],
-  ];
-  function spendTable(st) {
-    const by = st.connects.byKind;
-    if (!by) return null; // figures read before Oct 27: press Refresh for the split
-    const rows = SPEND.filter(([k]) => k !== 'other' || by.other.n || by.other.refunded);
-    const net = (k) => by[k].spent - by[k].refunded;
-    const total = rows.reduce((t, [k]) => t + net(k), 0);
-    const cell = (k) => h('td', { class: 'mono' }, fmtNum(net(k)), by[k].refunded ? h('span', { class: 'sub-time', text: `${fmtNum(by[k].refunded)} refunded` }) : null);
-    const note = st.connects.readSince ? h('p', { class: 'small', style: 'color:var(--warn-fg); margin:0', text: `Still reading Rafa's older Connects history (back to ${when(st.connects.readSince)} so far); it fills in by itself over the next hours, slowly so bidding isn't held up.` }) : null;
-    return h('div', {}, note, h('div', { class: 'tablewrap' }, h('table', {},
-      h('thead', {}, h('tr', {}, h('th', {}, 'Connects spent on', infoBtn('From Rafa\'s Connects history for this period, refunds subtracted.')), h('th', { text: 'Charges' }), h('th', { text: 'Connects' }), h('th', { text: 'Value' }))),
-      h('tbody', {},
-        ...rows.map(([k, label, tip]) => h('tr', {}, h('td', {}, label, infoBtn(tip)), h('td', { class: 'mono', text: fmtNum(by[k].n) }), cell(k), h('td', { class: 'mono', text: usd(net(k)) }))),
-        h('tr', {}, h('td', {}, h('b', { text: 'Total' })), h('td', { class: 'mono', text: fmtNum(rows.reduce((t, [k]) => t + by[k].n, 0)) }),
-          h('td', { class: 'mono' }, h('b', { text: `${fmtNum(total)}${st.connects.applications.capped ? '+' : ''}` })), h('td', { class: 'mono' }, h('b', { text: usd(total) })))))));
-  }
-  function boostersLine(st) {
-    const b = st.boosters, credits = Object.entries(st.connects.adCredits || {});
-    const parts = [];
-    if (b && b.badge) parts.push(`Availability Badge: ${b.badge.active ? `on${b.badge.price !== null ? ` · ${fmtNum(b.badge.price)} Connects a week` : ''}${b.badge.renewsAt ? ` · renews ${when(b.badge.renewsAt)}` : ''}` : 'off'}`);
-    if (b) parts.push(`Profile Boost: ${b.profileBoost ? `${b.profileBoost.status.toLowerCase()}${b.profileBoost.bid !== null ? ` · bid ${fmtNum(b.profileBoost.bid)} Connects` : ''}` : 'off'}`);
-    if (credits.length) parts.push(`Ad credits (apart from Connects): ${credits.map(([k, v]) => `${k} ${fmtNum(v)}`).join(', ')}`);
-    return parts.length ? h('p', { class: 'small muted', text: `${parts.join(' · ')} (now, from Upwork)` }) : null;
+        h('thead', {}, h('tr', {}, h('th', { text: 'Connects spent on' }), h('th', { text: 'Charges' }), h('th', { text: 'Connects' }), h('th', { text: 'Value' }))),
+        h('tbody', {},
+          ...spend.map(([key, label, tip]) => moneyRow(label, tip, st[key], false)),
+          moneyRow('Total', 'Proposals plus proposal boosts. Refunds are not subtracted.', st.total, true),
+          moneyRow('Refunds', 'From the Connects history already saved for this period. Not subtracted from the total.', st.refunds, false),
+          moneyRow('Connects received', 'Connects bought or granted in this period, from the history already saved.', st.received, false)))),
+      h('div', { class: 'tablewrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', { text: 'Proposal status' }), h('th', { text: 'Count' }), h('th', {}, 'Viewed by client', infoBtn('Client views are not stored in this app.')))),
+        h('tbody', {}, ...statuses.map(([label, count]) => h('tr', {}, h('td', { text: label }), h('td', { class: 'mono', text: count }), h('td', { class: 'mono', text: dash })))))),
+      h('p', { class: 'small muted', text: "Figures come from this app's own records: proposals submitted here, and the Connects history already saved. Profile Boost, the Availability Badge, client views, offers, hires and contracts are not recorded here." }));
   }
   // Custom range: two calendar pickers, up to today.
   function showCustom() {
@@ -1035,27 +1005,28 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     if (!$('acctTo').value) $('acctTo').value = today;
     if (!$('acctFrom').value) $('acctFrom').value = new Date(Date.now() - 6 * 86400_000).toLocaleDateString('en-CA');
   }
-  $('acctDays').addEventListener('change', showCustom);
-  async function loadAccount() { try { renderAccount((await api('/api/account-stats')).stats); } catch { /* shown on refresh */ } }
-  $('acctRefresh').addEventListener('click', async (ev) => {
-    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Reading Upwork…';
-    // Upwork lists 10 proposals per page, so a full count takes several requests; keep asking until it's done.
+  let acctReq = 0;
+  async function loadAccount() {
+    const n = ++acctReq;
+    const period = new URLSearchParams({ range: $('acctDays').value, from: $('acctFrom').value, to: $('acctTo').value });
     try {
-      const period = { range: $('acctDays').value, from: $('acctFrom').value, to: $('acctTo').value };
-      let r = await api('/api/account-stats', { method: 'POST', body: { ...period, resume: true } });
-      for (let i = 0; !r.done && i < 40; i++) {
-        renderAccount(r.stats, true);
-        const so = Object.values(r.stats.proposals).reduce((t, c) => t + c.n, 0);
-        // Profile and Connects history are read slowly so bidding keeps Upwork's limit: about 10 s a call.
-        b.textContent = r.phase === 'statuses' ? `Reading Upwork… ${fmtNum(so)} proposals so far` : r.phase === 'ledger' ? 'Reading Upwork… Connects history' : 'Reading Upwork… profile';
-        r = await api('/api/account-stats', { method: 'POST', body: { ...period, resume: true } });
-      }
+      const r = await api('/api/account-stats?' + period);
+      if (n !== acctReq) return;
       renderAccount(r.stats);
-      toast(r.done ? 'Account figures updated.' : 'Upwork is slow to answer. Press Refresh again to finish counting.', !r.done);
-    } catch (e) { toast(e.message, true); }
-    b.disabled = false; b.textContent = 'Refresh from Upwork';
+    } catch (e) {
+      if (n !== acctReq) return;
+      $('acctWhen').textContent = '';
+      $('acctBody').replaceChildren(h('p', { class: 'small msg bad', role: 'alert', text: e.message }));
+    }
+  }
+  $('acctDays').addEventListener('change', () => { showCustom(); loadAccount(); });
+  $('acctFrom').addEventListener('change', loadAccount);
+  $('acctTo').addEventListener('change', loadAccount);
+  $('acctRefresh').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Recalculating…';
+    await loadAccount();
+    b.disabled = false; b.textContent = 'Recalculate';
   });
-  loadAccount();
 
   // ---------- Settings ----------
   let kw = [], ex = [], ct = [];
@@ -1303,7 +1274,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
         h('td', { class: 'mono' }, h('b', { text: fmtNum(r.total.connects) })),
         h('td', { class: 'mono' }, h('b', { text: connectsValue(r.total.connects) }))));
   }
-  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs(), loadConnectsMonth()]); }
+  async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs(), loadConnectsMonth(), loadAccount()]); }
   route(); refresh();
   setInterval(() => { if (!document.hidden) { if (location.hash === '#settings') loadState(); else refresh(); } }, 60000);
 })();
