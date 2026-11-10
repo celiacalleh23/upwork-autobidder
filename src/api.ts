@@ -16,7 +16,7 @@ import { rewriteLetter } from './claude';
 import { recoverSubmittedRows } from './pipeline/submitted';
 import { parseAnalysis } from './pipeline/analysis';
 import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/profile';
-import { loadAccountStats, refreshAccountStats, resolveRange } from './pipeline/stats';
+import { loadLocalAccount, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
 import { displayNote } from './pipeline/proposalNote';
 import { loadMonthConnects } from './pipeline/connectsReport';
@@ -215,18 +215,21 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
         return fail(e instanceof Error ? e.message : 'Could not read the Upwork profile', 502);
       }
     }
-    if (path === '/api/account-stats' && method === 'GET') return json({ stats: await loadAccountStats(env) });
-    if (path === '/api/account-stats' && method === 'POST') {
-      const state = await loadState(env);
-      if (!state.upwork.connected) return fail('Connect Upwork first', 409);
+    if (path === '/api/account-stats' && (method === 'GET' || method === 'POST')) {
       try {
-        const body = await readJson(req).catch(() => ({} as Record<string, unknown>));
-        let range;
-        try { range = resolveRange(body, (await loadSettings(env)).caps.timezone); } catch (e) { return fail(e instanceof Error ? e.message : 'Unknown period'); }
-        return json(await refreshAccountStats(env, range, body.resume === true));
+        const url = new URL(req.url);
+        const body = method === 'POST' ? await readJson(req).catch(() => ({} as Record<string, unknown>)) : {};
+        const input = {
+          range: body.range ?? url.searchParams.get('range') ?? body.days ?? url.searchParams.get('days') ?? '30',
+          from: body.from ?? url.searchParams.get('from') ?? undefined,
+          to: body.to ?? url.searchParams.get('to') ?? undefined,
+        };
+        const range = resolveRange(input, (await loadSettings(env)).caps.timezone);
+        return json({ stats: await loadLocalAccount(env, range), done: true, phase: 'records' });
       } catch (e) {
+        if (e instanceof RangeError) return fail(e.message);
         console.error('account stats failed', e instanceof Error ? e.message : e);
-        return fail(e instanceof Error ? e.message : 'Could not read the Upwork account', 502);
+        return fail(e instanceof Error ? e.message : 'Could not read the account records', 500);
       }
     }
     if (path === '/api/report/test' && method === 'POST') {

@@ -17,6 +17,10 @@ describe('dashboard.html ids', () => {
     expect(html).not.toContain('note quiet');
     expect(html).not.toContain('shownNote');
     expect(html).not.toContain('missing:');
+    expect(html).not.toContain('come straight from Upwork');
+    expect(html).not.toContain('Refresh from Upwork');
+    expect(html).toContain("Figures come from this app's own records");
+    expect(html).toContain('>Recalculate<');
   });
   it('looks up only ids that exist', () => {
     const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));

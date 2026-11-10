@@ -246,7 +246,7 @@ export default {
       await checkLoomAlert(env).catch(log('loom alert'));
       await deliverSafetyAlerts(env).catch(log('safety alerts'));
       await sendDailyReport(env).catch(log('daily report'));
-      // Rafa's account: twice a day, and the Connects history's first read, at Upwork's slow pace (last: it may wait).
+      // Connects history catch-up only. The account tab is computed from stored proposals and that history.
       await accountUpkeep(env, s.caps.timezone).catch(log('account upkeep'));
     }
   },
