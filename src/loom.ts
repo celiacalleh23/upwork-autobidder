@@ -2,7 +2,7 @@ import { seal, unseal } from './crypto';
 import { refusePreview } from './previewIsolation';
 import { emailConfigured, sendEmail } from './email';
 import { acquireLease, delKv, getKv, putKv, releaseLease } from './kv';
-import { loadSettings, loadState, patchState, reportEmails, type Env, type State } from './settings';
+import { loadSettings, loadState, loomAlertEmails, patchState, type Env, type State } from './settings';
 
 // Loom copies (M5). Loom has no public API: these are the requests loom.com itself sends, captured by Celia on Oct 22
 // (docs/loom-api.md). The session is the browser cookie pasted in Settings → Loom; it is stored encrypted and never logged.
@@ -378,7 +378,7 @@ export function loomAlert(loom: State['loom'], sentFor: string | null, now = Dat
   return null;
 }
 
-// Emails the report address once per alert; without email the dashboard shows the same warning.
+// Emails the Loom alert address once per alert. Daily reports and the Connects alert stay on the report address.
 export async function checkLoomAlert(env: Env, now = Date.now()): Promise<void> {
   const lease = await acquireLease(env, 'loom-alert', 60_000); if (!lease) return;
   try { await deliverLoomAlert(env, now); }
@@ -390,9 +390,10 @@ async function deliverLoomAlert(env: Env, now: number): Promise<void> {
   const alert = loomAlert(st.loom, st.loomAlertSentFor, now);
   if (!alert) return;
   const s = await loadSettings(env);
-  if (!emailConfigured(env) || !reportEmails(s).length) return;
-  if (emailConfigured(env) && reportEmails(s).length) {
-    try { await sendEmail(env, reportEmails(s), alert.subject, alert.text, undefined, `loom-${alert.key}`); }
+  const to = loomAlertEmails(s);
+  if (!emailConfigured(env) || !to.length) return;
+  if (emailConfigured(env) && to.length) {
+    try { await sendEmail(env, to, alert.subject, alert.text, undefined, `loom-${alert.key}`); }
     catch (e) { console.error('loom alert email failed', e instanceof Error ? e.message : e); return; } // retried next run
   }
   await patchState(env, { loomAlertSentFor: alert.key });

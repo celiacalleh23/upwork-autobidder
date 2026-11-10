@@ -41,7 +41,7 @@ export interface Settings {
   bid: { hourly: 'profile' | 'client_max'; fixed: 'client_budget' | 'budget_plus_10'; profileRate: number }; // profileRate: USD/hr, 0 = unset
   profileSummary: string; // Siv's notes about Rafa, added to her Upwork profile and cover letter for Claude
   scoreWeights: { profile: number; wins: number }; // % of the match score; they add up to 100
-  loom: { sourceUrl: string; deleteAfterDays: number };
+  loom: { sourceUrl: string; deleteAfterDays: number; alertEmail: string };
   caps: {
     daily: number;  // 0 = no limit
     hourly: number; // 0 = no limit
@@ -117,7 +117,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0 },
   profileSummary: '',
   scoreWeights: { profile: 50, wins: 50 },
-  loom: { sourceUrl: '', deleteAfterDays: 30 },
+  loom: { sourceUrl: '', deleteAfterDays: 30, alertEmail: 'celiacalleh23@gmail.com' },
   caps: {
     daily: 0,
     hourly: 0,
@@ -174,6 +174,11 @@ async function getJson<T>(env: Env, key: string, fallback: T): Promise<T> {
 
 // The report addresses as a list (Settings keeps them comma-separated).
 export const reportEmails = (s: Settings) => s.report.email.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
+// Loom connection alerts only. Daily reports and the Connects alert stay on report.email.
+export const loomAlertEmails = (s: Settings) => {
+  const email = (s.loom.alertEmail || DEFAULT_SETTINGS.loom.alertEmail).trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? [email] : [DEFAULT_SETTINGS.loom.alertEmail];
+};
 
 export const loadSettings = (env: Env) => getJson(env, 'settings', DEFAULT_SETTINGS);
 export async function saveSettings(env: Env, s: Settings): Promise<void> {
@@ -282,6 +287,11 @@ export function validateSettings(input: unknown): Settings {
   if (loomUrl && !/^https:\/\/(www\.)?loom\.com\/share\/[A-Za-z0-9]+/.test(loomUrl)) {
     throw new InvalidInput('Loom video link must look like https://www.loom.com/share/…');
   }
+  const alertRaw = (i.loom as { alertEmail?: unknown }).alertEmail;
+  const alertEmail = typeof alertRaw === 'string' && alertRaw.trim()
+    ? str(alertRaw, 200, 'Loom alert email')
+    : DEFAULT_SETTINGS.loom.alertEmail;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(alertEmail)) throw new InvalidInput('Loom alert email is not a valid address');
   const emails = str(i.report.email, 400, 'Report emails').split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
   if (emails.length > 3) throw new InvalidInput('Use at most 3 report emails');
   const badEmail = emails.find((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
@@ -306,7 +316,7 @@ export function validateSettings(input: unknown): Settings {
     },
     profileSummary: str(i.profileSummary, 3000, 'Notes about Rafa'),
     scoreWeights: weights(i.scoreWeights),
-    loom: { sourceUrl: loomUrl, deleteAfterDays: num(i.loom.deleteAfterDays, 7, 365, 'Delete Loom copies after') },
+    loom: { sourceUrl: loomUrl, deleteAfterDays: num(i.loom.deleteAfterDays, 7, 365, 'Delete Loom copies after'), alertEmail },
     caps: {
       daily: num(caps.daily, 0, 500, 'Daily cap'),
       hourly: num(caps.hourly, 0, 60, 'Hourly cap'),

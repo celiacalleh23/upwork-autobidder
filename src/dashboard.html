@@ -421,6 +421,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="grid">
         <div class="field" style="grid-column:1/-1"><label for="loomUrl">Source video link</label><input type="url" id="loomUrl" placeholder="https://www.loom.com/share/…"><span class="hint">Must belong to the connected Loom account; Loom only lets the owner duplicate a video.</span></div>
         <div class="field"><label for="loomDelete">Delete copies after (days)</label><input type="number" id="loomDelete" min="7" max="365"></div>
+        <div class="field"><label for="loomAlertEmail">Loom alert email</label><input type="email" id="loomAlertEmail" autocomplete="off" placeholder="celiacalleh23@gmail.com"><span class="hint">Connection warnings only: session stopped, or no refresh for 10 days. The daily report and the Connects alert stay on the report emails.</span></div>
         <div class="field"><span class="lbl">Letters already in the queue</span><button type="button" class="btn outline" id="relinkLoom">Update the link in queued letters</button><span class="hint">Puts the saved video link in every proposal waiting for review that has no copy of its own. Approved letters keep their reviewed content. Saving a new link here does this by itself.</span></div>
       </div>
       <div class="conn"><div><b>Loom account</b><div class="small muted" id="loomStatus">Not connected</div><div class="small msg bad" id="loomError" role="alert" hidden></div></div>
@@ -480,7 +481,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     <section class="section" aria-labelledby="s6">
       <header><h2 id="s6">Reports and connections</h2></header>
       <div class="grid">
-        <div class="field"><label for="reportEmail">Report emails (up to 3)</label><input type="text" id="reportEmail" inputmode="email" autocomplete="off" placeholder="siv@ltv-labs.com, celia@…"><span class="hint">Separate with commas. Gets the daily report and the alerts (Connects low, Loom). Without a domain verified in Resend, only the Resend account's own email receives them.</span></div>
+        <div class="field"><label for="reportEmail">Report emails (up to 3)</label><input type="text" id="reportEmail" inputmode="email" autocomplete="off" placeholder="siv@ltv-labs.com, celia@…"><span class="hint">Separate with commas. Gets the daily report and the Connects alert. Loom connection alerts use the address under Loom video. Without a domain verified in Resend, only the Resend account's own email receives them.</span></div>
         <div class="field"><label for="reportHour">Send the daily report at</label><select id="reportHour"></select><span class="hint" id="reportTz">In the time zone set under Caps and guardrails.</span></div>
         <div class="field"><span class="lbl">Check that it arrives</span><button type="button" class="btn outline" id="reportTest">Send test report</button><span class="hint">Sends today's report so far, marked [Test]. Save your changes first.</span></div>
       </div>
@@ -1123,6 +1124,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('wWins').value = s.scoreWeights.wins; $('wProfile').value = s.scoreWeights.profile;
     loadTrack();
     $('loomUrl').value = s.loom.sourceUrl; $('loomDelete').value = s.loom.deleteAfterDays;
+    $('loomAlertEmail').value = s.loom.alertEmail || 'celiacalleh23@gmail.com';
     $('capDaily').value = s.caps.daily; $('capHourly').value = s.caps.hourly; $('capGap').value = s.caps.gapMinutes;
     $('activeStart').value = s.caps.activeStart; $('activeEnd').value = s.caps.activeEnd;
     if (![...$('timezone').options].some((o) => o.value === s.caps.timezone)) $('timezone').append(h('option', { value: s.caps.timezone, text: s.caps.timezone }));
@@ -1151,7 +1153,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       bid: { hourly: $('bidHourly').value, fixed: $('bidFixed').value, profileRate: Number($('profileRate').value) },
       profileSummary: $('profileSummary').value,
       scoreWeights: { wins: Number($('wWins').value), profile: Number($('wProfile').value) },
-      loom: { sourceUrl: $('loomUrl').value.trim(), deleteAfterDays: Number($('loomDelete').value) },
+      loom: { sourceUrl: $('loomUrl').value.trim(), deleteAfterDays: Number($('loomDelete').value), alertEmail: $('loomAlertEmail').value.trim() },
       caps: {
         daily: Number($('capDaily').value), hourly: Number($('capHourly').value), gapMinutes: Number($('capGap').value),
         activeStart: $('activeStart').value, activeEnd: $('activeEnd').value, timezone: $('timezone').value,
