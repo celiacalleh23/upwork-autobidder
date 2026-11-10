@@ -16,6 +16,7 @@ const REAL = /upwork refused|upwork asked|account warning|job is closed|no longe
 
 export function displayNote(input: NoteInput): DisplayNote {
   const text = (input.error ?? '').replace(/\s+/g, ' ').trim();
+  if (/^The send stopped before it reached Upwork\.?$/.test(text)) return { text: 'The send stopped before it reached Upwork.', error: false };
   if (!text || HIDDEN.test(text) || !REAL.test(text)) return { text: null, error: false };
   const sentence = text.split(/(?<=[.!?])\s/)[0] ?? text;
   return { text: sentence.length > 180 ? `${sentence.slice(0, 179).trimEnd()}…` : sentence, error: true };
