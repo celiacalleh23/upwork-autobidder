@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cookieFrom, copyName, deleteVideos, duplicate, expiryHint, loomAlert, LoomAuthError, LoomError, readDuplicate, renewedCookie, videoIdFrom, type Session } from '../src/loom';
+import { applySetCookies, cookieFrom, copyName, deleteVideos, duplicate, expiryHint, loomAlert, LoomAuthError, LoomError, readDuplicate, renewedCookie, videoIdFrom, type Session } from '../src/loom';
 
 // Shapes captured from loom.com on Oct 22 (docs/loom-api.md).
 const SOURCE = 'eea7d413d42f4c1ebb726c188f54ea74';
@@ -89,8 +89,8 @@ describe('session renewal', () => {
     expect(renewedCookie('connect.sid=old', ['connect.sid=new; Path=/; Expires=Sun, 22 Nov 2026 18:00:00 GMT; HttpOnly; Secure'], now))
       .toEqual({ cookie: 'connect.sid=new', expiresAt: '2026-11-22T18:00:00.000Z' });
     expect(renewedCookie('a=1; connect.sid=old; b=2', ['other=1', 'connect.sid=new; Max-Age=2592000'], now))
-      .toEqual({ cookie: 'a=1; connect.sid=new; b=2', expiresAt: '2026-11-21T18:00:00.000Z' });
-    expect(renewedCookie('connect.sid=old', ['other=1; Path=/'], now)).toBeNull();
+      .toEqual({ cookie: 'a=1; connect.sid=new; b=2; other=1', expiresAt: '2026-11-21T18:00:00.000Z' });
+    expect(renewedCookie('connect.sid=old', ['other=1; Path=/'], now)).toEqual({ cookie: 'connect.sid=old; other=1', expiresAt: null });
     expect(renewedCookie('connect.sid=old', ['connect.sid=; Max-Age=0'], now)).toBeNull(); // a sign-out, not a renewal
   });
   it('keeps the renewed cookie on the session after a call', async () => {
@@ -99,6 +99,23 @@ describe('session renewal', () => {
     await duplicate(s, SOURCE, 'n');
     expect(s).toMatchObject({ cookie: 'connect.sid=fresh', renewed: true });
     expect(s.expiresAt).not.toBeNull();
+  });
+  it('keeps companion cookies and ignores a cookie Loom is clearing', () => {
+    const now = Date.parse('2026-10-22T18:00:00Z');
+    const applied = applySetCookies('connect.sid=old', ['loom_csrf=abc; Path=/', 'connect.sid=new; Max-Age=1000', 'gone=; Max-Age=0'], now);
+    expect(applied.cookie).toBe('connect.sid=new; loom_csrf=abc');
+    expect(applied.changed).toBe(true);
+    expect(applied.expiresAt).toBe('2026-10-22T18:16:40.000Z');
+  });
+  it('does not replace the session with a cookie from an unauthorized response', async () => {
+    vi.stubGlobal('fetch', reply(
+      { data: { duplicateVideo: { __typename: 'UserNotAuthorizedError' } } },
+      200, 'application/json',
+      [['set-cookie', 'connect.sid=logged-out; Path=/; Max-Age=2592000']],
+    ));
+    const s = sess('connect.sid=still-good');
+    await expect(duplicate(s, SOURCE, 'n')).rejects.toThrow(LoomAuthError);
+    expect(s).toEqual({ cookie: 'connect.sid=still-good', expiresAt: null });
   });
   it('leaves the session alone when Loom sends no new cookie', async () => {
     vi.stubGlobal('fetch', reply(deletedOk));
@@ -131,6 +148,14 @@ describe('expiry alerts', () => {
     expect(loomAlert(renewed, first.key, now)).toBeNull();
     expect(loomAlert(renewed, first.key, Date.parse('2026-12-20T12:00:00Z'))?.subject).toBe('Loom connection expires in 2 days');
     expect(loomAlert(on, null, Date.parse('2026-11-22T00:00:00Z'))?.subject).toBe('Loom connection has expired');
+  });
+  it('warns when Loom has not refreshed the session for 10 days, before the cookie date', () => {
+    const quiet = { ...on, renewedAt: '2026-11-01T12:00:00.000Z' };
+    const a = loomAlert(quiet, null, Date.parse('2026-11-12T12:00:00.000Z'));
+    expect(a?.subject).toBe('Loom session has not refreshed in 10 days');
+    expect(a?.text).toContain('Nothing is disconnected yet');
+    expect(loomAlert(quiet, a!.key, Date.parse('2026-11-12T12:00:00.000Z'))).toBeNull();
+    expect(loomAlert({ ...on, renewedAt: '2026-11-10T12:00:00.000Z' }, null, Date.parse('2026-11-12T12:00:00.000Z'))).toBeNull();
   });
   it('emails once when Loom stops accepting the session, not after a manual disconnect', () => {
     const lost = { connected: false, lastError: 'Loom did not accept the session (UserNotAuthorizedError).', checkedAt: on.checkedAt, expiresAt: on.expiresAt };

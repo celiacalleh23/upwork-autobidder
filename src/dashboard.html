@@ -688,8 +688,9 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('writerLine').style.color = cut ? 'var(--bad-fg)' : '';
     $('loomChip').textContent = s.loom.connected ? 'Connected' : 'Not connected';
     $('loomChip').className = 'chip ' + (s.loom.connected ? 'good' : 'warn');
+    const staleRenewal = s.loom.connected && s.loom.renewedAt && Date.now() - Date.parse(s.loom.renewedAt) > 10 * 86400000;
     $('loomStatus').textContent = s.loom.connected
-      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}${s.loom.expiresAt ? ` · session valid until ${new Date(s.loom.expiresAt).toLocaleDateString()}` : ' · session end date unknown: reconnect and type the Expires date'}`
+      ? `Each proposal gets its own copy, named after the job${s.loom.checkedAt ? ` · connected ${ago(s.loom.checkedAt)}` : ''}${s.loom.expiresAt ? ` · session valid until ${new Date(s.loom.expiresAt).toLocaleDateString()}` : ' · session end date unknown: reconnect and type the Expires date'}${staleRenewal ? ' · Loom has not refreshed this session in 10 days. It may stop before that date.' : ''}`
       : 'Not connected. Letters use the source video link until Loom is connected.';
     const loomDays = s.loom.connected && s.loom.expiresAt ? Math.ceil((Date.parse(s.loom.expiresAt) - Date.now()) / 86400000) : null;
     const loomMsg = loomDays !== null && loomDays <= 7

@@ -33,20 +33,47 @@ const AUTH_HINT = /unauth|not authori[sz]ed|log ?in|sign ?in|session|forbidden/i
 // never runs out while the tool keeps using it (Celia, Oct 22: the cookie she pasted expires in Nov 2026).
 export interface Session { cookie: string; expiresAt: string | null; renewed?: boolean }
 
+// Fold every Set-Cookie Loom sends into the stored jar. A cleared cookie (empty value or Max-Age=0) is a sign-out
+// and is ignored. connect.sid is the session; other names are kept too, in case the session needs them.
+export function applySetCookies(cookie: string, setCookies: string[], now = Date.now()): { cookie: string; expiresAt: string | null; changed: boolean } {
+  let next = cookie;
+  let expiresAt: string | null = null;
+  let changed = false;
+  for (const line of setCookies) {
+    const m = /^\s*([A-Za-z0-9_.-]+)=([^;]*)/.exec(line);
+    if (!m) continue;
+    const name = m[1];
+    const value = m[2];
+    const maxAge = /;\s*max-age=(\d+)/i.exec(line);
+    if (!value || (maxAge && Number(maxAge[1]) === 0)) continue;
+    const re = new RegExp(`(^|;\\s*)${name}=[^;]*`);
+    next = re.test(next) ? next.replace(re, `$1${name}=${value}`) : (next ? `${next}; ${name}=${value}` : `${name}=${value}`);
+    changed = true;
+    if (name === 'connect.sid') {
+      const expires = /;\s*expires=([^;]+)/i.exec(line);
+      const at = maxAge ? now + Number(maxAge[1]) * 1000 : expires ? Date.parse(expires[1]) : NaN;
+      if (Number.isFinite(at)) expiresAt = new Date(at).toISOString();
+    }
+  }
+  return { cookie: next, expiresAt, changed };
+}
+
 // Reads a renewed connect.sid (and its expiry) from Set-Cookie lines. Null when Loom did not send one.
 export function renewedCookie(cookie: string, setCookies: string[], now = Date.now()): { cookie: string; expiresAt: string | null } | null {
-  for (const line of setCookies) {
-    const m = /^\s*connect\.sid=([^;]*)/.exec(line);
-    if (!m || !m[1]) continue;
-    const maxAge = /;\s*max-age=(\d+)/i.exec(line);
-    const expires = /;\s*expires=([^;]+)/i.exec(line);
-    const at = maxAge ? now + Number(maxAge[1]) * 1000 : expires ? Date.parse(expires[1]) : NaN;
-    const next = /(^|;\s*)connect\.sid=/.test(cookie)
-      ? cookie.replace(/(^|;\s*)connect\.sid=[^;]*/, `$1connect.sid=${m[1]}`)
-      : `connect.sid=${m[1]}`;
-    return { cookie: next, expiresAt: Number.isFinite(at) ? new Date(at).toISOString() : null };
+  const applied = applySetCookies(cookie, setCookies, now);
+  return applied.changed ? { cookie: applied.cookie, expiresAt: applied.expiresAt } : null;
+}
+
+function hasAuthType(value: unknown): boolean {
+  const stack = [value];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+    const type = (cur as { __typename?: unknown }).__typename;
+    if (typeof type === 'string' && /NotAuthori[sz]ed|Unauthenticated/i.test(type)) return true;
+    for (const child of Object.values(cur)) if (child && typeof child === 'object') stack.push(child);
   }
-  return null;
+  return false;
 }
 
 const setCookieLines = (h: Headers): string[] => {
@@ -87,8 +114,14 @@ async function gql<T>(sess: Session, operationName: string, query: string, varia
     throw AUTH_HINT.test(msg) ? new LoomAuthError(`Loom: ${msg}`) : new LoomError(`Loom ${operationName}: ${msg}`);
   }
   if (!body?.data) throw new LoomError(`Loom ${operationName}: empty answer`);
-  const renewed = renewedCookie(sess.cookie, setCookieLines(res.headers));
-  if (renewed && (renewed.cookie !== sess.cookie || renewed.expiresAt !== sess.expiresAt)) Object.assign(sess, renewed, { renewed: true });
+  if (hasAuthType(body.data)) {
+    // Do not store Set-Cookie from a refused call. That header can replace a good session with a logged-out one.
+    throw new LoomAuthError('Loom did not accept the session. Paste a fresh one in Settings → Loom.');
+  }
+  const renewed = applySetCookies(sess.cookie, setCookieLines(res.headers));
+  if (renewed.changed && (renewed.cookie !== sess.cookie || (renewed.expiresAt && renewed.expiresAt !== sess.expiresAt))) {
+    Object.assign(sess, { cookie: renewed.cookie, expiresAt: renewed.expiresAt ?? sess.expiresAt, renewed: true });
+  }
   return body.data;
 }
 
@@ -161,28 +194,41 @@ export async function markLoomError(env: Env, e: unknown) {
 // lost on an auth error. Null when Loom is not connected.
 async function withSession<T>(env: Env, fn: (sess: Session) => Promise<T>): Promise<T | null> {
   refusePreview(env);
-  const sess = await loadSession(env);
-  if (!sess) {
-    if (!(await loadState(env)).loom.connected) return null;
-    // Marked connected but the saved session is missing or can't be decrypted (e.g. TOKEN_KEY changed): say so
-    // instead of quietly using the source video.
-    const e = new LoomAuthError('The saved Loom session could not be read. Press Reconnect in Settings → Loom video.');
-    await markLoomError(env, e);
-    throw e;
-  }
+  // One Loom call at a time. A second call with the old cookie can overwrite a cookie Loom just rotated.
+  const lease = await acquireLease(env, 'loom-session', 60_000);
+  if (!lease) throw new LoomError('Loom is busy; it will be tried again shortly.');
   try {
-    const out = await fn(sess);
-    await putKv(env, ACTIVE_KEY, String(Date.now()));
-    return out;
-  } catch (e) {
-    if (e instanceof LoomAuthError) await markLoomError(env, e);
-    throw e;
-  } finally {
-    if (sess.renewed) {
-      await saveSession(env, sess);
-      const st = await loadState(env);
-      await patchState(env, { loom: { expiresAt: sess.expiresAt } });
+    let sess = await loadSession(env);
+    if (!sess) {
+      if (!(await loadState(env)).loom.connected) return null;
+      const e = new LoomAuthError('The saved Loom session could not be read. Press Reconnect in Settings → Loom video.');
+      await markLoomError(env, e);
+      throw e;
     }
+    const started = sess.cookie;
+    try {
+      const out = await fn(sess);
+      await putKv(env, ACTIVE_KEY, String(Date.now()));
+      return out;
+    } catch (e) {
+      if (!(e instanceof LoomAuthError)) throw e;
+      const latest = await loadSession(env);
+      if (latest && latest.cookie !== started) {
+        sess = latest;
+        const out = await fn(sess);
+        await putKv(env, ACTIVE_KEY, String(Date.now()));
+        return out;
+      }
+      await markLoomError(env, e);
+      throw e;
+    } finally {
+      if (sess.renewed) {
+        await saveSession(env, sess);
+        await patchState(env, { loom: { expiresAt: sess.expiresAt, renewedAt: new Date().toISOString() } });
+      }
+    }
+  } finally {
+    await releaseLease(env, 'loom-session', lease);
   }
 }
 
@@ -205,7 +251,8 @@ export async function connectLoom(env: Env, pasted: string, sourceUrl: string, e
   await deleteVideos(sess, [copy.id]).catch((e) => console.error('loom: test copy not deleted', e instanceof Error ? e.message : e));
   await saveSession(env, sess);
   await putKv(env, ACTIVE_KEY, String(Date.now()));
-  return patchState(env, { loom: { connected: true, lastError: null, checkedAt: new Date().toISOString(), expiresAt: sess.expiresAt } });
+  const nowIso = new Date().toISOString();
+  return patchState(env, { loom: { connected: true, lastError: null, checkedAt: nowIso, expiresAt: sess.expiresAt, renewedAt: sess.renewed ? nowIso : null } });
 }
 
 export async function disconnectLoom(env: Env): Promise<State> {
@@ -233,7 +280,7 @@ export async function deleteCopy(env: Env, id: string): Promise<void> {
 const CLEANUP_KEY = 'loom:cleanupAt';
 const CLEANUP_EVERY_MS = 6 * 3600_000;
 const CLEANUP_BATCH = 20;
-const KEEP_ALIVE_MS = 24 * 3600_000;
+const KEEP_ALIVE_MS = 12 * 3600_000;
 
 // Copies older than settings.loom.deleteAfterDays are deleted, only ids this tool created.
 export async function cleanupLoomCopies(env: Env, deleteAfterDays: number, now = Date.now()): Promise<number> {
@@ -268,8 +315,8 @@ export async function cleanupLoomCopies(env: Env, deleteAfterDays: number, now =
   })) ?? 0;
 }
 
-// Keeps the session in use (and so renewed) on quiet days: when Loom was not used for a day, one copy is made and
-// deleted straight away, the same check as Connect.
+// Keeps the session in use (and so renewed) on quiet days. Twelve hours is inside a normal working day, so an idle
+// timeout shorter than the cookie's own date does not win. One copy is made and deleted, the same check as Connect.
 export async function keepLoomAlive(env: Env, sourceUrl: string, now = Date.now()): Promise<boolean> {
   const source = videoIdFrom(sourceUrl);
   if (!source || !(await loadState(env)).loom.connected) return false;
@@ -285,6 +332,7 @@ export async function keepLoomAlive(env: Env, sourceUrl: string, now = Date.now(
 // ---------- Alerts: the session expires within a week, or Loom stopped accepting it ----------
 
 const WARN_BEFORE_MS = 7 * 86_400_000;
+const STALE_RENEWAL_MS = 10 * 86_400_000;
 
 export type LoomAlert = { key: string; subject: string; text: string };
 export function loomAlert(loom: State['loom'], sentFor: string | null, now = Date.now()): LoomAlert | null {
@@ -301,6 +349,18 @@ export function loomAlert(loom: State['loom'], sentFor: string | null, now = Dat
         subject: days ? `Loom connection expires in ${days} day${days === 1 ? '' : 's'}` : 'Loom connection has expired',
         text: `The Loom session used for the per-job video copies ${days ? 'expires on' : 'expired on'} ${when}.\n\n${steps}\n\n`
           + 'Until then nothing stops: proposals keep going out with the source video instead of their own copy.\n\nUpwork Auto-Bidder',
+      };
+    }
+  }
+  if (loom.connected && loom.renewedAt) {
+    const quiet = now - Date.parse(loom.renewedAt);
+    const key = `stale:${loom.renewedAt}`;
+    if (quiet > STALE_RENEWAL_MS && sentFor !== key) {
+      return {
+        key,
+        subject: 'Loom session has not refreshed in 10 days',
+        text: 'Loom has not issued a new session cookie in 10 days. The date on the saved cookie can still look fine while the session stops working.\n\n'
+          + `${steps}\n\nNothing is disconnected yet. Proposals keep going out.\n\nUpwork Auto-Bidder`,
       };
     }
   }
