@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildReport, localDay, reportDue, type ReportData } from '../src/pipeline/report';
-import { DEFAULT_SETTINGS, reportEmails, validateSettings, type Settings } from '../src/settings';
+import { DEFAULT_SETTINGS, loomAlertEmails, reportEmails, validateSettings, type Settings } from '../src/settings';
 
 const s = (over: Partial<Settings['report']> = {}): Settings => {
   const b = structuredClone(DEFAULT_SETTINGS);
@@ -28,6 +28,17 @@ describe('report emails', () => {
     expect(() => validateSettings({ ...DEFAULT_SETTINGS, report: { email: 'a@b.co, c@d.co, e@f.co, g@h.co', hour: 15 } })).toThrow('at most 3');
     expect(() => validateSettings({ ...DEFAULT_SETTINGS, report: { email: 'siv@', hour: 15 } })).toThrow('"siv@" is not a valid');
     expect(() => validateSettings({ ...DEFAULT_SETTINGS, report: { email: '', hour: 24 } })).toThrow('Report time');
+  });
+  it('sends Loom connection alerts to the Loom address and leaves the report address alone', () => {
+    const { alertEmail: _omit, ...loom } = DEFAULT_SETTINGS.loom;
+    const v = validateSettings({ ...DEFAULT_SETTINGS, loom, report: { email: 'siv@ltv-labs.com', hour: 15 } });
+    expect(v.loom.alertEmail).toBe('celiacalleh23@gmail.com');
+    expect(reportEmails(v)).toEqual(['siv@ltv-labs.com']);
+    expect(loomAlertEmails(v)).toEqual(['celiacalleh23@gmail.com']);
+    const custom = validateSettings({ ...DEFAULT_SETTINGS, loom: { ...DEFAULT_SETTINGS.loom, alertEmail: 'other@example.com' }, report: { email: 'siv@ltv-labs.com', hour: 15 } });
+    expect(loomAlertEmails(custom)).toEqual(['other@example.com']);
+    expect(reportEmails(custom)).toEqual(['siv@ltv-labs.com']);
+    expect(() => validateSettings({ ...DEFAULT_SETTINGS, loom: { ...DEFAULT_SETTINGS.loom, alertEmail: 'not-an-email' } })).toThrow('Loom alert email');
   });
 });
 
