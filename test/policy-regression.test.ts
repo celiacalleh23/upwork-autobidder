@@ -11,8 +11,8 @@ import { runSender } from '../src/pipeline/send';
 import { autoSendWait } from '../src/pipeline/pace';
 import { sendGate } from '../src/pipeline/sendRules';
 import { displayNote } from '../src/pipeline/proposalNote';
-import { recoverSubmittedRows } from '../src/pipeline/submitted';
-import { BIDDER_HOURLY_USD, FIXED_ESTIMATE_USD, resolveSendBid } from '../src/pipeline/letter';
+import { recoverSubmittedRows, requeueNeverConfirmed } from '../src/pipeline/submitted';
+import { BIDDER_HOURLY_USD, FIXED_ESTIMATE_USD, NATURAL_SCREENING_ANSWER, cleanScreeningAnswer, resolveSendBid } from '../src/pipeline/letter';
 import { DEFAULT_SETTINGS, DEFAULT_STATE, patchState, saveSettings, type Env } from '../src/settings';
 import { environment } from './support/db';
 
@@ -169,7 +169,7 @@ it('7. New or changed screening questions: they are answered automatically and i
   expect(claude.answerQuestions).toHaveBeenCalled();
 });
 
-it('8. Manual Approve: no random delay, and the sender starts immediately', async () => {
+it('8. Manual Approve: no random delay, and the request does not start a cancellable send', async () => {
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.sendingEnabled = true;
   settings.caps.gapMinutes = 10;
@@ -180,8 +180,7 @@ it('8. Manual Approve: no random delay, and the sender starts immediately', asyn
   e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, status) VALUES ('2119044137876131997', 'Klaviyo flows', 'Hi there, the letter is ready for this Klaviyo job.', 'pending')").run();
   const waits: Promise<unknown>[] = [];
   expect((await handleApi(post('/api/proposals/1/approve'), e, '/api/proposals/1/approve', { waitUntil: (p) => { waits.push(p); } })).status).toBe(200);
-  expect(waits).toHaveLength(1);
-  await waits[0];
+  expect(waits).toHaveLength(0);
   expect(e.sqlite.prepare('SELECT status, approved_via FROM proposals').get()).toMatchObject({ status: 'approved', approved_via: 'dashboard' });
 });
 
@@ -285,6 +284,57 @@ it('14. Skip records skipped_at', async () => {
   const body = await log.json() as { rows: { status: string; skipped_at: string | null }[] };
   expect(body.rows[0].status).toBe('skipped');
   expect(body.rows[0].skipped_at).toMatch(/T/);
+});
+
+it('a manually approved proposal cancelled before a preview is not marked failed', async () => {
+  const e = env();
+  const bad = "I can't paste links here, but I'm happy to share my flow framework.";
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, submitted_at, error, create_params)
+    VALUES ('2119920699600682073', 'Klaviyo Email Manager for 8-Figure DTC Brand', 'Hi there, the letter is ready for this Klaviyo job.', 30, 'hourly', 'failed', 'dashboard', '2026-11-10 00:25:25', '2026-11-10 00:25:48', 'Manually checked on Upwork: not sent. No automatic retry.', ?)`).run(JSON.stringify({
+    missing: ['applicant-count-missing'], questions_state: 'hints',
+    answers: [{ question: 'Send a link or screenshots of the Klaviyo flows you have built.', answer: bad }],
+  }));
+  await requeueNeverConfirmed(e);
+  expect(e.sqlite.prepare('SELECT status, approved_via, submitted_at, error, preview_id, upwork_proposal_id FROM proposals').get()).toMatchObject({
+    status: 'approved', approved_via: 'dashboard', submitted_at: null, error: null, preview_id: null, upwork_proposal_id: null,
+  });
+  const stuck = env();
+  stuck.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, status, approved_via, approved_at, submitted_at)
+    VALUES ('2119920699600682074', 'Klaviyo flows', 'Hi there, the letter is ready for this Klaviyo job.', 'submitting', 'dashboard', '2026-11-10 00:25:25', '2026-11-10 00:25:48')`).run();
+  await runSender(stuck);
+  expect(stuck.sqlite.prepare('SELECT status, error, submitted_at FROM proposals').get()).toMatchObject({ status: 'approved', error: null, submitted_at: null });
+});
+
+it('confirm not sent puts a never-previewed manual approval back instead of failing it', async () => {
+  const e = env();
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, status, approved_via, approved_at, error)
+    VALUES ('2119920699600682075', 'Klaviyo flows', 'Hi there, the letter is ready for this Klaviyo job.', 'unknown', 'dashboard', '2026-11-10 00:25:25', 'Interrupted while sending; checking on Upwork, not resending')`).run();
+  const req = new Request('https://local.invalid/api/proposals/1/resolve-unknown', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-dashboard': '1' },
+    body: JSON.stringify({ outcome: 'not_sent', confirm: true }),
+  });
+  expect((await handleApi(req, e, '/api/proposals/1/resolve-unknown')).status).toBe(200);
+  expect(e.sqlite.prepare('SELECT status, error, approved_via FROM proposals').get()).toMatchObject({ status: 'approved', error: null, approved_via: 'dashboard' });
+});
+
+it('a screening answer that says it cannot paste links is replaced with a natural answer', async () => {
+  const bad = "I can't paste links here, but I'm happy to share my flow framework, email design samples and client video testimonials with you directly in an Upwork message.";
+  expect(cleanScreeningAnswer(bad)).toBe(NATURAL_SCREENING_ANSWER);
+  expect(cleanScreeningAnswer('I can start on this next week.')).toBe('I can start on this next week.');
+  const e = env();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.sendingEnabled = true; s.caps.activeStart = s.caps.activeEnd = '00:00'; s.caps.boostInAuto = false;
+  await saveSettings(e, s);
+  await connected(e);
+  e.sqlite.prepare(`INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, score, status, approved_via, approved_at, create_params)
+    VALUES ('2119920699600682073', 'Klaviyo Email Manager for 8-Figure DTC Brand', 'Hi there, the letter is ready for this Klaviyo job.', 30, 'hourly', 92, 'approved', 'dashboard', datetime('now'), ?)`).run(JSON.stringify({
+    missing: ['applicant-count-missing'], questions_state: 'hints',
+    answers: [{ question: 'Send a link or screenshots of the Klaviyo flows you have built.', answer: bad }],
+  }));
+  expect((await sendApproved(e, { questions: [] })).confirms).toBe(1);
+  const params = JSON.parse(String(e.sqlite.prepare('SELECT create_params FROM proposals').get()?.create_params)) as { answers: { answer: string }[] };
+  expect(params.answers[0].answer).toBe(NATURAL_SCREENING_ANSWER);
+  expect(params.answers[0].answer).not.toMatch(/paste links/i);
 });
 
 it('recovers a Sending row directly when it already has an Upwork proposal id', async () => {

@@ -7,14 +7,14 @@ import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import { answerQuestions, rewriteLetter, type JobForClaude } from '../claude';
-import { checkAnswers, checkLetter, metaLanguageIn, resolveSendBid, type Answer } from './letter';
+import { checkAnswers, checkLetter, cleanScreeningAnswer, metaLanguageIn, resolveSendBid, type Answer } from './letter';
 import { loadTrackRecord, profileForClaude } from './profile';
 import { loadSnapshot } from './snapshot';
 import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
-import { confirmProposalId, markSubmitted, recoverSubmittedRows } from './submitted';
+import { confirmProposalId, markSubmitted, recoverSubmittedRows, requeueNeverConfirmed } from './submitted';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
 // newest job first in Auto (pace.ts), only when Settings → Sending is on (Siv or Celia switch it on in the dashboard;
@@ -196,10 +196,12 @@ export async function runSender(env: Env): Promise<SendSummary | null> {
 async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | null> {
   // A returned Upwork proposal id means the proposal is submitted, even if the previous run died before the status update.
   await recoverSubmittedRows(env);
-  // A run that died mid-send (Workers limit, deploy) leaves 'submitting' behind: it may have been sent, so never resend.
+  await requeueNeverConfirmed(env);
+  // A run that died after confirm may have been sent, so never resend. A claim with no preview never reached confirm.
   await env.DB.prepare(
     `UPDATE proposals SET status = 'unknown', error = 'Interrupted while sending; checking on Upwork, not resending'
-     WHERE status = 'submitting' AND (submitted_at IS NULL OR submitted_at < datetime('now', '-15 minutes'))
+     WHERE status = 'submitting' AND preview_id IS NOT NULL
+       AND (submitted_at IS NULL OR submitted_at < datetime('now', '-15 minutes'))
        AND (upwork_proposal_id IS NULL OR length(trim(upwork_proposal_id)) = 0)`,
   ).run();
   const [state, s] = await Promise.all([loadState(env), loadSettings(env)]);
@@ -287,12 +289,16 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       row.job_type = decision.jobType;
     }
 
-    // Claim it, so a parallel run or an Undo can't race this send.
-    const claimed = await env.DB.prepare("UPDATE proposals SET status = 'submitting', submitted_at = ? WHERE id = ? AND status = 'approved' AND cover_letter = ? AND bid IS ? AND create_params = ? AND approved_at IS ?").bind(sql(new Date()), row.id, row.cover_letter, row.bid, row.create_params, row.approved_at).run();
-    if (!claimed.meta.changes) return summary;
-
     const { extra } = storedParams(row);
     let { answers } = storedParams(row);
+    const cleanedAnswers = answers.map((answer) => ({ ...answer, answer: cleanScreeningAnswer(answer.answer) }));
+    if (cleanedAnswers.some((answer, i) => answer.answer !== answers[i]?.answer)) {
+      answers = cleanedAnswers;
+      const params = JSON.parse(row.create_params || '{}') as Record<string, unknown>;
+      params.answers = answers;
+      row.create_params = JSON.stringify(params);
+      await setProposal(env, row.id, { create_params: row.create_params });
+    }
     const fixed = row.job_type === 'fixed';
     const boostKey = `boostRefused:${row.id}`;
     const boostRefusals = Number(await getKv(env, boostKey) ?? 0);
@@ -305,7 +311,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       if (questionsDiffer(p.questions, answers)) {
         const answered = await answerLiveQuestions(env, row, p.questions ?? [], s);
         if (answered) {
-          answers = answered;
+          answers = answered.map((answer) => ({ ...answer, answer: cleanScreeningAnswer(answer.answer) }));
           const params = JSON.parse(row.create_params || '{}') as Record<string, unknown>;
           params.answers = answers;
           params.questions_state = 'live';
@@ -363,6 +369,10 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       else await countError(env, s, errText(e));
       summary.note = `Preview failed: ${errText(e)}`; return summary;
     }
+
+    // Claim only once the preview exists. A cancelled run before this point leaves the row approved.
+    const claimed = await env.DB.prepare("UPDATE proposals SET status = 'submitting', submitted_at = ? WHERE id = ? AND status = 'approved' AND cover_letter = ? AND bid IS ? AND create_params = ? AND approved_at IS ?").bind(sql(new Date()), row.id, row.cover_letter, row.bid, row.create_params, row.approved_at).run();
+    if (!claimed.meta.changes) return summary;
 
     // A rejected boost sent nothing: retry the bid; after two refusals send normally and record why.
     const boostRefused = async (message: string) => {
