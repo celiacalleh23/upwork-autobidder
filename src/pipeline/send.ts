@@ -7,7 +7,7 @@ import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import { answerQuestions, rewriteLetter, type JobForClaude } from '../claude';
-import { checkAnswers, checkLetter, cleanScreeningAnswer, metaLanguageIn, resolveSendBid, type Answer } from './letter';
+import { checkAnswers, checkLetter, cleanScreeningAnswer, metaLanguageIn, repairFirstPerson, thirdPersonIn, resolveSendBid, type Answer } from './letter';
 import { loadTrackRecord, profileForClaude } from './profile';
 import { loadSnapshot } from './snapshot';
 import { createPreview } from './preview';
@@ -252,6 +252,13 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
         }
         await setProposal(env, row.id, { cover_letter: cleaned, error: null });
         row.cover_letter = cleaned;
+      }
+      if (thirdPersonIn(row.cover_letter)) {
+        const voiced = await repairFirstPerson(row.cover_letter, (text, problem) => rewriteLetter(env, text, problem));
+        if (voiced !== row.cover_letter) {
+          await setProposal(env, row.id, { cover_letter: voiced, error: null });
+          row.cover_letter = voiced;
+        }
       }
     }
     const client = await upworkClient(env);

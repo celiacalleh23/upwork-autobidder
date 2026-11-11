@@ -1,5 +1,5 @@
 import { finiteNumber } from './sendRules';
-import { answerQuestions, ClaudeConfigError, ClaudeDeclined, scoreJob, writeOpening, type JobForClaude } from '../claude';
+import { answerQuestions, ClaudeConfigError, ClaudeDeclined, rewriteLetter, scoreJob, writeOpening, type JobForClaude } from '../claude';
 import { acquireLease, delKv, getKv, putKv, releaseLease, ownsLease, renewLease } from '../kv';
 import { isAccountWarning, McpError, McpJobAccessError, type McpClient } from '../mcp';
 import { copyForJob, deleteCopy, LoomAuthError, markLoomError } from '../loom';
@@ -7,7 +7,7 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, fallbackTitleOpening, FIXED_ESTIMATE_USD, metaLanguageIn, swapLoomLink, titleOnlyOpeningProblem, type Answer } from './letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, fallbackTitleOpening, FIXED_ESTIMATE_USD, metaLanguageIn, repairFirstPerson, swapLoomLink, thirdPersonIn, titleOnlyOpeningProblem, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
@@ -164,6 +164,10 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
     opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
     problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
   }
+  if (withOpening && thirdPersonIn(opening)) {
+    opening = await repairFirstPerson(opening, (text, voiceProblem) => rewriteLetter(env, text, voiceProblem));
+    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+  }
   if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
   let letter = assembleLetter(s.letter.template, opening, sourceUrl, disclosure);
 
@@ -317,6 +321,10 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     let problem = (withOpening ? openingProblem(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
     if (problem && withOpening) {
       opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
+      problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
+    }
+    if (withOpening && thirdPersonIn(opening)) {
+      opening = await repairFirstPerson(opening, (text, voiceProblem) => rewriteLetter(env, text, voiceProblem));
       problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
     }
     if (problem && titleOnly && withOpening) {

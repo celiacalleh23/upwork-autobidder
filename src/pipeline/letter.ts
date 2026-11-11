@@ -80,10 +80,81 @@ export function fallbackTitleOpening(title: string): string {
   return 'The work in your post is where I would start.';
 }
 
+const SIGN_OFF_LINE = /^(?:thanks|thank you|best|best regards|regards|sincerely|cheers|talk soon|warmly|all the best)[,!]?\s*$/i;
+const SIGN_OFF_WITH_NAME = /^(?:thanks|thank you|best|best regards|regards|sincerely|cheers|talk soon|warmly|all the best),?\s+(?:rafaela eguiguren|rafaela|rafa)[.!]?$/i;
+const NAME_ONLY = /^(?:rafaela eguiguren|rafaela|rafa)[.!]?$/i;
+const SELF_NAME = '\\b(?:Rafaela(?:\\s+Eguiguren)?|Rafa)(?!@)';
+
+// The closing name is the one place the letter may say Rafa. Everything above it is the voice of the letter.
+export function letterBody(text: string): string {
+  const lines = text.split('\n');
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].trim()) end--;
+  if (end === 0) return text;
+  const last = lines[end - 1].trim();
+  if (SIGN_OFF_WITH_NAME.test(last)) return lines.slice(0, end - 1).join('\n');
+  if (!NAME_ONLY.test(last)) return text;
+  let start = end - 1;
+  let cursor = start;
+  while (cursor > 0 && !lines[cursor - 1].trim()) cursor--;
+  if (cursor > 0 && SIGN_OFF_LINE.test(lines[cursor - 1].trim())) start = cursor - 1;
+  return lines.slice(0, start).join('\n');
+}
+
+function letterSignOff(text: string): string {
+  const body = letterBody(text);
+  return body === text ? '' : text.slice(body.length);
+}
+
+// "Rafa would", "Rafa has", "Rafaela's", "Rafa will". A sign-off, or "I'm Rafa", is not third person.
+export function thirdPersonIn(text: string): string | null {
+  const body = letterBody(text).replace(new RegExp(`\\b(?:I['’]?m|I am|my name is)\\s+${SELF_NAME}\\b`, 'gi'), '');
+  return new RegExp(`${SELF_NAME}(?:['’]s)?\\b`, 'i').test(body) ? 'third person' : null;
+}
+
+const VERB_AS_I: Record<string, string> = { has: 'have', is: 'am', does: 'do' };
+
+// Local repair used when the model rewrite is missing or still talks about Rafa. It never drops the sign-off.
+export function toFirstPerson(text: string): string {
+  const signOff = letterSignOff(text);
+  let body = letterBody(text);
+  const kept: string[] = [];
+  body = body.replace(new RegExp(`\\b(?:I['’]?m|I am|my name is)\\s+${SELF_NAME}\\b`, 'gi'), (match) => {
+    kept.push(match);
+    return `\u0000${kept.length - 1}\u0000`;
+  });
+  body = body.replace(new RegExp(`${SELF_NAME}['’]s\\b`, 'gi'), 'my');
+  body = body.replace(new RegExp(`${SELF_NAME}\\b(\\s+)(would|will|can|could|should|might|may|has|had|is|was|does|did)\\b`, 'gi'), (_match, space: string, verb: string) => {
+    const lower = verb.toLowerCase();
+    const fixed = VERB_AS_I[lower] ?? lower;
+    const cased = verb[0] === verb[0].toUpperCase() ? fixed[0].toUpperCase() + fixed.slice(1) : fixed;
+    return `I${space}${cased}`;
+  });
+  body = body.replace(new RegExp(`${SELF_NAME}\\b`, 'gi'), 'I');
+  body = body.replace(/\u0000(\d+)\u0000/g, (_match, index: string) => kept[Number(index)]);
+  body = body.replace(/\bI has\b/g, 'I have').replace(/\bI is\b/g, 'I am').replace(/\bI does\b/g, 'I do');
+  return `${body}${signOff}`;
+}
+
+export const FIRST_PERSON_PROBLEM = 'third-person references to Rafa (for example "Rafa would" or "Rafaela\'s"). Rewrite those to first person (I, me, my). Leave a sign-off that is only her name.';
+
+// Same shape as the internal-wording rewrite: ask once, then repair locally. A failed rewrite does not hold the send.
+export async function repairFirstPerson(text: string, rewrite?: (text: string, problem: string) => Promise<string>): Promise<string> {
+  if (!thirdPersonIn(text)) return text;
+  if (rewrite) {
+    try {
+      const cleaned = (await rewrite(text, FIRST_PERSON_PROBLEM))?.trim();
+      if (cleaned && !thirdPersonIn(cleaned)) return cleaned;
+    } catch { /* the local repair still sends */ }
+  }
+  return toFirstPerson(text);
+}
+
 export function checkOpening(opening: string): string | null {
   const t = opening.trim();
   if (t.length < 25) return 'the opening is too short';
   if (t.length > MAX_OPENING) return `the opening is longer than ${MAX_OPENING} characters`;
+  if (thirdPersonIn(t)) return 'the opening refers to Rafa in the third person';
   const meta = metaLanguageIn(t);
   if (meta) return `the opening contains ${meta}`;
   const p = problemsInWritten(t);
@@ -162,7 +233,9 @@ export function screeningAnswerProblem(answer: string): string | null {
 
 export function cleanScreeningAnswer(answer: string): string {
   const text = answer.trim();
-  return text && screeningAnswerProblem(text) ? NATURAL_SCREENING_ANSWER : text;
+  if (!text) return text;
+  if (screeningAnswerProblem(text)) return NATURAL_SCREENING_ANSWER;
+  return toFirstPerson(text);
 }
 
 export function checkAnswers(questions: string[], answers: Answer[]): string | null {

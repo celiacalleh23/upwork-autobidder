@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, computeBid, contactDetailsIn, countSentences, fallbackTitleOpening, metaLanguageIn, resolveSendBid, swapLoomLink, titleOnlyOpeningProblem } from '../src/pipeline/letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, contactDetailsIn, countSentences, fallbackTitleOpening, metaLanguageIn, repairFirstPerson, resolveSendBid, swapLoomLink, thirdPersonIn, titleOnlyOpeningProblem, toFirstPerson } from '../src/pipeline/letter';
+import { readFileSync } from 'node:fs';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const s = (bid: Partial<Settings['bid']> = {}): Settings => ({ ...structuredClone(DEFAULT_SETTINGS), bid: { hourly: 'client_max', fixed: 'client_budget', profileRate: 0, ...bid } });
@@ -151,6 +152,46 @@ describe('personal sentence off', () => {
     expect(letter.startsWith(`Hi there,\n\nI recorded a quick Loom for you`)).toBe(true);
     expect(letter).not.toContain('{opening}');
     expect(letter).toContain(LOOM);
+  });
+});
+
+describe('first person', () => {
+  const phrase = 'Getting your Klaviyo workflows, campaigns and forms talking to WooCommerce and WordPress without gaps is the real job here, so Rafa would start by mapping each form and customer journey to the right list or flow.';
+  const signed = `${phrase}\n\nTalk soon,\nRafa`;
+  it('rewrites the third-person phrase and its variants, and leaves a sign-off name', async () => {
+    expect(phrase).toContain('so Rafa would start by mapping each form and customer journey');
+    expect(thirdPersonIn(phrase)).toBe('third person');
+    expect(toFirstPerson(phrase)).toContain('so I would start by mapping each form and customer journey');
+    expect(toFirstPerson(phrase)).not.toMatch(/\bRafa\b/);
+    expect(toFirstPerson('Rafa has mapped flows like these before.')).toBe('I have mapped flows like these before.');
+    expect(toFirstPerson("Rafaela's first step is the welcome flow.")).toBe('my first step is the welcome flow.');
+    expect(toFirstPerson('Rafa will map each form before the campaigns.')).toBe('I will map each form before the campaigns.');
+    expect(toFirstPerson('Rafaela Eguiguren would start with the forms.')).toBe('I would start with the forms.');
+    expect(thirdPersonIn(signed)).toBe('third person');
+    expect(toFirstPerson(signed)).toBe(`${toFirstPerson(phrase)}\n\nTalk soon,\nRafa`);
+    expect(thirdPersonIn('Hi there,\n\nI would start with the welcome flow.\n\nTalk soon,\nRafa')).toBeNull();
+    expect(thirdPersonIn('Best,\nRafaela Eguiguren')).toBeNull();
+    expect(thirdPersonIn("I'm Rafa and I would start with the forms you listed.")).toBeNull();
+    expect(checkOpening(phrase)).toMatch(/third person/);
+    expect(cleanScreeningAnswer('Rafa would map the forms first.')).toBe('I would map the forms first.');
+    expect(cleanScreeningAnswer('Rafa has done this for Shopify stores.')).toBe('I have done this for Shopify stores.');
+    const repaired = await repairFirstPerson(signed, async () => signed);
+    expect(repaired).toContain('so I would start');
+    expect(repaired).toContain('Talk soon,\nRafa');
+    expect(thirdPersonIn(repaired)).toBeNull();
+    expect(await repairFirstPerson(signed, async () => { throw new Error('rewrite failed'); })).toBe(repaired);
+  });
+  it('tells the letter and the screening answers to speak as Rafa', () => {
+    const src = readFileSync(new URL('../src/claude.ts', import.meta.url), 'utf8');
+    const opening = src.slice(src.indexOf('export async function writeOpening'), src.indexOf('export async function rewriteLetter'));
+    const answers = src.slice(src.indexOf('export async function answerQuestions'));
+    const repair = src.slice(src.indexOf('export async function rewriteLetter'), src.indexOf('export async function answerQuestions'));
+    for (const block of [opening, answers, repair]) {
+      expect(block).toContain('LETTER_VOICE');
+      expect(block).not.toContain('${WHO}');
+    }
+    expect(src).toContain('Write in the first person, as Rafa herself');
+    expect(src).toContain('Never name yourself (Rafa, Rafaela, or Rafaela Eguiguren)');
   });
 });
 
