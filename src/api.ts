@@ -11,7 +11,7 @@ import { checkUpwork, disconnectUpwork, finishUpworkAuth, OAuthError, paramsFrom
 import { MissingKey } from './crypto';
 import { connectLoom, disconnectLoom, LoomError } from './loom';
 import { addJob, recheckMatched } from './pipeline/jobs';
-import { checkAnswers, contactDetailsIn, metaLanguageIn, swapLoomLink } from './pipeline/letter';
+import { checkAnswers, cleanScreeningAnswer, contactDetailsIn, metaLanguageIn, repairFirstPerson, swapLoomLink } from './pipeline/letter';
 import { rewriteLetter } from './claude';
 import { recoverSubmittedRows } from './pipeline/submitted';
 import { parseAnalysis } from './pipeline/analysis';
@@ -368,7 +368,16 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
           if (!cleaned || metaLanguageIn(cleaned)) return fail(`The letter contains ${meta}. It was not approved.`);
           letter = cleaned;
         }
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', cover_letter = ?, error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(letter, id, proposal.create_params).run();
+        letter = await repairFirstPerson(letter, (text, problem) => rewriteLetter(env, text, problem));
+        const originalParams = proposal.create_params;
+        const voicedAnswers = answersOf(originalParams).map((a) => ({ ...a, answer: cleanScreeningAnswer(a.answer) }));
+        let nextParams = originalParams;
+        if (JSON.stringify(voicedAnswers) !== JSON.stringify(answersOf(originalParams))) {
+          const params = JSON.parse(originalParams || '{}') as Record<string, unknown>;
+          params.answers = voicedAnswers;
+          nextParams = JSON.stringify(params);
+        }
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', cover_letter = ?, create_params = ?, error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(letter, nextParams, id, originalParams).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         // The sender runs on the cron. Starting it from this request gets cancelled after the response, which can
         // leave the row claimed as sending before a preview exists.

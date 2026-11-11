@@ -254,6 +254,24 @@ it('12. Internal wording in a letter: it is rewritten automatically, and held on
   expect(row.cover_letter).toBe(clean);
 });
 
+it('a third-person letter is rewritten to first person and still sends', async () => {
+  const leaked = 'Hi there,\n\nGetting your Klaviyo workflows, campaigns and forms talking to WooCommerce and WordPress without gaps is the real job here, so Rafa would start by mapping each form and customer journey to the right list or flow.\n\nTalk soon,\nRafa';
+  const e = env();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.sendingEnabled = true; s.caps.activeStart = s.caps.activeEnd = '00:00'; s.caps.boostInAuto = false;
+  await saveSettings(e, s);
+  await connected(e);
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, bid, job_type, status, approved_via, approved_at, create_params) VALUES ('2119044137876132011', 'Klaviyo flows', ?, 30, 'hourly', 'approved', 'dashboard', datetime('now'), ?)").run(leaked, JSON.stringify({ answers: [{ question: 'Tell us about yourself', answer: 'Rafa has nine years in Klaviyo.' }] }));
+  vi.spyOn(claude, 'rewriteLetter').mockResolvedValue(leaked);
+  expect((await sendApproved(e, { questions: null })).confirms).toBe(1);
+  const row = e.sqlite.prepare('SELECT status, cover_letter, create_params FROM proposals').get() as { status: string; cover_letter: string; create_params: string };
+  expect(row.status).toBe('submitted');
+  expect(row.cover_letter).toContain('so I would start by mapping each form and customer journey');
+  expect(row.cover_letter).not.toContain('Rafa would');
+  expect(row.cover_letter).toContain('Talk soon,\nRafa');
+  expect(JSON.parse(row.create_params).answers[0].answer).toBe('I have nine years in Klaviyo.');
+});
+
 it('13. The dashboard renders no amber or missing notes, for old and new rows', async () => {
   const oldNote = "Saved from the public snapshot. Still missing in the source: applicant count. Rafa's rate $30/hr · missing: applicant count";
   const screening = 'Upwork did not return screening questions. Nothing was sent.';
