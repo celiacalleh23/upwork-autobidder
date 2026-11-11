@@ -19,7 +19,8 @@ import { loadTrackRecord, profileForClaude, syncTrackRecord } from './pipeline/p
 import { loadLocalAccount, resolveRange } from './pipeline/stats';
 import { sendDailyReport } from './pipeline/report';
 import { displayNote } from './pipeline/proposalNote';
-import { loadMonthConnects } from './pipeline/connectsReport';
+import { dayStartUtc, loadMonthConnects, loadTodayConnects } from './pipeline/connectsReport';
+export { dayStartUtc };
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const fail = (message: string, status = 400) => json({ error: message }, status);
@@ -81,26 +82,6 @@ export function postedIso(s: string | null): string | null {
   const t = Date.parse(/T/.test(s) ? s : `${s.trim().replace(' ', 'T')}Z`);
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }
-const toSql = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
-
-// Start of "today" in the given time zone, as a D1 UTC timestamp string
-export function dayStartUtc(timeZone: string, now = new Date()): string {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
-      .formatToParts(now).map((p) => [p.type, p.value]),
-  );
-  const target = Date.UTC(+parts.year, +parts.month - 1, +parts.day);
-  let candidate = target;
-  for (let i = 0; i < 4; i++) {
-    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(candidate)).map(x => [x.type, x.value]));
-    const local = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
-    const next = candidate + target - local;
-    if (next === candidate) break;
-    candidate = next;
-  }
-  return toSql(new Date(candidate));
-}
-
 // Equal start and end means all day (BUILD_PLAN §11a: 24/7); an end before the start crosses midnight.
 export function isActiveNow(start: string, end: string, timeZone: string, now = new Date()): boolean {
   if (start === end) return true;
@@ -441,13 +422,13 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
 async function getState(env: Env) {
   const [state, settings] = await Promise.all([loadState(env), loadSettings(env)]);
   const since = dayStartUtc(settings.caps.timezone);
+  const todaySpend = await loadTodayConnects(env);
   const [jobs, props, waiting, approved, examples] = await env.DB.batch<Record<string, number | null>>([
     env.DB.prepare(
       "SELECT COUNT(*) AS scanned, SUM(CASE WHEN status IN ('matched', 'low_score', 'proposed') THEN 1 ELSE 0 END) AS matched FROM jobs WHERE seen_at >= ?",
     ).bind(since),
     env.DB.prepare(
       `SELECT SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) AS sent,
-              SUM(CASE WHEN status = 'submitted' THEN COALESCE(connects, 0) ELSE 0 END) AS connects,
               SUM(CASE WHEN status IN ('failed', 'unknown') THEN 1 ELSE 0 END) AS failed
        FROM proposals WHERE COALESCE(submitted_at, created_at) >= ?`,
     ).bind(since),
@@ -477,7 +458,10 @@ async function getState(env: Env) {
       scanned: j.scanned ?? 0,
       matched: j.matched ?? 0,
       sent: p.sent ?? 0,
-      connectsSpent: p.connects ?? 0,
+      connectsSpent: todaySpend.total.connects,
+      connectsBoost: todaySpend.boosts.connects,
+      connectsRefunded: todaySpend.refunds.connects,
+      connectsReceived: todaySpend.received.connects,
       failed: p.failed ?? 0,
       waiting: waiting.results[0]?.n ?? 0,
       approved: approved.results[0]?.n ?? 0,
