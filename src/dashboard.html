@@ -246,7 +246,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       <div class="stat"><span class="label">Jobs added today<button class="info-btn" type="button" aria-label="What this means" data-tip="Jobs: Auto-synced. Matched means the job passed your filters (client country, budget, rate) and went on to scoring.">i</button></span><span class="value" id="sScanned">0</span><span class="sub" id="sMatched">0 matched your filters</span></div>
       <div class="stat"><span class="label">Proposals sent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals actually submitted to Upwork today. This stays at 0 while Sending is off.">i</button></span><span class="value"><span id="sSent">0</span> <small id="sCap">no daily cap</small></span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
       <div class="stat"><span class="label">Waiting for review<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals written and waiting for you in the Review queue below. Approved ones go out next, one at a time, when Sending is on.">i</button></span><span class="value v-warn" id="sWaiting">0</span><span class="sub" id="sApproved">0 approved, sending soon</span></div>
-      <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Connects used by proposals sent today, and what they cost at $0.15 each. The last line shows the alert level: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub money" id="sConnectsUsd">$0.00</span><span class="sub" id="sFloor">Stops below 20</span></div>
+      <div class="stat"><span class="label">Connects spent today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals plus boost bids submitted today, minus refunds already saved. Same number as Today in the table below, at $0.15 each. The last line is the alert: when the balance drops under it, an email asks to buy more. Sending continues.">i</button></span><span class="value" id="sConnects">0</span><span class="sub money" id="sConnectsUsd">$0.00</span><span class="sub" id="sConnectsExtra"></span><span class="sub" id="sFloor">Stops below 20</span></div>
       <div class="stat"><span class="label">Failed today<button class="info-btn" type="button" aria-label="What this means" data-tip="Proposals Upwork refused today, for example because the job closed or Rafa already applied. The reason is in the Activity log.">i</button></span><span class="value" id="sFailed">0</span><a href="#activity" class="sub">See the log</a></div>
     </section>
 
@@ -657,8 +657,7 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('sBar').style.width = c.daily ? Math.min(100, (t.sent / c.daily) * 100) + '%' : '0%';
     $('sWaiting').textContent = fmtNum(t.waiting);
     $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
-    $('sConnects').textContent = fmtNum(t.connectsSpent);
-    $('sConnectsUsd').textContent = `${usd(t.connectsSpent)} at $${CONNECT_USD.toFixed(2)} per Connect`;
+    // Connects spent today is painted with the month table, from the same Today total.
     // The 250 is an alert (email, sending continues), not a floor (Siv, Oct 21); show whichever applies.
     $('sFloor').textContent = [c.connectsFloor ? `Stops below ${c.connectsFloor}` : null, s.connectsAlertBelow ? `Alert email below ${fmtNum(s.connectsAlertBelow)}` : null]
       .filter(Boolean).join(' · ') || 'No Connects floor or alert';
@@ -1259,12 +1258,19 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     try { r = await api('/api/connects-report'); }
     catch (e) { $('moNote').textContent = e.message; return; }
     $('moWhen').textContent = r.month;
-    $('moNote').textContent = `From proposals submitted this month and the Connects history already saved here. Total subtracts refunds. Boost bids are the amounts placed with those proposals. Upwork records a boost as a Sponsored proposal auction deposit and may refund part of it. Deposits in the saved history this month: ${fmtNum(r.auctionDeposits.charges)} charges, ${fmtNum(r.auctionDeposits.connects)} Connects.`;
+    $('moNote').textContent = `From proposals submitted this month and the Connects history already saved here. Total subtracts refunds. Today is that same total since midnight, and it is the Connects spent today card. Boost bids are the amounts placed with those proposals. Upwork records a boost as a Sponsored proposal auction deposit and may refund part of it. Deposits in the saved history this month: ${fmtNum(r.auctionDeposits.charges)} charges, ${fmtNum(r.auctionDeposits.connects)} Connects.`;
     const row = (label, line) => h('tr', {},
       h('td', { text: label }),
       h('td', { class: 'mono', text: fmtNum(line.charges) }),
       h('td', { class: 'mono', text: fmtNum(line.connects) }),
       h('td', { class: 'mono', text: connectsValue(line.connects) }));
+    const todayBits = [];
+    if (r.today.boosts.connects) todayBits.push(`incl. ${fmtNum(r.today.boosts.connects)} boost`);
+    if (r.today.refunds.connects) todayBits.push(`${fmtNum(r.today.refunds.connects)} refunded`);
+    if (r.today.received.connects) todayBits.push(`${fmtNum(r.today.received.connects)} received`);
+    $('sConnects').textContent = fmtNum(r.today.total.connects);
+    $('sConnectsUsd').textContent = `${usd(r.today.total.connects)} at $${CONNECT_USD.toFixed(2)} per Connect`;
+    $('sConnectsExtra').textContent = todayBits.join(' · ');
     box.replaceChildren(
       row('Proposals', r.proposals),
       row('Proposal boosts', r.boosts),
@@ -1272,7 +1278,10 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
       row('Connects received', r.received),
       h('tr', {}, h('td', {}, h('b', { text: 'Total' })), h('td', { class: 'mono', text: fmtNum(r.total.charges) }),
         h('td', { class: 'mono' }, h('b', { text: fmtNum(r.total.connects) })),
-        h('td', { class: 'mono' }, h('b', { text: connectsValue(r.total.connects) }))));
+        h('td', { class: 'mono' }, h('b', { text: connectsValue(r.total.connects) }))),
+      h('tr', {}, h('td', {}, h('b', { text: 'Today' })), h('td', { class: 'mono', text: fmtNum(r.today.total.charges) }),
+        h('td', { class: 'mono' }, h('b', { text: fmtNum(r.today.total.connects) })),
+        h('td', { class: 'mono' }, h('b', { text: connectsValue(r.today.total.connects) }))));
   }
   async function refresh() { await loadState(); await Promise.all([loadQueue(), loadLog(), loadJobs(), loadConnectsMonth(), loadAccount()]); }
   route(); refresh();

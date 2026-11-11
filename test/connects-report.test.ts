@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { handleApi } from '../src/api';
-import { CONNECT_USD, buildMonthConnects, loadMonthConnects, monthStartUtc } from '../src/pipeline/connectsReport';
+import { CONNECT_USD, buildMonthConnects, dayStartUtc, loadMonthConnects, monthStartUtc } from '../src/pipeline/connectsReport';
 import { DEFAULT_SETTINGS, saveSettings } from '../src/settings';
 import { environment } from './support/db';
 
@@ -56,4 +56,33 @@ it('leaves a proposal from the previous month out of the report', async () => {
   const res = await handleApi(new Request('https://local.invalid/api/connects-report'), e, '/api/connects-report');
   expect(res.status).toBe(200);
   expect((await res.json()).proposals.connects).toBe(11);
+});
+
+it('Connects spent today equals the table Today total and includes boosts', async () => {
+  const e = env();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.caps.timezone = 'America/Los_Angeles';
+  await saveSettings(e, s);
+  const now = new Date();
+  const start = dayStartUtc('America/Los_Angeles', now);
+  const startMs = Date.parse(`${start.replace(' ', 'T')}Z`);
+  const inside = new Date(Math.max(startMs, now.getTime() - 1000)).toISOString().slice(0, 19).replace('T', ' ');
+  const before = new Date(startMs - 60_000).toISOString().slice(0, 19).replace('T', ' ');
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, status, connects, boost_connects, submitted_at) VALUES ('2119920699600682401', 'Today boosted', 'Hi', 'submitted', 22, 251, ?)").run(inside);
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, status, connects, boost_connects, submitted_at) VALUES ('2119920699600682402', 'Today plain', 'Hi', 'submitted', 30, 0, ?)").run(inside);
+  e.sqlite.prepare("INSERT INTO proposals (job_id, title, cover_letter, status, connects, boost_connects, submitted_at) VALUES ('2119920699600682403', 'Yesterday', 'Hi', 'submitted', 100, 50, ?)").run(before);
+  e.sqlite.prepare("INSERT INTO connects_ledger (key, at, type, reason, amount, kind) VALUES ('today-refund', ?, 'refunded', 'Refund job cancellation', 8, 'applications')").run(new Date(startMs + 1000).toISOString());
+  e.sqlite.prepare("INSERT INTO connects_ledger (key, at, type, reason, amount, kind) VALUES ('old-refund', ?, 'refunded', 'Refund job cancellation', 40, 'applications')").run(new Date(startMs - 60_000).toISOString());
+  const stateRes = await handleApi(new Request('https://local.invalid/api/state'), e, '/api/state');
+  const reportRes = await handleApi(new Request('https://local.invalid/api/connects-report'), e, '/api/connects-report');
+  const state = await stateRes.json() as { today: { connectsSpent: number; connectsBoost: number; connectsRefunded: number; connectsReceived: number } };
+  const report = await reportRes.json() as { today: { total: { connects: number }; boosts: { connects: number }; proposals: { connects: number }; refunds: { connects: number } } };
+  expect(report.today.proposals.connects).toBe(52);
+  expect(report.today.boosts.connects).toBe(251);
+  expect(report.today.refunds.connects).toBe(8);
+  expect(report.today.total.connects).toBe(52 + 251 - 8);
+  expect(state.today.connectsSpent).toBe(report.today.total.connects);
+  expect(state.today.connectsBoost).toBe(report.today.boosts.connects);
+  expect(state.today.connectsRefunded).toBe(report.today.refunds.connects);
+  expect(state.today.connectsSpent).not.toBe(report.today.proposals.connects);
 });
