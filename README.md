@@ -48,7 +48,7 @@ npx wrangler secret put DASH_PASSWORD
 npm run deploy
 ```
 
-Open the Worker URL and sign in on the login page with `DASH_PASSWORD` (password only, no user name). Sessions last 30 days; changing `DASH_PASSWORD` signs everyone out. Failed sign-ins are logged (lengths only, never values) in the Worker logs.
+Open the Worker URL and sign in on the login page with `DASH_PASSWORD` (password only, no user name, at least 6 characters). Sessions last 30 days; changing `DASH_PASSWORD` signs everyone out. Failed sign-ins are logged (lengths only, never values) in the Worker logs.
 The tables are created automatically on the first request (`schema.sql`, all `IF NOT EXISTS`).
 
 ### Deploying from GitHub (Workers Builds)
@@ -143,7 +143,7 @@ Proposal statuses: `pending` → `approved` → `submitting` → `submitted`, or
 
 Use Node **24.19.0** (`.node-version`) and `npm ci`, then `npm run check` to run TypeScript, the unit/integration tests, and a local Worker bundle/dashboard JavaScript check. CI runs these checks without deployment or production credentials. Integration tests use an in-memory database and synthetic upstream responses; they never submit real proposals.
 
-Local login passwords must have at least 12 non-space characters. Keep `.dev.vars` ignored and use a development password, not the production password. Local D1 is separate from the remote database.
+Local login passwords must have at least 6 characters. Keep `.dev.vars` ignored and use a development password, not the production password. Local D1 is separate from the remote database.
 
 Apify deliveries now require an independently configured **`APIFY_WEBHOOK_SECRET` of at least 32 random characters**, passed by the provider as `Authorization: Bearer …`. The old source credential is not accepted. Coordinate a new secret with the webhook configuration before any future production rollout; never put its value in Git or chat. `APIFY_TOKEN` and `APIFY_TASK_ID` enable background task-input synchronization and authenticated dataset reads. This patch does not configure those bindings or change any live task/schedule.
 

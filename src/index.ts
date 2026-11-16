@@ -8,7 +8,7 @@ import { readObject, readTextStream } from './http';
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
 import { handleApi } from './api';
-import { checkPassword, clearCookie, hasSession, loginConfigured, loginPage, sessionCookie, timingSafeEqual } from './auth';
+import { checkPassword, clearCookie, hasSession, loginPage, loginSetupError, sessionCookie, timingSafeEqual } from './auth';
 import { MissingKey } from './crypto';
 import { callbackPurpose, checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
 import { runWriter } from './pipeline/write';
@@ -115,9 +115,8 @@ async function handleUpworkCallback(req: Request, env: Env): Promise<Response> {
 }
 
 async function handleLogin(req: Request, env: Env, secure: boolean): Promise<Response> {
-  if (!loginConfigured(env)) {
-    return html(loginPage('Login is not set up yet. Add the DASH_PASSWORD secret in Cloudflare.'), 503);
-  }
+  const setupError = loginSetupError(env);
+  if (setupError) return html(loginPage(setupError), 503);
   if (req.method === 'GET') return html(loginPage());
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 

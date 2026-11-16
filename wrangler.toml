@@ -34,7 +34,7 @@ UPWORK_MCP_URL = "https://mcp.upwork.com/mcp"
 INDEPENDENT_DRAFTS = "true"
 
 # Secrets (set with `wrangler secret put NAME`, or in .dev.vars for local dev):
-#   DASH_PASSWORD              dashboard login (password only)
+#   DASH_PASSWORD              dashboard login (password only, at least 6 characters)
 #   TOKEN_KEY                  32+ random chars, encrypts stored Upwork/Loom sessions
 #   ANTHROPIC_API_KEY          cover letters + match scoring
 #   RESEND_API_KEY             daily report email and the low-Connects alert

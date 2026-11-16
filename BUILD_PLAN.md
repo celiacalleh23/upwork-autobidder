@@ -240,7 +240,7 @@ New state fields: `upwork.orgUid`, `upwork.toolNames`, `loom.lastError`, `lastSe
 
 | Name | Kind | Purpose |
 | --- | --- | --- |
-| `DASH_PASSWORD` | secret | Dashboard login, password only (set). `DASH_USER` is no longer used. |
+| `DASH_PASSWORD` | secret | Dashboard login, password only, at least 6 characters (set). `DASH_USER` is no longer used. |
 | `TOKEN_KEY` | secret | 32+ random chars; encrypts Upwork tokens and the Loom cookie; also mixed into session signing |
 | `ANTHROPIC_API_KEY` | secret | Claude scoring and letters |
 | `RESEND_API_KEY` | secret | Daily report |

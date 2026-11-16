@@ -23,7 +23,7 @@ All authenticated Upwork callers share the existing D1 request budget. Provider 
 
 Leases use owner tokens and conditional release. Writer leases renew between bounded jobs. Critical state patches update only supplied JSON leaves atomically, with a controls version to invalidate stale work. Sender claims compare the reviewed letter, bid, parameters and approval timestamp. An immutable dispatch snapshot is written before confirmation. Unknown/submitting attempts reserve quota and halt new spending until resolved.
 
-Login attempts are limited to 10 per 15-minute bucket per Cloudflare client IP (a shared local bucket in development). Password configuration requires at least 12 non-space characters. Session cookies, PKCE and AES-GCM remain in place. This change does not add individual user roles or per-device session revocation; the dashboard remains a shared-password application.
+Login attempts are limited to 10 per 15-minute bucket per Cloudflare client IP (a shared local bucket in development). Password configuration requires at least 6 characters. Session cookies, PKCE and AES-GCM remain in place. This change does not add individual user roles or per-device session revocation; the dashboard remains a shared-password application.
 
 ## Production prerequisites — not performed by this patch
 
