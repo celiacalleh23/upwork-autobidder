@@ -4,7 +4,7 @@ import { emailConfigured, sendEmail } from '../email';
 import { acquireLease, delKv, getKv, putKv, releaseLease, ownsLease } from '../kv';
 import type { McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
-import { loadSettings, loadState, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
+import { loadSettings, loadState, parseSettingsSnapshot, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
 import { answerQuestions, rewriteLetter, type JobForClaude } from '../claude';
 import { checkAnswers, checkLetter, cleanScreeningAnswer, metaLanguageIn, repairFirstPerson, thirdPersonIn, resolveSendBid, type Answer } from './letter';
@@ -28,7 +28,7 @@ const holdRetries = (env: Env) => putKv(env, 'send:retryAt', String(Date.now() +
 
 interface Row {
   id: number; job_id: string; title: string; job_type: string | null; cover_letter: string; bid: number | null;
-  approved_at: string | null; approved_via: string | null;
+  approved_at: string | null; approved_via: string | null; settings_snapshot: string | null;
   create_params: string; score: number | null; submitted_at: string | null;
 }
 export interface SendSummary { sent: number; note: string | null }
@@ -139,7 +139,7 @@ async function verifyUnknown(env: Env, client: McpClient, state: State) {
 // null means the live preview omitted the list. An explicit empty list is a real "no questions" answer.
 // A question hold drops the previous approval. Auto must not pick the same row up again.
 async function holdForReview(env: Env, id: number, message: string, summary: SendSummary): Promise<SendSummary> {
-  await setProposal(env, id, { status: 'pending', submitted_at: null, approved_at: null, approved_via: null, error: message });
+  await setProposal(env, id, { status: 'pending', submitted_at: null, approved_at: null, approved_via: null, settings_snapshot: null, error: message });
   summary.note = message;
   return summary;
 }
@@ -178,6 +178,20 @@ function storedParams(row: Row): { extra: Record<string, string>; answers: Answe
   } catch { return { extra: {}, answers: [] }; }
 }
 
+// The copy this send will use. An approval stores one. A row approved before that existed
+// keeps the settings already loaded for this run, so a save during preparation cannot replace them.
+async function ensureSendSettings(env: Env, row: Row, live: Settings): Promise<Settings> {
+  const stored = parseSettingsSnapshot(row.settings_snapshot);
+  if (stored) return stored;
+  const json = JSON.stringify(live);
+  await setProposal(env, row.id, { settings_snapshot: json });
+  row.settings_snapshot = json;
+  return parseSettingsSnapshot(json) ?? live;
+}
+
+const withSending = (base: Settings, enabled: boolean): Settings =>
+  base.sendingEnabled === enabled ? base : { ...base, sendingEnabled: enabled };
+
 async function countError(env: Env, s: Settings, reason: string) {
   const st = await loadState(env);
   const n = st.consecutiveErrors + 1;
@@ -204,31 +218,37 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
        AND (submitted_at IS NULL OR submitted_at < datetime('now', '-15 minutes'))
        AND (upwork_proposal_id IS NULL OR length(trim(upwork_proposal_id)) = 0)`,
   ).run();
-  const [state, s] = await Promise.all([loadState(env), loadSettings(env)]);
+  const [state, live] = await Promise.all([loadState(env), loadSettings(env)]);
   const latest = await env.DB.prepare("SELECT MAX(submitted_at) AS at FROM proposals WHERE status = 'submitted' AND is_example = 0").first<{ at: string | null }>();
   if (latest?.at) {
     const at = `${latest.at.replace(' ', 'T')}Z`;
     if (!state.lastSendAt || Date.parse(at) > Date.parse(state.lastSendAt)) state.lastSendAt = at;
   }
-  const fixedOk = s.fixedPriceTermsAcknowledged ? 1 : 0;
+  const fixedOk = live.fixedPriceTermsAcknowledged ? 1 : 0;
+  const cols = 'p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at, p.approved_at, p.approved_via, p.settings_snapshot';
   const manualRow = await env.DB.prepare(
-    `SELECT p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at, p.approved_at, p.approved_via
+    `SELECT ${cols}
      FROM proposals p WHERE p.status = 'approved' AND p.approved_via = 'dashboard' AND p.is_example = 0
-     AND (p.job_type IS NOT 'fixed' OR ? = 1) ORDER BY p.approved_at ASC LIMIT 1`,
+     AND (p.job_type IS NOT 'fixed' OR ? = 1 OR json_extract(p.settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1) ORDER BY p.approved_at ASC LIMIT 1`,
   ).bind(fixedOk).first<Row>();
-  const counts = await countSent(env, s);
-  // A clicked Approve skips the random 3–9 minute Auto spacing and the configured gap. Caps and active hours still apply.
-  const gate = manualRow ? sendGate(state, s, counts, new Date(), true) : sendGate(state, s, counts) ?? await autoSendWait(env, state);
-  const hasUnknown = await env.DB.prepare("SELECT 1 FROM proposals WHERE status = 'unknown' LIMIT 1").first();
-  if (gate && !(hasUnknown && s.sendingEnabled && !state.paused && state.upwork.connected)) { await setNote(env, gate); return null; }
-
   // Review: the closest match first. Auto: the newest job first, since speed after posting matters most (Siv, Oct 27).
   const order = state.mode === 'auto' ? 'j.posted_at DESC, p.created_at DESC' : 'p.score DESC, p.created_at ASC';
-  const row = manualRow ?? (gate ? null : await env.DB.prepare(
-    `SELECT p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at, p.approved_at, p.approved_via
+  const row = manualRow ?? await env.DB.prepare(
+    `SELECT ${cols}
      FROM proposals p LEFT JOIN jobs j ON j.id = p.job_id
-     WHERE p.status = 'approved' AND p.is_example = 0 AND (p.job_type IS NOT 'fixed' OR ? = 1) ORDER BY ${order} LIMIT 1`,
-  ).bind(fixedOk).first<Row>());
+     WHERE p.status = 'approved' AND p.is_example = 0 AND (p.job_type IS NOT 'fixed' OR ? = 1 OR json_extract(p.settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1) ORDER BY ${order} LIMIT 1`,
+  ).bind(fixedOk).first<Row>();
+  // Caps, hours, boost and bid rules come from the approval snapshot. The Sending switch stays live.
+  const s = row ? await ensureSendSettings(env, row, live) : live;
+  const counts = await countSent(env, s);
+  const manual = !!row && row.approved_via === 'dashboard';
+  const gateSettings = withSending(s, live.sendingEnabled);
+  // A clicked Approve skips the random 3–9 minute Auto spacing and the configured gap. Caps and active hours still apply.
+  const gate = row
+    ? (manual ? sendGate(state, gateSettings, counts, new Date(), true) : sendGate(state, gateSettings, counts) ?? await autoSendWait(env, state))
+    : sendGate(state, live, counts) ?? await autoSendWait(env, state);
+  const hasUnknown = await env.DB.prepare("SELECT 1 FROM proposals WHERE status = 'unknown' LIMIT 1").first();
+  if (gate && !(hasUnknown && live.sendingEnabled && !state.paused && state.upwork.connected)) { await setNote(env, gate); return null; }
   if (!gate && !row) {
     const fixedWaiting = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'approved' AND job_type = 'fixed'").first<{ n: number }>();
     await setNote(env, fixedWaiting?.n ? `${fixedWaiting.n} fixed-price proposal(s) wait for the Upwork terms acknowledgement (Settings → Sending).` : 'Nothing approved to send.');
@@ -393,22 +413,22 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       return summary;
     };
 
-    const [current, settings, proposal] = await Promise.all([
+    const [current, liveNow, proposal] = await Promise.all([
       loadState(env), loadSettings(env),
       env.DB.prepare('SELECT status, cover_letter, bid, create_params, approved_at FROM proposals WHERE id = ?').bind(row.id).first<Row & { status: string }>(),
     ]);
-    const counts = await countSent(env, settings);
+    const counts = await countSent(env, s);
     // This attempt is claimed but has not been transmitted; exclude its own reservation.
     counts.sentToday = Math.max(0, counts.sentToday - 1);
     counts.sentLastHour = Math.max(0, counts.sentLastHour - 1);
-    const manual = row.approved_via === 'dashboard';
-    const blocked = (manual ? sendGate(current, settings, counts, new Date(), true) : sendGate(current, settings, counts) ?? await autoSendWait(env, current))
+    // A Settings save after approval does not abort this send. Pause, Sending, mode and the connection still do.
+    const still = withSending(s, liveNow.sendingEnabled);
+    const blocked = (manual ? sendGate(current, still, counts, new Date(), true) : sendGate(current, still, counts) ?? await autoSendWait(env, current))
       ?? (current.controlsVersion !== state.controlsVersion ? 'Controls changed while preparing this send.' : null)
-      ?? (JSON.stringify(settings) !== JSON.stringify(s) ? 'Settings changed while preparing this send.' : null)
       ?? (current.mode === 'review' && row.approved_via !== 'dashboard' ? 'Manual approval is required in Review mode.' : null);
     if (blocked || !(await ownsLease(env, 'send', lease)) || !proposal || proposal.status !== 'submitting'
       || proposal.cover_letter !== row.cover_letter || proposal.bid !== row.bid || proposal.create_params !== row.create_params || proposal.approved_at !== row.approved_at) {
-      await env.DB.prepare("UPDATE proposals SET status = 'pending', submitted_at = NULL, approved_at = NULL, approved_via = NULL, error = ? WHERE id = ? AND status = 'submitting'")
+      await env.DB.prepare("UPDATE proposals SET status = 'pending', submitted_at = NULL, approved_at = NULL, approved_via = NULL, settings_snapshot = NULL, error = ? WHERE id = ? AND status = 'submitting'")
         .bind(blocked ?? 'Approval or sender ownership changed; review again.', row.id).run();
       summary.note = blocked ?? 'Proposal needs review again.'; return summary;
     }
@@ -428,7 +448,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       client.confirmGuard = async () => {
         const [latest, config] = await Promise.all([loadState(env), loadSettings(env)]);
         if (latest.paused || !config.sendingEnabled || latest.controlsVersion !== current.controlsVersion
-          || JSON.stringify(config) !== JSON.stringify(settings) || !(await ownsLease(env, 'send', lease))) {
+          || !(await ownsLease(env, 'send', lease))) {
           throw Object.assign(new Error('Sending controls changed before dispatch; review again.'), { notSent: true });
         }
       };
@@ -436,7 +456,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     } catch (e) {
       const notSent = (e as { notSent?: boolean }).notSent === true;
       if (notSent) {
-        await setProposal(env, row.id, { status: 'pending', submitted_at: null, approved_at: null, approved_via: null, error: errText(e) });
+        await setProposal(env, row.id, { status: 'pending', submitted_at: null, approved_at: null, approved_via: null, settings_snapshot: null, error: errText(e) });
         summary.note = errText(e); return summary;
       }
       const kind = classifyFailure(e);

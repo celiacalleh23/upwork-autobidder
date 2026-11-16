@@ -213,11 +213,12 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const status = current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via, settings_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, stripUntrusted(job.title), job.url, job.job_type, job.budget, job.client_country, JSON.stringify(keywords), letter, bid,
       JSON.stringify(createParams), loomUrl, loomId, preview.connectsCost ?? d.connectsCost, score, winSimilarity, profileFit, status, note,
-      status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
+      status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null,
+      status === 'approved' ? JSON.stringify(s) : null),
     env.DB.prepare("UPDATE jobs SET status = 'proposed', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?").bind(scoreText, score, winSimilarity, profileFit, job.id),
   ]);
   // A proposal for this job already existed: the new copy is not used by anything.
@@ -387,11 +388,12 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   const status = !meta && current.mode === 'auto' && (!fixed || s.fixedPriceTermsAcknowledged) ? 'approved' : 'pending';
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO proposals (job_id, title, url, job_type, budget, client_country, keywords, cover_letter, bid, create_params, loom_url, loom_video_id, connects, score, win_score, profile_score, status, error, approved_at, approved_via, settings_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(job.id, ready.title, ready.url, ready.jobType, ready.budget, ready.country, JSON.stringify(ready.keywords), ready.letter, ready.bid,
       JSON.stringify(createParams), ready.loomUrl, ready.loomId, null, ready.score, ready.win, ready.profile, status, ready.note.trim() ? ready.note : null,
-      status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null),
+      status === 'approved' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null, status === 'approved' ? 'auto-submit' : null,
+      status === 'approved' ? JSON.stringify(s) : null),
     env.DB.prepare('UPDATE jobs SET analysis = ?, status = \'proposed\', reason = ?, score = ?, win_score = ?, profile_score = ? WHERE id = ?').bind(ready.analysis, ready.scoreText, ready.score, ready.win, ready.profile, job.id),
   ]);
   if (!inserted.meta.changes) {

@@ -134,7 +134,7 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
       const body = await readJson(req);
       if (body.mode === 'review') {
         const state = await patchState(env, { mode: 'review' });
-        await env.DB.prepare("UPDATE proposals SET status = 'pending', approved_at = NULL, approved_via = NULL WHERE status = 'approved' AND approved_via = 'auto-submit'").run();
+        await env.DB.prepare("UPDATE proposals SET status = 'pending', approved_at = NULL, approved_via = NULL, settings_snapshot = NULL WHERE status = 'approved' AND approved_via = 'auto-submit'").run();
         return json(state);
       }
       if (body.mode === 'auto') {
@@ -300,7 +300,7 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
           if (!open) return fail('This proposal is no longer awaiting verification', 409);
           if (!open.preview_id && !open.upwork_proposal_id) {
             const via = open.approved_via || 'dashboard';
-            const restored = await env.DB.prepare("UPDATE proposals SET status = 'approved', submitted_at = NULL, error = NULL, approved_via = ?, approved_at = COALESCE(approved_at, datetime('now')) WHERE id = ? AND status = 'unknown'")
+            const restored = await env.DB.prepare("UPDATE proposals SET status = 'approved', submitted_at = NULL, error = NULL, approved_via = ?, approved_at = COALESCE(approved_at, datetime('now')), settings_snapshot = COALESCE(settings_snapshot, (SELECT value FROM kv WHERE key = 'settings')) WHERE id = ? AND status = 'unknown'")
               .bind(via, id).run();
             return restored.meta.changes ? json({ ok: true, status: 'approved' }) : fail('This proposal is no longer awaiting verification', 409);
           }
@@ -377,14 +377,14 @@ export async function handleApi(req: Request, env: Env, path: string, ctx?: Pick
           params.answers = voicedAnswers;
           nextParams = JSON.stringify(params);
         }
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', cover_letter = ?, create_params = ?, error = NULL, approved_at = datetime('now'), approved_via = 'dashboard' WHERE id = ? AND status = 'pending' AND create_params = ?").bind(letter, nextParams, id, originalParams).run();
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'approved', cover_letter = ?, create_params = ?, error = NULL, approved_at = datetime('now'), approved_via = 'dashboard', settings_snapshot = (SELECT value FROM kv WHERE key = 'settings') WHERE id = ? AND status = 'pending' AND create_params = ?").bind(letter, nextParams, id, originalParams).run();
         if (!r.meta.changes) return fail('This proposal is no longer waiting for review', 409);
         // The sender runs on the cron. Starting it from this request gets cancelled after the response, which can
         // leave the row claimed as sending before a preview exists.
         return json({ ok: true, status: 'approved' });
       }
       if (method === 'POST' && action === 'unapprove') {
-        const r = await env.DB.prepare("UPDATE proposals SET status = 'pending', approved_at = NULL, approved_via = NULL WHERE id = ? AND status = 'approved'").bind(id).run();
+        const r = await env.DB.prepare("UPDATE proposals SET status = 'pending', approved_at = NULL, approved_via = NULL, settings_snapshot = NULL WHERE id = ? AND status = 'approved'").bind(id).run();
         if (!r.meta.changes) return fail('This proposal is already being sent or was sent', 409);
         return json({ ok: true, status: 'pending' });
       }

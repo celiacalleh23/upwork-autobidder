@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   loom_deleted_at TEXT,
   approved_at TEXT,                  -- when it was approved, and how: 'dashboard' (Approve button) or 'auto-submit'
   approved_via TEXT,
+  settings_snapshot TEXT,            -- settings JSON captured at approval; later Settings saves do not change this send
   connects INTEGER,
   boost_connects INTEGER,            -- Connects bid to boost it (charged only if it lands in a paid slot)
   score INTEGER,
