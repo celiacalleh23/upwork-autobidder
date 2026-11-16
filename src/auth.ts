@@ -32,7 +32,21 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-export const loginConfigured = (env: Env) => Boolean(env.DASH_PASSWORD && env.DASH_PASSWORD.trim().length >= 12);
+// Trimmed length. A shorter secret stays closed with its own message; a blank one is treated as unset.
+export const MIN_DASH_PASSWORD_LENGTH = 6;
+
+const LOGIN_NOT_SET_UP = 'Login is not set up yet. Add the DASH_PASSWORD secret in Cloudflare.';
+
+export function loginSetupError(env: Env): string | null {
+  const trimmed = env.DASH_PASSWORD?.trim() ?? '';
+  if (!trimmed) return LOGIN_NOT_SET_UP;
+  if (trimmed.length < MIN_DASH_PASSWORD_LENGTH) {
+    return `DASH_PASSWORD is too short. It must be at least ${MIN_DASH_PASSWORD_LENGTH} characters.`;
+  }
+  return null;
+}
+
+export const loginConfigured = (env: Env) => loginSetupError(env) === null;
 
 export async function hasSession(req: Request, env: Env): Promise<boolean> {
   if (!loginConfigured(env)) return false;
