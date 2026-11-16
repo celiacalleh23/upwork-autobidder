@@ -62,6 +62,19 @@ export async function permitJobRead(env: Env): Promise<void> {
   if (Number(await getKv(env, 'upwork:jobReadRetryAt')) > Date.now()) throw new UpworkBusy('Job-detail reads are cooling down after an Upwork access refusal.');
 }
 
+// The later of Upwork's own waits (a 429 retry-after, or the job-open cooldown). Null when a call is allowed.
+export async function pendingUpworkWait(env: Env, now = Date.now()): Promise<number | null> {
+  const [jobRead, retry] = await Promise.all([getKv(env, 'upwork:jobReadRetryAt'), getKv(env, 'upwork:retryAt')]);
+  const until = Math.max(Number(jobRead), Number(retry));
+  return Number.isFinite(until) && until > now ? until : null;
+}
+
+// Short neutral dashboard copy. The time is when the next Upwork attempt is allowed, in the account's timezone.
+export function slowDownNote(untilMs: number, timeZone: string): string {
+  const when = new Date(untilMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone });
+  return `Upwork asked to slow down; next attempt at ${when}.`;
+}
+
 export async function recordUpworkError(env: Env, e: unknown): Promise<void> {
   const msg = e instanceof Error ? e.message : String(e);
   if (e instanceof McpJobAccessError) {

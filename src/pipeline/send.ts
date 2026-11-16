@@ -2,7 +2,7 @@ import { dayStartUtc } from '../api';
 import { autoSendWait } from './pace';
 import { emailConfigured, sendEmail } from '../email';
 import { acquireLease, delKv, getKv, putKv, releaseLease, ownsLease } from '../kv';
-import type { McpClient } from '../mcp';
+import { McpJobAccessError, type McpClient } from '../mcp';
 import { findKey, upworkClient } from '../oauth';
 import { loadSettings, loadState, parseSettingsSnapshot, patchState, reportEmails, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit } from './filters';
@@ -13,7 +13,7 @@ import { loadSnapshot } from './snapshot';
 import { createPreview } from './preview';
 import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
-import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning } from '../upworkPace';
+import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning, pendingUpworkWait, recordUpworkError, slowDownNote, UpworkBusy } from '../upworkPace';
 import { clearStall, confirmProposalId, markStallOpen, markSubmitted, recoverSubmittedRows, requeueNeverConfirmed } from './submitted';
 
 // Sender (M6): the only code that spends Connects. One approved proposal per cron run, highest score first in Review and
@@ -21,10 +21,28 @@ import { clearStall, confirmProposalId, markStallOpen, markSubmitted, recoverSub
 // never in code). A confirm whose result is unclear is marked 'unknown' and never resent; the next runs look for it on Upwork.
 
 const LEASE_MS = 10 * 60_000;
-// Auto runs the sender every minute (pace.ts). After a wait or an error from Upwork, and between checks of unclear
-// sends, Upwork is asked again only 5 minutes later, as in Review (30 s slack for the cron).
+// Auto runs the sender every minute (pace.ts). A dropped connection or other non-Upwork error waits 5 minutes
+// (30 s slack for the cron). An Upwork rate limit or job-open cooldown is NOT this timer: those keep Upwork's own
+// retry time, and a cooldown check must not push this timer forward.
 const RETRY_AFTER_MS = 5 * 60_000 - 30_000;
 const holdRetries = (env: Env) => putKv(env, 'send:retryAt', String(Date.now() + RETRY_AFTER_MS));
+const isSendSlowdown = (e: unknown): e is UpworkBusy | McpJobAccessError =>
+  e instanceof McpJobAccessError || (e instanceof UpworkBusy && !e.message.startsWith('Paused:'));
+
+async function rateLimitNote(env: Env, s: Settings): Promise<string> {
+  const until = await pendingUpworkWait(env);
+  return until ? slowDownNote(until, s.caps.timezone) : 'Upwork asked to slow down; sending again next round.';
+}
+
+// The job Upwork most recently refused to open. It stays approved, but it does not block the others.
+async function lastRefusedJobId(env: Env): Promise<string> {
+  const raw = await getKv(env, 'upwork:jobAccess:last');
+  if (!raw) return '';
+  try {
+    const jobId = (JSON.parse(raw) as { jobId?: unknown }).jobId;
+    return typeof jobId === 'string' && /^\d{8,22}$/.test(jobId) ? jobId : '';
+  } catch { return ''; }
+}
 
 interface Row {
   id: number; job_id: string; title: string; job_type: string | null; cover_letter: string; bid: number | null;
@@ -225,19 +243,23 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     if (!state.lastSendAt || Date.parse(at) > Date.parse(state.lastSendAt)) state.lastSendAt = at;
   }
   const fixedOk = live.fixedPriceTermsAcknowledged ? 1 : 0;
+  const refusedJob = await lastRefusedJobId(env);
   const cols = 'p.id, p.job_id, p.title, p.job_type, p.cover_letter, p.bid, p.create_params, p.score, p.submitted_at, p.approved_at, p.approved_via, p.settings_snapshot';
   const manualRow = await env.DB.prepare(
     `SELECT ${cols}
      FROM proposals p WHERE p.status = 'approved' AND p.approved_via = 'dashboard' AND p.is_example = 0
-     AND (p.job_type IS NOT 'fixed' OR ? = 1 OR json_extract(p.settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1) ORDER BY p.approved_at ASC LIMIT 1`,
-  ).bind(fixedOk).first<Row>();
+     AND (p.job_type IS NOT 'fixed' OR ? = 1 OR json_extract(p.settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1)
+     ORDER BY CASE WHEN p.job_id = ? THEN 1 ELSE 0 END, p.approved_at ASC LIMIT 1`,
+  ).bind(fixedOk, refusedJob).first<Row>();
   // Review: the closest match first. Auto: the newest job first, since speed after posting matters most (Siv, Oct 27).
+  // A job Upwork just refused to open stays last, so the other approvals are not stuck behind it.
   const order = state.mode === 'auto' ? 'j.posted_at DESC, p.created_at DESC' : 'p.score DESC, p.created_at ASC';
   const row = manualRow ?? await env.DB.prepare(
     `SELECT ${cols}
      FROM proposals p LEFT JOIN jobs j ON j.id = p.job_id
-     WHERE p.status = 'approved' AND p.is_example = 0 AND (p.job_type IS NOT 'fixed' OR ? = 1 OR json_extract(p.settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1) ORDER BY ${order} LIMIT 1`,
-  ).bind(fixedOk).first<Row>();
+     WHERE p.status = 'approved' AND p.is_example = 0 AND (p.job_type IS NOT 'fixed' OR ? = 1 OR json_extract(p.settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1)
+     ORDER BY CASE WHEN p.job_id = ? THEN 1 ELSE 0 END, ${order} LIMIT 1`,
+  ).bind(fixedOk, refusedJob).first<Row>();
   // Caps, hours, boost and bid rules come from the approval snapshot. The Sending switch stays live.
   const s = row ? await ensureSendSettings(env, row, live) : live;
   const counts = await countSent(env, s);
@@ -255,12 +277,22 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     if (!hasUnknown) return null;
   }
   const held = Number(await getKv(env, 'send:retryAt')) > Date.now();
-  if (held && !hasUnknown) return null; // the note from the last try stays
+  if (held && !hasUnknown) {
+    // A previous non-Upwork error may still be inside its 5-minute hold. Do not extend it from this check.
+    const until = await pendingUpworkWait(env);
+    if (until) await setNote(env, slowDownNote(until, s.caps.timezone));
+    return null;
+  }
   const summary: SendSummary = { sent: 0, note: gate ?? (row ? null : 'Nothing approved to send.') };
   let confirmAttempted = false;
   let stallId: number | null = null;
   let previewStored = false;
   try {
+    // Upwork already named the next legal attempt. Waiting here makes no request and does not move send:retryAt.
+    if (row && !hasUnknown) {
+      const until = await pendingUpworkWait(env);
+      if (until) { summary.note = slowDownNote(until, s.caps.timezone); return summary; }
+    }
     if (row) {
       const meta = metaLanguageIn(row.cover_letter);
       if (meta) {
@@ -394,7 +426,11 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       const kind = classifyFailure(e);
       if (kind === 'refused') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${errText(e)}` }); return summary; }
       await setProposal(env, row.id, { status: 'approved', submitted_at: null });
-      if (kind === 'throttle') { await noteThrottle(env, 'sending', errText(e)); summary.note = 'Upwork asked to slow down; sending again next round.'; return summary; }
+      if (isSendSlowdown(e) || kind === 'throttle') {
+        if (e instanceof McpJobAccessError || kind === 'throttle') await recordUpworkError(env, e).catch(() => undefined);
+        if (kind === 'throttle') await noteThrottle(env, 'sending', errText(e));
+        summary.note = await rateLimitNote(env, s); return summary;
+      }
       await holdRetries(env);
       if (kind === 'warning') await pauseForWarning(env, 'sending', errText(e));
       else await countError(env, s, errText(e));
@@ -519,8 +555,10 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
       }
       if (kind === 'throttle') {
         await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
+        const limit = new Error(out.message);
+        await recordUpworkError(env, limit).catch(() => undefined);
         await noteThrottle(env, 'sending', out.message);
-        summary.note = 'Upwork asked to slow down; sending again next round.'; return summary;
+        summary.note = await rateLimitNote(env, s); return summary;
       }
       if (kind !== 'warning' && boost && isBoostRefusal(out.message)) return await boostRefused(out.message);
       await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${out.message}` });
@@ -539,14 +577,24 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     await env.DB.prepare("INSERT INTO runs (finished_at, submitted, note) VALUES (datetime('now'), 1, ?)").bind(summary.note).run();
     return summary;
   } catch (e) {
-    summary.note = `Sender: ${errText(e)}`;
-    console.error('sender failed', summary.note);
-    if (classifyFailure(e) === 'warning') await pauseForWarning(env, 'sending', errText(e));
-    // Before the confirm it is safe to retry later; after it, never: the proposal may already be on Upwork.
-    // Upwork's per-minute limit (e.g. on the job check) is retried next run; anything else waits 5 minutes.
-    if (row && !confirmAttempted) {
-      if (isThrottle(e)) await noteThrottle(env, 'sending', errText(e)).catch(() => false);
-      else await holdRetries(env).catch(() => undefined);
+    // A real Upwork slow-down keeps Upwork's own clock. It must not start a second timer that outlasts it and
+    // then refreshes itself, or one refused job open blocks every other approval.
+    if (isSendSlowdown(e)) {
+      if (e instanceof McpJobAccessError) await recordUpworkError(env, e).catch(() => undefined);
+      summary.note = await rateLimitNote(env, s);
+    } else {
+      summary.note = `Sender: ${errText(e)}`;
+      console.error('sender failed', summary.note);
+      if (classifyFailure(e) === 'warning') await pauseForWarning(env, 'sending', errText(e));
+      // Before the confirm it is safe to retry later; after it, never: the proposal may already be on Upwork.
+      // Upwork's per-minute limit keeps the retry time Upwork asked for. Other errors wait 5 minutes.
+      if (row && !confirmAttempted) {
+        if (isThrottle(e)) {
+          await recordUpworkError(env, e).catch(() => undefined);
+          await noteThrottle(env, 'sending', errText(e)).catch(() => false);
+          summary.note = await rateLimitNote(env, s);
+        } else await holdRetries(env).catch(() => undefined);
+      }
     }
     if (row) {
       await env.DB.prepare(confirmAttempted
