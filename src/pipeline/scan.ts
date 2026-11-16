@@ -4,6 +4,21 @@ import { loadSettings, loadState, patchState, type Env } from '../settings';
 import { addJob, jobUrl } from './jobs';
 
 export const discoveryDue = (minute: number) => minute % 15 === 0;
+
+// Approved sends use the Upwork budget first. Discovery searches (especially with full details) wait.
+export function discoveryYieldsToSends(input: {
+  queued: number; sendingEnabled: boolean; paused: boolean; active: boolean; connected: boolean;
+}): boolean {
+  return input.queued > 0 && input.sendingEnabled && !input.paused && input.active && input.connected;
+}
+
+export async function approvedSendCount(env: Env, fixedPriceAllowed: boolean): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM proposals WHERE status = 'approved' AND is_example = 0
+     AND (job_type IS NOT 'fixed' OR ? = 1 OR json_extract(settings_snapshot, '$.fixedPriceTermsAcknowledged') = 1)`,
+  ).bind(fixedPriceAllowed ? 1 : 0).first<{ n: number }>();
+  return Number(row?.n ?? 0);
+}
 export const DISCOVERY_WINDOW_MS = 60 * 60_000;
 const MAX_QUERIES = 12; // 576 base requests/day; quota guard also counts retries.
 

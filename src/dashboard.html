@@ -603,6 +603,10 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
   setInterval(() => { if (syncPending && !document.hidden) refreshApifyStatus(); }, 3000);
 
   // ---------- State / header ----------
+  function upworkSlowNote() {
+    const note = state && state.sendingEnabled && state.senderNote;
+    return typeof note === 'string' && /^Upwork asked to slow down; next attempt at /.test(note) ? note : '';
+  }
   function renderState() {
     const s = state;
     const sync = s.apifySync;
@@ -656,7 +660,8 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     $('sCap').textContent = c.daily ? `/ ${c.daily} cap` : 'no daily cap';
     $('sBar').style.width = c.daily ? Math.min(100, (t.sent / c.daily) * 100) + '%' : '0%';
     $('sWaiting').textContent = fmtNum(t.waiting);
-    $('sApproved').textContent = `${fmtNum(t.approved)} approved, sending soon`;
+    const slow = upworkSlowNote();
+    $('sApproved').textContent = slow || `${fmtNum(t.approved)} approved, sending soon`;
     // Connects spent today is painted with the month table, from the same Today total.
     // The 250 is an alert (email, sending continues), not a floor (Siv, Oct 21); show whichever applies.
     $('sFloor').textContent = [c.connectsFloor ? `Stops below ${c.connectsFloor}` : null, s.connectsAlertBelow ? `Alert email below ${fmtNum(s.connectsAlertBelow)}` : null]
@@ -827,9 +832,12 @@ td details.why-td .why{margin-top:6px; grid-template-columns:1fr}
     catch (e) { toast(e.message, true); return; }
     const body = $('logBody');
     if (!append) body.replaceChildren();
+    const slow = upworkSlowNote();
     for (const r of data.rows) {
       const status = r.upwork_proposal_id && (r.status === 'submitting' || r.status === 'sending') ? 'submitted' : r.status;
-      const [label, tone] = STATUS[status] || [status, ''];
+      const statusInfo = STATUS[status] || [status, ''];
+      const label = status === 'approved' && slow ? slow : statusInfo[0];
+      const tone = statusInfo[1];
       const via = r.approved_via === 'auto-submit' ? 'by Auto-submit' : r.approved_via === 'dashboard' ? 'with the Approve button' : null;
       const stBox = h('div', { class: 'st-cell' }, h('span', { class: `chip ${tone}`, text: label }),
         r.boost_connects ? h('span', { class: 'chip pink', title: 'Boosted: Upwork charges the bid only if the proposal lands in a paid spot', text: `Boosted · ${r.boost_connects} Connects` }) : null,

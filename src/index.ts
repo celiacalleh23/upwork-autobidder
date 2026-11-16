@@ -1,5 +1,5 @@
 import { receiveScanJob } from './scanner/delivery';
-import { discoveryDue, runScan } from './pipeline/scan';
+import { approvedSendCount, discoveryDue, discoveryYieldsToSends, runScan } from './pipeline/scan';
 import { sha256b64url } from './crypto';
 import { deliverSafetyAlerts } from './notifications';
 import { receiveApify, drainApify, syncApify } from './apify';
@@ -7,7 +7,7 @@ import { readObject, readTextStream } from './http';
 
 import dashboardHtml from './dashboard.html';
 import schemaSql from '../schema.sql';
-import { handleApi } from './api';
+import { handleApi, isActiveNow } from './api';
 import { checkPassword, clearCookie, hasSession, loginPage, loginSetupError, sessionCookie, timingSafeEqual } from './auth';
 import { MissingKey } from './crypto';
 import { callbackPurpose, checkUpwork, finishUpworkAuth, OAuthError, startUpworkAuth } from './oauth';
@@ -223,12 +223,22 @@ export default {
       OR (key LIKE 'apify:receipt:%' AND json_extract(value, '$.status') = 'done' AND updated_at < datetime('now', '-30 days')) LIMIT 100
     )`).run();
     if (event.cron === SEND_CRON) {
-      if (discoveryDue(minute)) await runScan(env, event.scheduledTime).catch(log('Upwork discovery'));
-      const mode = (await loadState(env)).mode;
-      const manualWaiting = mode !== 'auto' && minute % 5 !== 0
+      const st = await loadState(env);
+      // Discovery's searches share Upwork's request budget with sends. A queued approval goes first.
+      if (discoveryDue(minute)) {
+        const settings = await loadSettings(env);
+        const queued = await approvedSendCount(env, settings.fixedPriceTermsAcknowledged);
+        const yields = discoveryYieldsToSends({
+          queued, sendingEnabled: settings.sendingEnabled, paused: st.paused,
+          active: isActiveNow(settings.caps.activeStart, settings.caps.activeEnd, settings.caps.timezone, new Date(event.scheduledTime)),
+          connected: st.upwork.connected,
+        });
+        if (!yields) await runScan(env, event.scheduledTime).catch(log('Upwork discovery'));
+      }
+      const manualWaiting = st.mode !== 'auto' && minute % 5 !== 0
         ? !!(await env.DB.prepare("SELECT 1 AS n FROM proposals WHERE status = 'approved' AND approved_via = 'dashboard' AND is_example = 0 LIMIT 1").first())
         : false;
-      if (!sendDue(minute, mode, manualWaiting)) return;
+      if (!sendDue(minute, st.mode, manualWaiting)) return;
       await runSender(env).catch(log('sender'));
     } else if (event.cron === WRITE_CRON) {
       await drainApify(env).catch(log('Apify import'));
