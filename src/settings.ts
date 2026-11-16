@@ -181,6 +181,18 @@ export const loomAlertEmails = (s: Settings) => {
 };
 
 export const loadSettings = (env: Env) => getJson(env, 'settings', DEFAULT_SETTINGS);
+
+// Settings stored on a proposal at approval. Missing keys pick up defaults; a bad value is ignored.
+export function parseSettingsSnapshot(raw: string | null | undefined): Settings | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isObj(parsed)) return null;
+    return deepMerge(structuredClone(DEFAULT_SETTINGS), parsed);
+  } catch {
+    return null;
+  }
+}
 export async function saveSettings(env: Env, s: Settings): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("INSERT INTO kv (key,value,updated_at) VALUES ('settings',?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify(s)),

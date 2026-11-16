@@ -63,7 +63,7 @@ export async function requeueNeverConfirmed(env: Env): Promise<void> {
     const seen = (mark?.n ?? 0) + 1;
     if (seen > PREVIEW_STALL_RETRIES) {
       await env.DB.prepare(
-        `UPDATE proposals SET status = 'pending', submitted_at = NULL, approved_at = NULL, approved_via = NULL, error = ? WHERE id = ? AND preview_id IS NULL`,
+        `UPDATE proposals SET status = 'pending', submitted_at = NULL, approved_at = NULL, approved_via = NULL, settings_snapshot = NULL, error = ? WHERE id = ? AND preview_id IS NULL`,
       ).bind(STALL_NOTE, row.id).run();
       await clearStall(env, row.id);
       continue;

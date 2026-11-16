@@ -187,6 +187,157 @@ describe('submission boundary (mocked upstream only)', () => {
   it('requires manual approval in Review even for an old Auto approval', async () => {
     const r = await sender({ autoApproval: true }); expect(r.confirms).toBe(0); expect(r.row?.status).toBe('pending');
   });
+
+  it('sends an approved proposal with the settings from approval after a later Settings save', async () => {
+    vi.useFakeTimers();
+    const e = env(); await connected(e);
+    const sending = (caps: Partial<typeof DEFAULT_SETTINGS.caps> = {}) => {
+      const s = structuredClone(DEFAULT_SETTINGS);
+      s.sendingEnabled = true;
+      s.caps = { ...s.caps, activeStart: '00:00', activeEnd: '00:00', daily: 0, hourly: 0, connectsFloorEnabled: false, maxConnectsEnabled: false, boostInAuto: true, boostMinScore: 85, boostMaxConnects: 20, ...caps };
+      return s;
+    };
+    const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+    const other = (Number(hm.slice(0, 2)) + 12) % 24;
+    const closed = { activeStart: `${String(other).padStart(2, '0')}:00`, activeEnd: `${String((other + 1) % 24).padStart(2, '0')}:00` };
+    const atApproval = sending();
+    const whileQueued = sending({ boostMaxConnects: 200, daily: 1, ...closed });
+    const duringSend = sending({ boostMaxConnects: 500 });
+    const duringNext = sending({ boostMaxConnects: 10 });
+    const capped = sending({ daily: 1, boostMaxConnects: 200 });
+    const unlimited = sending({ daily: 0, boostMaxConnects: 200 });
+    await saveSettings(e, atApproval);
+    const jobA = '2115559352186121401';
+    const jobB = '2115559352186121402';
+    const jobC = '2115559352186121403';
+    const approve = async (job: string) => {
+      const id = (e.sqlite.prepare('SELECT id FROM proposals WHERE job_id = ?').get(job) as { id: number }).id;
+      expect((await handleApi(new Request(`https://local.invalid/api/proposals/${id}/approve`, { method: 'POST', headers: { 'x-dashboard': '1' } }), e, `/api/proposals/${id}/approve`)).status).toBe(200);
+      return id;
+    };
+    const insert = (job: string, status = 'pending') => e.sqlite.prepare(
+      "INSERT INTO proposals(job_id,title,cover_letter,bid,job_type,score,status,create_params) VALUES (?, 'Synthetic', 'Synthetic letter', 40, 'hourly', 90, ?, '{}')",
+    ).run(job, status);
+    insert(jobA);
+    const idA = await approve(jobA);
+    expect(JSON.parse((e.sqlite.prepare('SELECT settings_snapshot AS s FROM proposals WHERE id = ?').get(idA) as { s: string }).s).caps.boostMaxConnects).toBe(20);
+    await saveSettings(e, whileQueued);
+    e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,status,submitted_at,create_params) VALUES ('2115559352186121409','Sent','Synthetic letter','submitted',datetime('now'),'{}')").run();
+    let confirms = 0;
+    const boostBids: number[] = [];
+    const confirmed = new Set<string>();
+    vi.spyOn(claude, 'answerQuestions').mockImplementation(async (_env, _profile, _job, questions: string[]) => questions.map((question) => ({ question, answer: 'I can start on this next week.' })));
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      expect(String(url)).toBe(e.UPWORK_MCP_URL);
+      const m = JSON.parse(String(init.body));
+      let result: unknown = {};
+      if (m.method === 'initialize') result = { protocolVersion: '2025-06-18' };
+      if (m.method === 'tools/call') {
+        const name = m.params.name;
+        const params = m.params.arguments?.params ?? {};
+        let data: unknown = {};
+        if (name === 'get_freelancer_dashboard') data = { connectsBalance: 500 };
+        if (name === 'find_jobs') data = { connects_cost: 8, connects_balance: 500, can_apply: true, applied: false };
+        if (name === 'list_freelancer_proposals') data = m.params.arguments.action === 'invitations' ? { invitations: [] } : { proposals: [] };
+        if (name === 'manage_proposals') {
+          if (params.job_reference === jobA) await saveSettings(e, duringSend);
+          if (params.job_reference === jobB && !params.boost_connects) await saveSettings(e, duringNext);
+          if (params.boost_connects) boostBids.push(params.boost_connects);
+          data = { preview_id: `preview-${params.job_reference}`, connects_cost: 8, can_apply: true, questions: [], boost: { available: true, recommended_connects: 32, max_boost_connects: 600 } };
+        }
+        if (name === 'confirm_preview') {
+          confirms++;
+          confirmed.add(params.preview_id);
+          data = { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: `upwork-${confirms}`, error: null } } };
+        }
+        result = { structuredContent: data };
+      }
+      return new Response(m.id === undefined ? null : JSON.stringify({ jsonrpc: '2.0', id: m.id, result }), { status: m.id === undefined ? 202 : 200, headers: { 'content-type': 'application/json' } });
+    });
+    const proposal = (id: number) => e.sqlite.prepare('SELECT status, error, boost_connects, upwork_proposal_id, settings_snapshot FROM proposals WHERE id = ?').get(id) as { status: string; error: string | null; boost_connects: number | null; upwork_proposal_id: string | null; settings_snapshot: string };
+    await finishPipeline(runSender(e));
+    const sentA = proposal(idA);
+    expect(sentA.status).toBe('submitted');
+    expect(sentA.error).toBeNull();
+    expect(sentA.boost_connects).toBeNull();
+    expect(JSON.parse(sentA.settings_snapshot).caps).toMatchObject({ boostMaxConnects: 20, boostMinScore: 85, daily: 0, activeStart: '00:00', activeEnd: '00:00' });
+    expect(JSON.parse((await getKv(e, `boost:decision:${idA}`))!)).toMatchObject({ bid: null, reason: 'bid_above_configured_limit', maxBid: 20, minScore: 85 });
+    expect(confirms).toBe(1);
+    insert(jobB);
+    const idB = await approve(jobB);
+    expect(JSON.parse(proposal(idB).settings_snapshot).caps.boostMaxConnects).toBe(500);
+    await finishPipeline(runSender(e));
+    const sentB = proposal(idB);
+    expect(sentB).toMatchObject({ status: 'submitted', error: null, boost_connects: 32 });
+    expect(JSON.parse(sentB.settings_snapshot).caps.boostMaxConnects).toBe(500);
+    expect(JSON.parse((await getKv(e, `boost:decision:${idB}`))!)).toMatchObject({ bid: 32, maxBid: 500, minScore: 85 });
+    expect(boostBids).toEqual([32]);
+    expect(confirms).toBe(2);
+    expect(confirmed.size).toBe(2);
+    const idAOnUpwork = sentA.upwork_proposal_id;
+    await finishPipeline(runSender(e));
+    expect(confirms).toBe(2);
+    expect(proposal(idA).upwork_proposal_id).toBe(idAOnUpwork);
+    expect(proposal(idB).status).toBe('submitted');
+    insert(jobC);
+    await saveSettings(e, capped);
+    const idC = await approve(jobC);
+    await saveSettings(e, unlimited);
+    await finishPipeline(runSender(e));
+    expect(confirms).toBe(2);
+    expect(proposal(idC)).toMatchObject({ status: 'approved', error: null, upwork_proposal_id: null });
+    expect((await loadState(e)).senderNote).toBe('Daily cap reached (1).');
+    expect(e.sqlite.prepare("SELECT count(*) AS n FROM kv WHERE key LIKE 'send:attempt:%'").get()).toMatchObject({ n: 2 });
+  });
+
+  it('does not return an already-approved send to review when settings change during preparation', async () => {
+    vi.useFakeTimers();
+    const e = env(); await connected(e);
+    const s = structuredClone(DEFAULT_SETTINGS);
+    s.sendingEnabled = true;
+    s.caps.activeStart = s.caps.activeEnd = '00:00';
+    s.caps.boostInAuto = true;
+    s.caps.boostMinScore = 85;
+    s.caps.boostMaxConnects = 20;
+    s.caps.connectsFloorEnabled = false;
+    s.caps.maxConnectsEnabled = false;
+    await saveSettings(e, s);
+    e.sqlite.prepare("INSERT INTO proposals(job_id,title,cover_letter,bid,job_type,score,status,approved_via,approved_at,create_params) VALUES ('2115559352186121411','Synthetic','Synthetic letter',40,'hourly',90,'approved','dashboard',datetime('now'),'{}')").run();
+    let confirms = 0;
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      expect(String(url)).toBe(e.UPWORK_MCP_URL);
+      const m = JSON.parse(String(init.body));
+      let result: unknown = {};
+      if (m.method === 'initialize') result = { protocolVersion: '2025-06-18' };
+      if (m.method === 'tools/call') {
+        const name = m.params.name;
+        let data: unknown = {};
+        if (name === 'get_freelancer_dashboard') data = { connectsBalance: 500 };
+        if (name === 'find_jobs') data = { connects_cost: 8, connects_balance: 500, can_apply: true, applied: false };
+        if (name === 'list_freelancer_proposals') data = m.params.arguments.action === 'invitations' ? { invitations: [] } : { proposals: [] };
+        if (name === 'manage_proposals') {
+          await saveSettings(e, { ...s, caps: { ...s.caps, boostMaxConnects: 500 } });
+          data = { preview_id: 'legacy-preview', connects_cost: 8, can_apply: true, questions: [], boost: { available: true, recommended_connects: 32, max_boost_connects: 600 } };
+        }
+        if (name === 'confirm_preview') {
+          confirms++;
+          data = { status: 'submitted', data: { createJobProposal: { status: 'SUCCESS', newProposalId: 'legacy-upwork', error: null } } };
+        }
+        result = { structuredContent: data };
+      }
+      return new Response(m.id === undefined ? null : JSON.stringify({ jsonrpc: '2.0', id: m.id, result }), { status: m.id === undefined ? 202 : 200, headers: { 'content-type': 'application/json' } });
+    });
+    await finishPipeline(runSender(e));
+    const row = e.sqlite.prepare('SELECT status, error, boost_connects, settings_snapshot FROM proposals WHERE id = 1').get() as { status: string; error: string | null; boost_connects: number | null; settings_snapshot: string };
+    expect(row.status).toBe('submitted');
+    expect(row.error).toBeNull();
+    expect(row.boost_connects).toBeNull();
+    expect(JSON.parse(row.settings_snapshot).caps.boostMaxConnects).toBe(20);
+    expect(confirms).toBe(1);
+    await finishPipeline(runSender(e));
+    expect(confirms).toBe(1);
+    expect(e.sqlite.prepare('SELECT status, upwork_proposal_id FROM proposals WHERE id = 1').get()).toMatchObject({ status: 'submitted', upwork_proposal_id: 'legacy-upwork' });
+  });
 });
 
 describe('atomic D1 controls and intake', () => {
