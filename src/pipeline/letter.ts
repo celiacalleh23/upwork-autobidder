@@ -12,24 +12,84 @@ export const MAX_OPENING = 300; // one sentence (Siv, Oct 27)
 export const MAX_OPENING_SENTENCES = 1;
 
 // Sentence ends: . ! ? followed by a space or the end (not inside numbers like 4.5 or "e.g. ").
+const SENTENCE_SPLIT = /(?<=[.!?])\s+(?=[A-Z0-9"“'(])/;
+export function splitSentences(text: string): string[] {
+  return text.trim().split(SENTENCE_SPLIT).map((s) => s.trim()).filter(Boolean);
+}
 export function countSentences(text: string): number {
-  return text.trim().split(/(?<=[.!?])\s+(?=[A-Z0-9"“'(])/).filter((s) => s.trim()).length;
+  return splitSentences(text).length;
 }
 
-// Contact details are not allowed in Upwork cover letters
+// "at Shopify" / "flows@Klaviyo" is workplace phrasing, not a personal handle.
+const WORKPLACE_AT = new Set([
+  'home', 'work', 'office', 'scale', 'shopify', 'klaviyo', 'woocommerce', 'wordpress', 'hubspot', 'mailchimp',
+  'salesforce', 'magento', 'webflow', 'omnisend', 'meta', 'google', 'amazon', 'microsoft', 'slack', 'zoom',
+  'notion', 'figma', 'stripe', 'github', 'upwork', 'linkedin', 'instagram', 'facebook', 'twitter', 'tiktok', 'youtube',
+]);
+const MAIL_PROVIDER = 'gmail|yahoo|outlook|hotmail|icloud|protonmail|proton|googlemail|live|aol';
+const CHANNEL = 'whatsapp|telegram|skype';
+// A real offer to move the conversation off Upwork. A channel mention ("WhatsApp marketing", "Telegram bot") is not one.
+const CONTACT_OFFER_RE = new RegExp(
+  `\\b(?:(?:reach|contact|message|text|ping|dm|call|find|add|email|hit)\\s+(?:me|us)(?:\\s+up)?\\s+(?:on|at|via|through|over)\\s+(?:the\\s+)?(?:${CHANNEL})|(?:${CHANNEL})\\s+me|my\\s+(?:${CHANNEL})|(?:talk|chat|connect)\\s+with\\s+me\\s+(?:on|via|through|over)\\s+(?:the\\s+)?(?:${CHANNEL}))\\b`,
+  'i',
+);
+const CONTACT_URL_RE = /\b(?:wa\.me\b|t\.me\/|calendly\.com\b|linkedin\.com\b|instagram\.com\b)/i;
+const EMAIL_RE = /[^\s@]+@[^\s@]+\.[a-z]{2,}/i;
+const BARE_MAIL_RE = new RegExp(`[^\\s@]+@(?:${MAIL_PROVIDER})\\b`, 'i');
+const HANDLE_RE = /(^|[^\w.@])@([A-Za-z0-9_]{3,})\b/g;
+
+function socialHandleIn(text: string): boolean {
+  if (BARE_MAIL_RE.test(text)) return true;
+  for (const match of text.matchAll(new RegExp(HANDLE_RE.source, 'g'))) {
+    if (!WORKPLACE_AT.has(match[2].toLowerCase())) return true;
+  }
+  return false;
+}
+
+// Contact details are not allowed in Upwork cover letters. Naming a channel ("WhatsApp marketing") is allowed.
 export function contactDetailsIn(text: string): string | null {
-  if (/[^\s@]+@[^\s@]+\.[a-z]{2,}/i.test(text)) return 'an email address';
+  if (EMAIL_RE.test(text)) return 'an email address';
   const phoneLike = text.match(/\+?\d[\d\s().-]{8,}\d/g) ?? [];
   if (phoneLike.some((m) => m.replace(/\D/g, '').length >= 10)) return 'a phone number';
-  if (/(wa\.me|whatsapp|telegram|t\.me\/|skype|calendly\.com|linkedin\.com|instagram\.com|@[A-Za-z0-9_]{3,}\b)/i.test(text)) return 'a social handle or outside contact link';
+  if (CONTACT_URL_RE.test(text) || CONTACT_OFFER_RE.test(text) || socialHandleIn(text)) return 'a social handle or outside contact link';
   return null;
 }
 
-const LINK_RE = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+\.(?:com|io|co|net|org|app|me|ly|gg)\b/i;
+// Product and technology names that look like domains. They are not personal sites.
+const PRODUCT_DOMAINS = new Set([
+  'customer.io', 'segment.io', 'socket.io', 'stamped.io',
+  'asp.net', 'vb.net',
+  'node.js', 'next.js', 'vue.js', 'react.js', 'angular.js', 'nuxt.js', 'nest.js', 'express.js',
+  'chart.js', 'd3.js', 'three.js', 'moment.js', 'ember.js', 'backbone.js', 'jquery.js', 'electron.js',
+  'svelte.js', 'gatsby.js', 'jest.js', 'mocha.js', 'webpack.js', 'rollup.js', 'vite.js', 'eslint.js',
+  'judge.me',
+  'klaviyo.com', 'shopify.com', 'mailchimp.com', 'omnisend.com', 'hubspot.com', 'salesforce.com',
+  'sendgrid.com', 'wordpress.com', 'wordpress.org', 'webflow.com', 'figma.com', 'magento.com',
+  'bigcommerce.com', 'woocommerce.com',
+]);
+const URL_RE = /\b(?:https?:\/\/|www\.)\S+/i;
+const BARE_DOMAIN_RE = /\b[a-z0-9-]+\.(?:com|io|co|net|org|app|me|ly|gg|js)\b/gi;
+
+function domainAllowed(domain: string, jobText: string): boolean {
+  const normalized = domain.toLowerCase();
+  if (PRODUCT_DOMAINS.has(normalized)) return true;
+  if (!jobText) return false;
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[^a-z0-9-])${escaped}(?![a-z0-9-])`, 'i').test(jobText);
+}
+
+// http(s) and www links always count. A bare domain counts unless it is a known product or it is already in the job.
+export function linkProblem(text: string, jobText = ''): string | null {
+  if (URL_RE.test(text)) return 'a link';
+  for (const match of text.matchAll(new RegExp(BARE_DOMAIN_RE.source, 'gi'))) {
+    if (!domainAllowed(match[0], jobText)) return 'a link';
+  }
+  return null;
+}
 
 // Claude's text may not add links or contact details: only the template carries links.
-export function problemsInWritten(text: string): string | null {
-  if (LINK_RE.test(text)) return 'a link';
+export function problemsInWritten(text: string, jobText = ''): string | null {
+  if (linkProblem(text, jobText)) return 'a link';
   return contactDetailsIn(text);
 }
 
@@ -59,7 +119,7 @@ const HIRING_WORDS = /\b(needed|expert|wanted|hiring|looking for)\b/i;
 
 // A title-only opener must be one natural sentence. It must not paste the title or its hiring words.
 export function titleOnlyOpeningProblem(opening: string, title: string): string | null {
-  const structural = checkOpening(opening);
+  const structural = checkOpening(opening, title);
   if (structural) return structural;
   if (opening.includes('|')) return 'the opening copies a title divider';
   if (HIRING_WORDS.test(opening)) return 'the opening copies hiring words from the title';
@@ -150,17 +210,56 @@ export async function repairFirstPerson(text: string, rewrite?: (text: string, p
   return toFirstPerson(text);
 }
 
-export function checkOpening(opening: string): string | null {
+export function checkOpening(opening: string, jobText = ''): string | null {
   const t = opening.trim();
   if (t.length < 25) return 'the opening is too short';
   if (t.length > MAX_OPENING) return `the opening is longer than ${MAX_OPENING} characters`;
   if (thirdPersonIn(t)) return 'the opening refers to Rafa in the third person';
   const meta = metaLanguageIn(t);
   if (meta) return `the opening contains ${meta}`;
-  const p = problemsInWritten(t);
+  const p = problemsInWritten(t, jobText);
   if (p) return `the opening contains ${p}`;
   const n = countSentences(t);
   return n > MAX_OPENING_SENTENCES ? `the opening has ${n} sentences (max ${MAX_OPENING_SENTENCES})` : null;
+}
+
+const PHONE_RE = /\+?\d[\d\s().-]{8,}\d/g;
+const CONTACT_URL_STRIP_RE = /\b(?:wa\.me|t\.me|calendly\.com|linkedin\.com|instagram\.com)(?:\/[^\s)]*)?/gi;
+
+function tidyOpening(text: string): string {
+  return text
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s+([,.;!?])/g, '$1')
+    .replace(/,\s*(?=[.!?])/g, '')
+    .replace(/(^|\s)[,.;]+(?=\s|$)/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.!?])/g, '$1')
+    .trim();
+}
+
+// Drop the contact details and links a check would reject. Product names and domains from the job stay.
+function stripOffending(text: string, jobText: string): string {
+  let t = text.replace(new RegExp(EMAIL_RE.source, 'gi'), ' ');
+  t = t.replace(PHONE_RE, (m) => (m.replace(/\D/g, '').length >= 10 ? ' ' : m));
+  t = t.replace(new RegExp(URL_RE.source, 'gi'), ' ');
+  t = t.replace(new RegExp(CONTACT_OFFER_RE.source, 'gi'), ' ');
+  t = t.replace(CONTACT_URL_STRIP_RE, ' ');
+  t = t.replace(new RegExp(BARE_MAIL_RE.source, 'gi'), ' ');
+  t = t.replace(new RegExp(HANDLE_RE.source, 'g'), (full, prefix: string, name: string) => (
+    WORKPLACE_AT.has(name.toLowerCase()) ? full : (prefix.trim() ? `${prefix} ` : ' ')
+  ));
+  t = t.replace(new RegExp(BARE_DOMAIN_RE.source, 'gi'), (domain) => (domainAllowed(domain, jobText) ? domain : ' '));
+  return tidyOpening(t);
+}
+
+// Used after the model retry still fails a wording check. Never a reason to hold the letter.
+export function repairOpening(opening: string, title: string, jobText = '', titleOnly = false): string {
+  const context = jobText || title;
+  const problem = (text: string) => titleOnly ? titleOnlyOpeningProblem(text, title) : checkOpening(text, context);
+  for (const sentence of splitSentences(stripOffending(opening, context))) {
+    if (!problem(sentence)) return sentence;
+  }
+  return fallbackTitleOpening(title);
 }
 
 // Template placeholders: {opening} is Claude's paragraph; {loom_link} is the job's Loom copy (M5) or, until then, the
@@ -238,14 +337,14 @@ export function cleanScreeningAnswer(answer: string): string {
   return toFirstPerson(text);
 }
 
-export function checkAnswers(questions: string[], answers: Answer[]): string | null {
+export function checkAnswers(questions: string[], answers: Answer[], jobText = ''): string | null {
   if (answers.length !== questions.length) return `expected ${questions.length} answers, got ${answers.length}`;
   for (const a of answers) {
     const t = a.answer.trim();
     if (!t) return 'an answer is empty';
     if (t.length > 2000) return 'an answer is longer than 2,000 characters';
     if (screeningAnswerProblem(t)) return 'an answer contains internal wording';
-    const p = problemsInWritten(t);
+    const p = problemsInWritten(t, jobText);
     if (p) return `an answer contains ${p}`;
   }
   return null;

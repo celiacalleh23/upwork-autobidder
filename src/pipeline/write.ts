@@ -7,7 +7,7 @@ import { findKey, upworkClient } from '../oauth';
 import { independentDrafts, loadSettings, loadState, patchState, type Env, type Settings, type State } from '../settings';
 import { cannotApply, CLOSED_REASON, connectsOverLimit, evaluateJob, stripUntrusted } from './filters';
 import { jobAnalysis } from './analysis';
-import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, fallbackTitleOpening, FIXED_ESTIMATE_USD, metaLanguageIn, repairFirstPerson, swapLoomLink, thirdPersonIn, titleOnlyOpeningProblem, type Answer } from './letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, FIXED_ESTIMATE_USD, metaLanguageIn, repairFirstPerson, repairOpening, swapLoomLink, thirdPersonIn, titleOnlyOpeningProblem, type Answer } from './letter';
 import { createPreview, FIXED_DEFAULTS } from './preview';
 import { isThrottle, noteThrottle, pauseForWarning, UpworkBusy, clearThrottle, permitJobRead } from '../upworkPace';
 import { loadTrackRecord, profileForClaude, weightedScore, winsForClaude } from './profile';
@@ -30,6 +30,28 @@ interface JobRow {
 export interface WriteSummary { queued: number; lowScore: number; filtered: number; errors: number; note: string | null }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
+
+interface OpeningJob { title: string; jobText: string; titleOnly: boolean; sourceUrl: string | null; disclosure: string | null }
+
+// One model retry, then the same first-person repair as before. Any wording problem left after that is fixed locally.
+// A letter is never held for wording: Upwork errors, rate limits, caps, active hours, Connects, and closed jobs are the blockers.
+async function resolveOpening(env: Env, who: Who, s: Settings, forClaude: JobForClaude, job: OpeningJob): Promise<string> {
+  const issue = (text: string) => (
+    job.titleOnly ? titleOnlyOpeningProblem(text, job.title) : checkOpening(text, job.jobText)
+  ) ?? checkLetter(assembleLetter(s.letter.template, text, job.sourceUrl, job.disclosure), job.sourceUrl);
+  let opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude);
+  let problem = issue(opening);
+  if (problem) {
+    opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
+    problem = issue(opening);
+  }
+  if (thirdPersonIn(opening)) {
+    opening = await repairFirstPerson(opening, (text, voiceProblem) => rewriteLetter(env, text, voiceProblem));
+    problem = issue(opening);
+  }
+  if (problem) opening = repairOpening(opening, job.title, job.jobText, job.titleOnly);
+  return opening;
+}
 
 export async function invitedJobIds(client: McpClient, state: State): Promise<Set<string>> {
   const ids = new Set<string>();
@@ -158,17 +180,11 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
   // Settings → Personal sentence off: no Claude sentence, the letter is the template alone.
   const withOpening = s.letter.opening !== 'off';
-  let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
-  let problem = (withOpening ? checkOpening(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-  if (problem && withOpening) {
-    opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
-    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-  }
-  if (withOpening && thirdPersonIn(opening)) {
-    opening = await repairFirstPerson(opening, (text, voiceProblem) => rewriteLetter(env, text, voiceProblem));
-    problem = checkOpening(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-  }
-  if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
+  const title = stripUntrusted(job.title);
+  const jobText = [title, d.description].filter(Boolean).join('\n');
+  const opening = withOpening
+    ? await resolveOpening(env, who, s, forClaude, { title, jobText, titleOnly: false, sourceUrl, disclosure })
+    : '';
   let letter = assembleLetter(s.letter.template, opening, sourceUrl, disclosure);
 
   const fixed = job.job_type === 'fixed';
@@ -179,10 +195,10 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
   const liveQuestions = preview.questions;
   if (liveQuestions?.length) {
     answers = await answerQuestions(env, who.profile, forClaude, liveQuestions);
-    let bad = checkAnswers(liveQuestions, answers);
-    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, liveQuestions, bad); bad = checkAnswers(liveQuestions, answers); }
+    let bad = checkAnswers(liveQuestions, answers, jobText);
+    if (bad) { answers = await answerQuestions(env, who.profile, forClaude, liveQuestions, bad); bad = checkAnswers(liveQuestions, answers, jobText); }
     answers = answers.map((answer) => ({ ...answer, answer: cleanScreeningAnswer(answer.answer) }));
-    if (checkAnswers(liveQuestions, answers)) answers = [];
+    if (checkAnswers(liveQuestions, answers, jobText)) answers = [];
   }
 
   // The job's own Loom copy, named after the job (M5). Made last so a job dropped above leaves no copy behind.
@@ -316,31 +332,19 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
     const sourceUrl = s.loom.sourceUrl || null;
     const disclosure = s.disclosure.enabled ? s.disclosure.line : null;
     const withOpening = s.letter.opening !== 'off';
-    const titleOnly = !n.description;
-    const openingProblem = (text: string) => titleOnly ? titleOnlyOpeningProblem(text, job.title ?? '') : checkOpening(text);
-    let opening = withOpening ? await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude) : '';
-    let problem = (withOpening ? openingProblem(opening) : null) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-    if (problem && withOpening) {
-      opening = await writeOpening(env, who.profile, who.wins, s.letter.template, s.letter.rules, forClaude, problem);
-      problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-    }
-    if (withOpening && thirdPersonIn(opening)) {
-      opening = await repairFirstPerson(opening, (text, voiceProblem) => rewriteLetter(env, text, voiceProblem));
-      problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-    }
-    if (problem && titleOnly && withOpening) {
-      opening = fallbackTitleOpening(job.title ?? '');
-      problem = openingProblem(opening) ?? checkLetter(assembleLetter(s.letter.template, opening, sourceUrl, disclosure), sourceUrl);
-    }
-    if (problem) { await setJob(env, job.id, 'error', `Letter rejected twice: ${problem}`, sc); return 'errors'; }
+    const title = stripUntrusted(job.title ?? '');
+    const jobText = [title, n.description ?? ''].filter(Boolean).join('\n');
+    const opening = withOpening
+      ? await resolveOpening(env, who, s, forClaude, { title, jobText, titleOnly: !n.description, sourceUrl, disclosure })
+      : '';
     const hints = n.questions;
     let answers: Answer[] = [];
     if (hints?.length) {
       answers = await answerQuestions(env, who.profile, forClaude, hints);
-      let bad = checkAnswers(hints, answers);
-      if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers); }
+      let bad = checkAnswers(hints, answers, jobText);
+      if (bad) { answers = await answerQuestions(env, who.profile, forClaude, hints, bad); bad = checkAnswers(hints, answers, jobText); }
       answers = answers.map((answer) => ({ ...answer, answer: cleanScreeningAnswer(answer.answer) }));
-      if (checkAnswers(hints, answers)) answers = [];
+      if (checkAnswers(hints, answers, jobText)) answers = [];
     }
     ready = {
       v: 1, letter: assembleLetter(s.letter.template, opening, sourceUrl, disclosure), bid, score, win: winSimilarity, profile: profileFit,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, contactDetailsIn, countSentences, fallbackTitleOpening, metaLanguageIn, repairFirstPerson, resolveSendBid, swapLoomLink, thirdPersonIn, titleOnlyOpeningProblem, toFirstPerson } from '../src/pipeline/letter';
+import { assembleLetter, BIDDER_HOURLY_USD, checkAnswers, checkLetter, checkOpening, cleanScreeningAnswer, computeBid, contactDetailsIn, countSentences, fallbackTitleOpening, metaLanguageIn, problemsInWritten, repairFirstPerson, repairOpening, resolveSendBid, swapLoomLink, thirdPersonIn, titleOnlyOpeningProblem, toFirstPerson } from '../src/pipeline/letter';
 import { readFileSync } from 'node:fs';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
@@ -121,7 +121,53 @@ describe('computeBid', () => {
 describe('contactDetailsIn', () => {
   it('flags contact details but not the template links', () => {
     expect(contactDetailsIn('Reach me on WhatsApp')).toBe('a social handle or outside contact link');
+    expect(contactDetailsIn('WhatsApp me')).toBe('a social handle or outside contact link');
+    expect(contactDetailsIn('message me on Telegram')).toBe('a social handle or outside contact link');
+    expect(contactDetailsIn('my Skype')).toBe('a social handle or outside contact link');
+    expect(contactDetailsIn('https://wa.me/15551212')).toBe('a social handle or outside contact link');
     expect(contactDetailsIn('https://gamma.app/docs/Rafa-Email-Design-Samples-t4tjgljjfjmu5ad')).toBeNull();
+  });
+  it('allows channel mentions and workplace at-phrases', () => {
+    expect(contactDetailsIn('WhatsApp marketing')).toBeNull();
+    expect(contactDetailsIn('your WhatsApp and Klaviyo flows')).toBeNull();
+    expect(contactDetailsIn('Telegram bot')).toBeNull();
+    expect(contactDetailsIn('Five years @shopify on lifecycle flows.')).toBeNull();
+    expect(contactDetailsIn('The flows@Klaviyo setup is where I would start today.')).toBeNull();
+    expect(contactDetailsIn('Ping me @rafaela_flows today.')).toBe('a social handle or outside contact link');
+    expect(checkOpening('Your WhatsApp marketing and Klaviyo flows are the fastest place I would start.')).toBeNull();
+    expect(checkOpening('Your WhatsApp and Klaviyo flows are where I would start the rebuild.')).toBeNull();
+    expect(checkOpening('The Telegram bot in your post is the first piece I would set up.')).toBeNull();
+  });
+});
+
+describe('links', () => {
+  const customer = 'Your Customer.io welcome flow is where I would start the rebuild.';
+  const asp = 'The ASP.NET service in your post is where I would start the rebuild.';
+  const node = 'The Node.js service in your post is where I would start the rebuild.';
+  const acme = 'The acme.com checkout is where I would start the rebuild today.';
+  it('allows product names and domains from the job, and still rejects personal sites and real URLs', () => {
+    expect(checkOpening(customer)).toBeNull();
+    expect(checkOpening(asp)).toBeNull();
+    expect(checkOpening(node)).toBeNull();
+    expect(problemsInWritten('See my site rafa.com')).toBe('a link');
+    expect(checkOpening(`${OPENING} See www.example.com for more.`)).toBe('the opening contains a link');
+    expect(checkOpening(`${OPENING} See https://customer.io/docs today.`)).toBe('the opening contains a link');
+    expect(checkOpening(acme)).toBe('the opening contains a link');
+    expect(checkOpening(acme, 'Please rebuild the acme.com checkout.')).toBeNull();
+    expect(checkOpening(acme, 'Please rebuild the Acme.com checkout.')).toBeNull();
+    expect(problemsInWritten('See my site rafa.com', 'A post about girafa.com only')).toBe('a link');
+  });
+});
+
+describe('opening repair', () => {
+  const first = 'Your welcome flow is the fastest win in this post.';
+  const second = 'I would rebuild it in Klaviyo before the campaigns.';
+  it('trims to the first valid sentence and strips a personal site', () => {
+    expect(repairOpening(`${first} ${second}`, 'Klaviyo welcome flows')).toBe(first);
+    const stripped = repairOpening('Your welcome flow is the fastest win in this post, see my site rafa.com.', 'Klaviyo welcome flows');
+    expect(stripped).not.toMatch(/rafa\.com/i);
+    expect(checkOpening(stripped)).toBeNull();
+    expect(repairOpening('Reach me on WhatsApp.', 'Klaviyo welcome flows')).toBe(fallbackTitleOpening('Klaviyo welcome flows'));
   });
 });
 
