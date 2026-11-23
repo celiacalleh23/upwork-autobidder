@@ -30,7 +30,7 @@ export const isAccountWarning = (msg: string) =>
   /account (warning|restricted|suspended)|unusual activity|terms of service|violation|(access|account)\b.{0,40}\b(restricted|suspended|blocked|banned|disabled)/i.test(msg);
 export function throttleWait(e: unknown): number | null {
   const msg = e instanceof Error ? e.message : String(e);
-  if (isAccountWarning(msg) || !/rate.?limit|too many requests|\b429\b/i.test(msg)) return null;
+  if (isAccountWarning(msg) || !/rate.?limit|too many requests|\b429\b|\bthrottled?\b/i.test(msg)) return null;
   const m = /wait about (\d+) seconds?|retry_after\D{0,6}(\d+)/i.exec(msg);
   return Math.max(0, Number(m?.[1] ?? m?.[2] ?? 10)) * 1000 + 1000;
 }

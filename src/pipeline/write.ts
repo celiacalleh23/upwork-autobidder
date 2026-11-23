@@ -217,6 +217,7 @@ async function processJob(env: Env, client: McpClient, state: State, s: Settings
 
   const createParams = {
     charged_amount: bid, ...(preview.extra ?? (fixed ? FIXED_DEFAULTS : {})),
+    details_at: new Date().toISOString(),
     questions_state: liveQuestions === null ? 'unknown' : 'live',
     ...(answers.length ? { answers } : {}),
   };
@@ -374,6 +375,7 @@ async function draftFromSnapshot(env: Env, state: State, s: Settings, who: Who, 
   const fixed = ready.jobType === 'fixed';
   const createParams = {
     ...(ready.bid !== null ? { charged_amount: ready.bid } : {}),
+    details_at: snap.fetchedAt,
     bid_basis: ready.bidBasis, missing: ready.missing,
     ...(ready.bidBasis === 'bidder-hourly-usd' ? { bidder_hourly_usd: BIDDER_HOURLY_USD } : {}),
     ...(fixed && ready.bidBasis === 'client' ? FIXED_DEFAULTS : {}),

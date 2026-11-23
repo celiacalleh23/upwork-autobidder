@@ -36,18 +36,103 @@ export function connectsGate(balance: number | null, cost: number | null, s: Set
 }
 
 // warning: an account warning (pause everything); throttle: Upwork's per-minute limit, nothing done (try again next run).
-export type FailureKind = 'needs_confirmation' | 'warning' | 'throttle' | 'refused' | 'ambiguous';
+// transient: Upwork's tool answered with a retryable upstream outage. Nothing was decided about the job or the proposal.
+export type FailureKind = 'needs_confirmation' | 'warning' | 'throttle' | 'refused' | 'ambiguous' | 'transient';
+
+interface ToolErrorDetail { error_code?: string; reason?: string; retryable?: boolean }
+
+// Tool text is sliced to 300 characters, so a long payload may not parse. The fields that matter are at the front.
+function toolErrorDetail(msg: string): ToolErrorDetail | null {
+  const start = msg.indexOf('{');
+  if (start < 0) return null;
+  const slice = msg.slice(start);
+  const from = (value: unknown): ToolErrorDetail | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const o = value as Record<string, unknown>;
+    const error_code = typeof o.error_code === 'string' ? o.error_code : undefined;
+    const reason = typeof o.reason === 'string' ? o.reason : undefined;
+    const retryable = o.retryable === true ? true : o.retryable === false ? false : undefined;
+    if (error_code === undefined && reason === undefined && retryable === undefined) return null;
+    return { error_code, reason, retryable };
+  };
+  try { return from(JSON.parse(slice)); } catch { /* truncated tool text */ }
+  const error_code = /"error_code"\s*:\s*"([^"]*)"/.exec(slice)?.[1];
+  const reason = /"reason"\s*:\s*"([^"]*)"/.exec(slice)?.[1];
+  const flag = /"retryable"\s*:\s*(true|false)/.exec(slice)?.[1];
+  return from({
+    ...(error_code !== undefined ? { error_code } : {}),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(flag !== undefined ? { retryable: flag === 'true' } : {}),
+  });
+}
+
+// The outage from find_jobs get: {"error_code":"UPSTREAM","reason":"upstream service error","retryable":true,...}
+// retryable:false is Upwork saying not to retry. The same wording still counts when that flag was cut off.
+export function isTransientUpstream(e: unknown): boolean {
+  if (!(e instanceof McpToolError)) return false;
+  const detail = toolErrorDetail(e.message);
+  if (detail?.retryable === false) return false;
+  const code = detail?.error_code?.toUpperCase() ?? '';
+  const upstream = code === 'UPSTREAM' || /upstream service error/i.test(detail?.reason ?? '') || /upstream service error/i.test(e.message);
+  return upstream && (detail?.retryable === true || code === 'UPSTREAM' || /upstream service error/i.test(e.message));
+}
+
+const CLOSED_JOB = /not found|no longer available|no longer exists|does not exist|doesn't exist|has been removed|job (?:is |has been |was )?closed|no longer accepting|\b404\b/i;
+const CLOSED_CODES = new Set(['NOT_FOUND', 'JOB_NOT_FOUND', 'RESOURCE_NOT_FOUND', 'GONE', 'CLOSED', 'JOB_CLOSED', 'JOB_IS_NO_LONGER_AVAILABLE', 'NO_LONGER_AVAILABLE']);
+
+// A definite "this job is gone" answer. A retryable upstream outage is not one, even if the text mentions a lookup failure.
+export function isJobClosedOrMissing(e: unknown): boolean {
+  if (isTransientUpstream(e)) return false;
+  const msg = e instanceof Error ? e.message : String(e);
+  const code = toolErrorDetail(msg)?.error_code?.toUpperCase().replace(/[\s-]+/g, '_') ?? '';
+  return CLOSED_CODES.has(code) || CLOSED_JOB.test(msg);
+}
 
 // How to treat an error from create or confirm. Only an answer from Upwork itself (a tool error) counts as a definite
 // refusal; dropped connections, timeouts and 5xx are ambiguous because the proposal may have gone through.
+// A retryable UPSTREAM tool error is transient: Upwork did not accept or reject the request.
 export function classifyFailure(e: unknown): FailureKind {
   const msg = e instanceof Error ? e.message : String(e);
   if (isAccountWarning(msg)) return 'warning';
-  if (/\b429\b|rate.?limit|too many requests/i.test(msg)) return 'throttle';
+  if (/\b429\b|rate.?limit|too many requests|\bthrottled?\b/i.test(msg)) return 'throttle';
   if (/(requires?|needs?|awaiting).{0,40}(user|human|explicit).{0,20}(confirm|approv)|not (allowed|permitted) to confirm|confirmation (is )?required|permission/i.test(msg)) return 'needs_confirmation';
   if (e instanceof McpAuthError) return 'refused';
+  if (isTransientUpstream(e)) return 'transient';
   if (e instanceof McpToolError && !/timeout|timed out|temporar|try again|\b5\d\d\b|internal error|unavailable/i.test(msg)) return 'refused';
   return 'ambiguous';
+}
+
+// Job re-checks after a transient lookup failure. Three calls total, then stop.
+// The wait is at least two minutes plus up to a minute of jitter, so a later cron picks it up
+// instead of looping inside the request. A rate limit never uses this delay.
+// Skip the pre-send find_jobs get when job data was fetched or confirmed inside this window.
+export const FRESH_JOB_DETAILS_MS = 60 * 60 * 1000;
+
+export function parseJobTime(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = value.trim();
+  const ms = Date.parse(text.includes('T') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// True when the newest fetch or confirmation is strictly inside the window. Missing times are not fresh.
+export function jobDetailsAreFresh(times: unknown[], now = Date.now()): boolean {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const time of times) {
+    const ms = parseJobTime(time);
+    if (ms !== null && ms > latest) latest = ms;
+  }
+  return Number.isFinite(latest) && now - latest < FRESH_JOB_DETAILS_MS;
+}
+
+export const JOB_LOOKUP_ATTEMPTS = 3;
+export const JOB_LOOKUP_BACKOFF_MS = 2 * 60_000;
+export const JOB_LOOKUP_JITTER_MS = 60_000;
+
+export function lookupRetryDelayMs(random = Math.random()): number {
+  const unit = Number.isFinite(random) ? Math.min(1, Math.max(0, random)) : 0;
+  return JOB_LOOKUP_BACKOFF_MS + Math.floor(unit * JOB_LOOKUP_JITTER_MS);
 }
 
 export type ConfirmOutcome = { ok: true; proposalId: string | null } | { ok: false; message: string; uncertain?: boolean };

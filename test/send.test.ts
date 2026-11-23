@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isAccountWarning, McpAuthError, McpError, McpToolError, throttleWait } from '../src/mcp';
-import { alertAction, classifyFailure, connectsGate, readConfirm, sendGate } from '../src/pipeline/sendRules';
+import { alertAction, classifyFailure, connectsGate, FRESH_JOB_DETAILS_MS, isJobClosedOrMissing, jobDetailsAreFresh, lookupRetryDelayMs, readConfirm, sendGate } from '../src/pipeline/sendRules';
 import { DEFAULT_SETTINGS, DEFAULT_STATE, validateSettings, type Settings, type State } from '../src/settings';
 
 // Siv's settings (BUILD_PLAN §11a): 24/7, no caps, 5 min apart, no floor, sending switched on.
@@ -76,6 +76,47 @@ describe('classifyFailure', () => {
     expect(isAccountWarning('Upwork find_jobs: {"error_code":"SENSITIVE_RATE_LIMIT_EXCEEDED","reason":"Rate limit exceeded for this tool. Wait about 5 seconds before retrying"}')).toBe(false);
     expect(isAccountWarning('Upwork manage_proposals: This job is no longer accepting proposals')).toBe(false);
     expect(classifyFailure(new McpToolError('Upwork confirm_preview: This action requires explicit user confirmation in the Upwork app'))).toBe('needs_confirmation');
+  });
+  it('treats a retryable UPSTREAM lookup as transient, and a closed job as a refusal', () => {
+    const payload = '{"error_code":"UPSTREAM","reason":"upstream service error","retryable":true,"trace_id":"abc"}';
+    const upstream = new McpToolError(`Upwork find_jobs: ${payload}`);
+    expect(classifyFailure(upstream)).toBe('transient');
+    expect(isJobClosedOrMissing(upstream)).toBe(false);
+    const truncated = `Upwork find_jobs: ${`${payload.slice(0, -1)},"extra":"${'x'.repeat(400)}"}`.slice(0, 300)}`;
+    expect(classifyFailure(new McpToolError(truncated))).toBe('transient');
+    expect(classifyFailure(new McpToolError('Upwork find_jobs: upstream service error'))).toBe('transient');
+    const throttled = new McpToolError('Upwork find_jobs: {"error_code":"THROTTLED","reason":"Slow down","retryable":true}');
+    expect(classifyFailure(throttled)).toBe('throttle');
+    expect(throttleWait(throttled)).toBe(11_000);
+    const missing = new McpToolError('Upwork find_jobs: {"error_code":"NOT_FOUND","reason":"Job not found","retryable":false}');
+    expect(classifyFailure(missing)).toBe('refused');
+    expect(isJobClosedOrMissing(missing)).toBe(true);
+    expect(isJobClosedOrMissing(new McpToolError('Upwork find_jobs: This job is no longer available'))).toBe(true);
+    const gone = new McpToolError('Upwork manage_proposals: {"error_code":"JOB_IS_NO_LONGER_AVAILABLE","reason":"This job is no longer available","retryable":false}');
+    expect(classifyFailure(gone)).toBe('refused');
+    expect(isJobClosedOrMissing(gone)).toBe(true);
+  });
+});
+
+describe('fresh job details', () => {
+  const now = Date.parse('2026-11-23T18:00:00Z');
+  it('treats a read inside the hour as fresh and an older one as stale', () => {
+    expect(FRESH_JOB_DETAILS_MS).toBe(60 * 60 * 1000);
+    expect(jobDetailsAreFresh([new Date(now - 59 * 60_000).toISOString()], now)).toBe(true);
+    expect(jobDetailsAreFresh(['2026-11-23 17:30:00'], now)).toBe(true);
+    expect(jobDetailsAreFresh([new Date(now - FRESH_JOB_DETAILS_MS).toISOString()], now)).toBe(false);
+    expect(jobDetailsAreFresh([new Date(now - 2 * FRESH_JOB_DETAILS_MS).toISOString()], now)).toBe(false);
+    expect(jobDetailsAreFresh([null, ''], now)).toBe(false);
+    expect(jobDetailsAreFresh([new Date(now - 2 * FRESH_JOB_DETAILS_MS).toISOString(), new Date(now - 5 * 60_000).toISOString()], now)).toBe(true);
+  });
+});
+
+describe('lookup retry spacing', () => {
+  it('waits at least two minutes and adds jitter, and does not collapse to a tight loop', () => {
+    expect(lookupRetryDelayMs(0)).toBe(2 * 60_000);
+    expect(lookupRetryDelayMs(1)).toBe(3 * 60_000);
+    expect(lookupRetryDelayMs(0.25)).toBeGreaterThan(lookupRetryDelayMs(0));
+    expect(lookupRetryDelayMs(0.25)).toBeLessThan(lookupRetryDelayMs(1));
   });
 });
 

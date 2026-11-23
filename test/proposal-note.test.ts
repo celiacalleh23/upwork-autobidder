@@ -19,6 +19,8 @@ describe('displayNote', () => {
     expect(displayNote({ error: 'Not sent: source data is still missing (applicant count). Approval does not bypass that.', status: 'pending' })).toEqual({ text: null, error: false });
     const failed = 'Upwork refused the proposal: the job is closed.';
     expect(displayNote({ error: failed, status: 'failed' })).toEqual({ text: failed, error: true });
+    const lookup = "Couldn't re-check the job on Upwork (temporary lookup error). Approve again to retry.";
+    expect(displayNote({ error: lookup, status: 'failed' })).toEqual({ text: "Couldn't re-check the job on Upwork (temporary lookup error).", error: true });
     const wording = 'Not sent: the letter contains internal wording.';
     expect(displayNote({ error: wording, status: 'pending' })).toEqual({ text: wording, error: true });
   });

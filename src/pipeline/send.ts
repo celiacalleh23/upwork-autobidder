@@ -11,7 +11,7 @@ import { checkAnswers, checkLetter, cleanScreeningAnswer, metaLanguageIn, repair
 import { loadTrackRecord, profileForClaude } from './profile';
 import { loadSnapshot } from './snapshot';
 import { createPreview } from './preview';
-import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, readConfirm, sendGate, finiteNumber } from './sendRules';
+import { alertAction, boostBid, boostSkipReason, boostReasonText, classifyFailure, connectsGate, isBoostRefusal, isJobClosedOrMissing, jobDetailsAreFresh, JOB_LOOKUP_ATTEMPTS, lookupRetryDelayMs, readConfirm, sendGate, finiteNumber } from './sendRules';
 import { invitedJobIds, jobDetails } from './write';
 import { clearThrottle, heldByUpwork, isThrottle, noteThrottle, pauseForWarning, pendingUpworkWait, recordUpworkError, slowDownNote, UpworkBusy } from '../upworkPace';
 import { clearStall, confirmProposalId, markStallOpen, markSubmitted, recoverSubmittedRows, requeueNeverConfirmed } from './submitted';
@@ -26,6 +26,62 @@ const LEASE_MS = 10 * 60_000;
 // retry time, and a cooldown check must not push this timer forward.
 const RETRY_AFTER_MS = 5 * 60_000 - 30_000;
 const holdRetries = (env: Env) => putKv(env, 'send:retryAt', String(Date.now() + RETRY_AFTER_MS));
+const JOB_LOOKUP_EXHAUSTED = "Couldn't re-check the job on Upwork (temporary lookup error). Approve again to retry.";
+const JOB_LOOKUP_RETRY_NOTE = "Couldn't re-check the job on Upwork; retrying later.";
+const PREP_EXHAUSTED = "Couldn't finish preparing the proposal on Upwork (temporary error). Approve again to retry.";
+const PREP_RETRY_NOTE = 'Temporary Upwork error before sending; retrying later.';
+const lookupKey = (id: number) => `send:jobLookup:${id}`;
+const detailsKey = (jobId: string) => `job:detailsAt:${jobId}`;
+const stampJobDetails = (env: Env, jobId: string, when = new Date().toISOString()) => putKv(env, detailsKey(jobId), when);
+
+async function jobDetailsFresh(env: Env, row: Row): Promise<boolean> {
+  const [stamp, snap] = await Promise.all([
+    getKv(env, detailsKey(row.job_id)),
+    env.DB.prepare('SELECT fetched_at FROM job_snapshots WHERE job_id = ?').bind(row.job_id).first<{ fetched_at: string | null }>(),
+  ]);
+  let noted: string | null = null;
+  try {
+    const params = JSON.parse(row.create_params || '{}') as { details_at?: unknown };
+    if (typeof params.details_at === 'string') noted = params.details_at;
+  } catch { /* a bad params blob is not a fresh read */ }
+  return jobDetailsAreFresh([stamp, snap?.fetched_at, noted]);
+}
+
+interface LookupMark { n: number; nextAt: number }
+
+async function readLookup(env: Env, id: number): Promise<LookupMark | null> {
+  const raw = await getKv(env, lookupKey(id));
+  if (!raw) return null;
+  try {
+    const mark = JSON.parse(raw) as LookupMark;
+    if (!mark || !Number.isFinite(mark.n)) return null;
+    return { n: mark.n, nextAt: Number.isFinite(Number(mark.nextAt)) ? Number(mark.nextAt) : 0 };
+  } catch { return null; }
+}
+
+async function jobLookupCooling(env: Env, id: number, now = Date.now()): Promise<boolean> {
+  const mark = await readLookup(env, id);
+  return !!mark && mark.nextAt > now;
+}
+
+// One later cron, never another call in this request. The wait is at least two minutes plus jitter,
+// and never earlier than Upwork's own slow-down (upwork:retryAt / job-open cooldown).
+async function scheduleTransientRetry(env: Env, row: Row, summary: SendSummary, exhausted: string, retryNote: string): Promise<SendSummary> {
+  const prev = await readLookup(env, row.id);
+  const n = (prev?.n ?? 0) + 1;
+  if (n >= JOB_LOOKUP_ATTEMPTS) {
+    await delKv(env, lookupKey(row.id));
+    await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: exhausted });
+    summary.note = exhausted;
+    return summary;
+  }
+  const pace = await pendingUpworkWait(env);
+  const nextAt = Math.max(Date.now() + lookupRetryDelayMs(), pace ?? 0);
+  await putKv(env, lookupKey(row.id), JSON.stringify({ n, nextAt }));
+  await setProposal(env, row.id, { status: 'approved', submitted_at: null, error: null });
+  summary.note = retryNote;
+  return summary;
+}
 const isSendSlowdown = (e: unknown): e is UpworkBusy | McpJobAccessError =>
   e instanceof McpJobAccessError || (e instanceof UpworkBusy && !e.message.startsWith('Paused:'));
 
@@ -289,9 +345,11 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
   let previewStored = false;
   try {
     // Upwork already named the next legal attempt. Waiting here makes no request and does not move send:retryAt.
+    // A transient job re-check waits on its own later cron too, so this run does not call Upwork again.
     if (row && !hasUnknown) {
       const until = await pendingUpworkWait(env);
       if (until) { summary.note = slowDownNote(until, s.caps.timezone); return summary; }
+      if (await jobLookupCooling(env, row.id)) { summary.note = JOB_LOOKUP_RETRY_NOTE; return summary; }
     }
     if (row) {
       const meta = metaLanguageIn(row.cover_letter);
@@ -320,6 +378,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     // An unclear attempt remains reserved until it is reconciled or explicitly resolved.
     const unclear = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'unknown'").first<{ n: number }>();
     if (unclear?.n) { summary.note = `Checking ${unclear.n} unclear send(s) on Upwork before sending more.`; return summary; }
+    if (await jobLookupCooling(env, row.id)) { summary.note = JOB_LOOKUP_RETRY_NOTE; return summary; }
     await markStallOpen(env, row.id);
     stallId = row.id;
 
@@ -327,26 +386,45 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     if (balance !== null) await patchState(env, { connectsBalance: balance });
     await checkConnectsAlert(env, balance);
 
-    let d: Awaited<ReturnType<typeof jobDetails>>;
-    try { d = await jobDetails(client, state, row.job_id); } catch (e) {
-      if (classifyFailure(e) !== 'refused') throw e;
-      await setProposal(env, row.id, { status: 'failed', error: `The job is no longer available on Upwork: ${errText(e)}` }); summary.note = 'A job was no longer available.'; return summary;
+    // A fetch or confirmation inside the last hour is enough. Send, and let a later refusal stand.
+    const fresh = await jobDetailsFresh(env, row);
+    let d: Awaited<ReturnType<typeof jobDetails>> | null = null;
+    if (!fresh) {
+      try { d = await jobDetails(client, state, row.job_id); } catch (e) {
+        const kind = classifyFailure(e);
+        // 429 / THROTTLED keep Upwork's own retry clock. Do not schedule a faster re-check.
+        if (kind === 'throttle' || isThrottle(e)) throw e;
+        if (kind === 'transient') return await scheduleTransientRetry(env, row, summary, JOB_LOOKUP_EXHAUSTED, JOB_LOOKUP_RETRY_NOTE);
+        if (kind !== 'refused') throw e;
+        await delKv(env, lookupKey(row.id));
+        if (!isJobClosedOrMissing(e)) {
+          await setProposal(env, row.id, { status: 'failed', error: `Upwork refused to open the job: ${errText(e)}` });
+          summary.note = 'Upwork refused to open a job.';
+          return summary;
+        }
+        await setProposal(env, row.id, { status: 'failed', error: `The job is no longer available on Upwork: ${errText(e)}` });
+        summary.note = 'A job was no longer available.';
+        return summary;
+      }
+      await stampJobDetails(env, row.job_id);
     }
     const invited = await invitedJobIds(client, state);
-    const drop = d.applied ? 'Already applied on Upwork (no Connects spent)'
+    const drop = !d ? (invited.has(row.job_id) ? 'Invited: answer the invitation on Upwork' : null)
+      : d.applied ? 'Already applied on Upwork (no Connects spent)'
       : invited.has(row.job_id) ? 'Invited: answer the invitation on Upwork'
       : cannotApply(d.canApply, d.connectsCost, balance ?? d.connectsBalance) === 'closed' ? CLOSED_REASON
       : connectsOverLimit(d.connectsCost, s);
     if (drop) { await setProposal(env, row.id, { status: 'failed', error: drop }); summary.note = drop; return summary; }
     // The job details carry the balance too; use it when the account read failed.
-    const wait = connectsGate(balance ?? d.connectsBalance, d.connectsCost, s);
+    // A fresh skip has no new cost yet; the preview below is the check.
+    const wait = d ? connectsGate(balance ?? d.connectsBalance, d.connectsCost, s) : null;
     if (wait) { summary.note = wait; await holdRetries(env); return summary; }
     const storedBasis = (() => { try { const p = JSON.parse(row.create_params || '{}') as { bid_basis?: unknown }; return typeof p.bid_basis === 'string' ? p.bid_basis : null; } catch { return null; } })();
-    const decision = resolveSendBid({ jobType: row.job_type, bid: row.bid, bidBasis: storedBasis, liveType: d.jobType, liveBudget: d.budget, settings: s });
+    const decision = resolveSendBid({ jobType: row.job_type, bid: row.bid, bidBasis: storedBasis, liveType: d?.jobType ?? null, liveBudget: d?.budget ?? null, settings: s });
     if (decision.hold || decision.bid === null) return await holdForReview(env, row.id, decision.hold ?? 'Not sent: no bid amount is available.', summary);
     if (decision.bid !== row.bid || decision.jobType !== row.job_type) {
       await setProposal(env, row.id, { bid: decision.bid, job_type: decision.jobType });
-      if (decision.basis === 'bidder-hourly-usd' || !d.budget) await env.DB.prepare('UPDATE jobs SET job_type = ? WHERE id = ?').bind(decision.jobType, row.job_id).run();
+      if (decision.basis === 'bidder-hourly-usd' || !d?.budget) await env.DB.prepare('UPDATE jobs SET job_type = ? WHERE id = ?').bind(decision.jobType, row.job_id).run();
       else await env.DB.prepare('UPDATE jobs SET job_type = ?, budget = ? WHERE id = ?').bind(decision.jobType, d.budget, row.job_id).run();
       row.bid = decision.bid;
       row.job_type = decision.jobType;
@@ -412,6 +490,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
         }
       }
       previewId = p.previewId;
+      await stampJobDetails(env, row.job_id);
       finalCost = p.connectsCost;
       const violation = cannotApply(p.canApply, p.connectsCost, balance) ? 'The final preview is not eligible.'
         : connectsOverLimit(p.connectsCost, s)
@@ -424,6 +503,8 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     } catch (e) {
       // Nothing was sent at the preview step, so the proposal can go back to approved.
       const kind = classifyFailure(e);
+      if (kind === 'transient') return await scheduleTransientRetry(env, row, summary, PREP_EXHAUSTED, PREP_RETRY_NOTE);
+      // JOB_IS_NO_LONGER_AVAILABLE lands here: the proposal is closed and is not retried.
       if (kind === 'refused') { await setProposal(env, row.id, { status: 'failed', submitted_at: null, error: `Upwork refused the proposal: ${errText(e)}` }); return summary; }
       await setProposal(env, row.id, { status: 'approved', submitted_at: null });
       if (isSendSlowdown(e) || kind === 'throttle') {
@@ -519,7 +600,7 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
         await pauseForWarning(env, 'sending', errText(e));
         summary.note = 'Paused: Upwork account warning.'; return summary;
       }
-      // Timeout, dropped connection, 5xx: it may have gone through. Never resend; verify on the next runs.
+      // Timeout, dropped connection, 5xx, or a retryable upstream error: it may have gone through. Never resend.
       await setProposal(env, row.id, { status: 'unknown', submitted_at: attemptAt, boost_connects: boost, error: `Unclear answer from Upwork (${errText(e)}); checking, not resending` });
       await countError(env, s, errText(e));
       summary.note = 'Unclear answer from Upwork; checking before anything else is sent.';
@@ -577,6 +658,11 @@ async function runSenderLocked(env: Env, lease: string): Promise<SendSummary | n
     await env.DB.prepare("INSERT INTO runs (finished_at, submitted, note) VALUES (datetime('now'), 1, ?)").bind(summary.note).run();
     return summary;
   } catch (e) {
+    // A transient outage before confirm is the same bounded later-cron retry. A rate limit falls through
+    // to Upwork's own clock below and is never retried faster than that.
+    if (row && !confirmAttempted && classifyFailure(e) === 'transient') {
+      return await scheduleTransientRetry(env, row, summary, PREP_EXHAUSTED, PREP_RETRY_NOTE);
+    }
     // A real Upwork slow-down keeps Upwork's own clock. It must not start a second timer that outlasts it and
     // then refreshes itself, or one refused job open blocks every other approval.
     if (isSendSlowdown(e)) {
