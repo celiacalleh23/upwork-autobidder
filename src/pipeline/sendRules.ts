@@ -95,9 +95,11 @@ export function classifyFailure(e: unknown): FailureKind {
   const msg = e instanceof Error ? e.message : String(e);
   if (isAccountWarning(msg)) return 'warning';
   if (/\b429\b|rate.?limit|too many requests|\bthrottled?\b/i.test(msg)) return 'throttle';
+  // "Jobs are being opened too quickly" is the same kind of temporary outage as a retryable UPSTREAM lookup.
+  // It is checked before the confirmation rule, which also matches the word "permission".
+  if (isTransientUpstream(e) || (e instanceof McpToolError && /opened too quickly/i.test(msg))) return 'transient';
   if (/(requires?|needs?|awaiting).{0,40}(user|human|explicit).{0,20}(confirm|approv)|not (allowed|permitted) to confirm|confirmation (is )?required|permission/i.test(msg)) return 'needs_confirmation';
   if (e instanceof McpAuthError) return 'refused';
-  if (isTransientUpstream(e)) return 'transient';
   if (e instanceof McpToolError && !/timeout|timed out|temporar|try again|\b5\d\d\b|internal error|unavailable/i.test(msg)) return 'refused';
   return 'ambiguous';
 }

@@ -32,6 +32,11 @@ export async function ownsLease(env: Env, name: string, token: string): Promise<
   return Number.parseInt(token, 10) > Date.now() && (await getKv(env, `lease:${name}`)) === token;
 }
 
+// True while another run still holds this lease. The stored value starts with its expiry.
+export async function leaseHeld(env: Env, name: string, now = Date.now()): Promise<boolean> {
+  return Number.parseInt((await getKv(env, `lease:${name}`)) ?? '', 10) > now;
+}
+
 export async function renewLease(env: Env, name: string, token: string, ttlMs: number): Promise<string | null> {
   if (Number.parseInt(token, 10) <= Date.now()) return null;
   const next = `${Date.now() + ttlMs}:${crypto.randomUUID()}`;

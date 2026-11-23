@@ -1,5 +1,5 @@
 import type { Env } from './settings';
-import { permitSearch, permitUpworkCall, permitJobRead, recordUpworkError } from './upworkPace';
+import { permitFindJobs, permitSearch, permitUpworkCall, permitJobRead, recordUpworkError } from './upworkPace';
 
 // Minimal MCP client over Streamable HTTP: initialize → notifications/initialized → tools/list / tools/call.
 
@@ -88,7 +88,9 @@ export class McpClient {
     }
     if (this.env && method === 'tools/call') {
       const p = params as { name?: string; arguments?: { action?: string } };
-      if ((p.name ?? '').split(/__|\./).pop() === 'find_jobs' && ['search', 'smart_search'].includes(p.arguments?.action ?? '')) await permitSearch(this.env, this.scanOnly);
+      const base = (p.name ?? '').split(/__|\./).pop();
+      if (base === 'find_jobs') await permitFindJobs(this.env, this.scanOnly);
+      if (base === 'find_jobs' && ['search', 'smart_search'].includes(p.arguments?.action ?? '')) await permitSearch(this.env, this.scanOnly);
     }
     const id = this.nextId++;
     const res = await this.post({ jsonrpc: '2.0', id, method, params });

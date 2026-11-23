@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { environment } from './support/db';
 import { discoveryDue, discoveryJob, runScan } from '../src/pipeline/scan';
 import { persistSnapshot, snapshotHoldReason } from '../src/pipeline/snapshot';
-import { permitSearch } from '../src/upworkPace';
+import { FIND_JOBS_PER_MINUTE, permitFindJobs, permitSearch } from '../src/upworkPace';
 import { getKv, putKv } from '../src/kv';
 import { patchState, saveSettings, DEFAULT_SETTINGS } from '../src/settings';
 import * as oauth from '../src/oauth';
@@ -25,6 +25,28 @@ it.each([{limit:15,spacing:0,advance:60001},{limit:150,spacing:10000,advance:360
   vi.setSystemTime(now+advance);
   await expect(permitSearch(e)).resolves.toBeUndefined();
 });
+it('does not start bidding discovery while a send is in flight', async () => {
+  const e = env();
+  await patchState(e, { paused: false, upwork: { connected: true, orgUid: 'mock', toolNames: { find_jobs: 'find_jobs' } } });
+  await saveSettings(e, { ...structuredClone(DEFAULT_SETTINGS), keywords: ['Email'] });
+  await putKv(e, 'lease:send', `${Date.now() + 60_000}:send-token`);
+  const callTool = vi.fn().mockResolvedValue({ jobs: [] });
+  vi.spyOn(oauth, 'upworkClient').mockResolvedValue({ callTool } as unknown as McpClient);
+  await runScan(e, Date.UTC(2026, 10, 8, 15, 0));
+  expect(callTool).not.toHaveBeenCalled();
+});
+
+it('keeps find_jobs calls within the shared per-minute budget', async () => {
+  vi.useFakeTimers();
+  const now = Date.now();
+  const e = env();
+  for (let i = 0; i < FIND_JOBS_PER_MINUTE; i++) await putKv(e, `upwork:findJobs:seed${i}`, String(now - i * 1000));
+  await expect(permitFindJobs(e)).rejects.toThrow('find_jobs budget');
+  vi.setSystemTime(now + 60_001);
+  await expect(permitFindJobs(e)).resolves.toBeUndefined();
+  await expect(permitFindJobs(e, true)).resolves.toBeUndefined();
+});
+
 it('stores the description already on the search hit and does not read the job again', async () => {
   const e = env();
   const id = '2119044137876131663';

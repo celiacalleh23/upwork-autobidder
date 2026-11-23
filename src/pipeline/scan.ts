@@ -1,4 +1,4 @@
-import { acquireLease, getKv, ownsLease, putKv, releaseLease } from '../kv';
+import { acquireLease, getKv, leaseHeld, ownsLease, putKv, releaseLease } from '../kv';
 import { findKey, scanConnection, upworkClient, type UpworkPurpose } from '../oauth';
 import { loadSettings, loadState, patchState, type Env } from '../settings';
 import { addJob, jobUrl } from './jobs';
@@ -68,6 +68,8 @@ export async function runScan(env: Env, scheduledTime: number): Promise<void> {
 
 export async function scanAccount(env: Env, scheduledTime: number, purpose: UpworkPurpose, accept = addJob): Promise<void> {
   if (purpose === 'scan' && env.SCAN_ACCOUNT_DISABLED === 'true') return;
+  // A send already in flight uses this account's find_jobs budget. Let it finish; the next tick can search.
+  if (purpose === 'bidding' && await leaseHeld(env, 'send')) return;
   const scope = purpose === 'scan' ? ':scan' : '';
   const key = (name: string) => `discovery:${name}${scope}`;
   const leaseName = `discovery${scope}`;

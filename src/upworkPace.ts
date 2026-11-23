@@ -113,6 +113,19 @@ export async function clearThrottle(env: Env): Promise<void> {
   if (await getKv(env, THROTTLE_KEY)) await delKv(env, THROTTLE_KEY);
 }
 
+// Upwork allows about 12 find_jobs calls per minute. Discovery searches and a send's job read share this
+// counter in D1 so they cannot add up past the limit in the same minute.
+export const FIND_JOBS_PER_MINUTE = 12;
+
+export async function permitFindJobs(env: Env, scanOnly = false, now = Date.now()): Promise<void> {
+  const prefix = scanOnly ? 'upwork:scanFindJobs:' : 'upwork:findJobs:';
+  const r = await env.DB.prepare(`INSERT INTO kv(key,value)
+    SELECT ?, ? WHERE
+      (SELECT COUNT(*) FROM kv WHERE key LIKE ? AND CAST(value AS INTEGER) > ?) < ?`)
+    .bind(`${prefix}${crypto.randomUUID()}`, String(now), `${prefix}%`, now - 60_000, FIND_JOBS_PER_MINUTE).run();
+  if (!r.meta.changes) throw new UpworkBusy('Upwork find_jobs budget is full for this minute; retry on the next check.');
+}
+
 // Search attempts, including retries, use shared rolling quotas confirmed by the account owner.
 export async function permitSearch(env: Env, scanOnly = false): Promise<void> {
   const now = Date.now();

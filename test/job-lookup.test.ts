@@ -6,6 +6,7 @@ import { McpToolError, type McpClient } from '../src/mcp';
 import * as oauth from '../src/oauth';
 import { runSender } from '../src/pipeline/send';
 import { FRESH_JOB_DETAILS_MS } from '../src/pipeline/sendRules';
+import { FIND_JOBS_PER_MINUTE } from '../src/upworkPace';
 import { DEFAULT_SETTINGS, loadState, patchState } from '../src/settings';
 import { environment } from './support/db';
 
@@ -198,6 +199,54 @@ it('marks a fresh send closed when Upwork says the job is gone, and does not ret
   expect(actions.filter((action) => action === 'manage_proposals:create')).toHaveLength(1);
 });
 
+it('defers an approved send while discovery holds the find_jobs lease', async () => {
+  const e = await ready();
+  await approve(e, new Date(Date.now() - 2 * FRESH_JOB_DETAILS_MS).toISOString());
+  await putKv(e, 'lease:discovery', `${Date.now() + 60_000}:discovery-token`);
+  const upwork = vi.spyOn(oauth, 'upworkClient');
+  await runSender(e);
+  expect(upwork).not.toHaveBeenCalled();
+  expect(rowOf(e)).toEqual({ status: 'approved', error: null });
+  expect((await loadState(e)).senderNote).toBe('Discovery is searching Upwork; this send waits for the next check.');
+  expect((await loadState(e)).mode).toBe('review');
+});
+
+it('keeps a proposal approved when Upwork says jobs are being opened too quickly', async () => {
+  const e = await ready();
+  await approve(e, new Date(Date.now() - 2 * FRESH_JOB_DETAILS_MS).toISOString());
+  client(async (_name, args: { action?: string }) => {
+    if (args?.action === 'check') return { connectsBalance: 80 };
+    if (args?.action === 'get') throw new McpToolError('Upwork find_jobs: {"error_code":"PERMISSION","reason":"Jobs are being opened too quickly. Slow down."}');
+    return { invitations: [] };
+  });
+  await runSender(e);
+  expect(rowOf(e)).toEqual({ status: 'approved', error: null });
+  expect((await markOf(e))?.n).toBe(1);
+  expect((await loadState(e)).mode).toBe('review');
+});
+
+it('closes the proposal when confirm says the job is no longer available', async () => {
+  const e = await ready();
+  await approve(e, new Date().toISOString());
+  const actions: string[] = [];
+  client(async (name, args: { action?: string }) => {
+    actions.push(`${name}:${args?.action}`);
+    if (args?.action === 'check') return { connectsBalance: 80 };
+    if (args?.action === 'invitations') return { invitations: [] };
+    if (args?.action === 'create') return { preview_id: 'preview-1', connects_cost: 8, can_apply: true, questions: [] };
+    if (args?.action === 'confirm') throw new McpToolError(goneText);
+    return {};
+  });
+  await runSender(e);
+  expect(actions).not.toContain('find_jobs:get');
+  expect(rowOf(e).status).toBe('failed');
+  expect(rowOf(e).error).toContain('Upwork refused the proposal');
+  expect(rowOf(e).error).toContain('JOB_IS_NO_LONGER_AVAILABLE');
+  expect(await getKv(e, 'send:jobLookup:1')).toBeNull();
+  await runSender(e);
+  expect(actions.filter((action) => action === 'confirm_preview:confirm')).toHaveLength(1);
+});
+
 it('counts a later re-check against the Upwork call budget and does not call while that budget is closed', async () => {
   vi.useFakeTimers();
   const e = await ready();
@@ -228,4 +277,24 @@ it('counts a later re-check against the Upwork call budget and does not call whi
   expect(gets).toBe(1);
   expect(rowOf(e)).toEqual({ status: 'approved', error: null });
   expect((await markOf(e))?.n).toBe(1);
+});
+
+it('does not read a job when this minute already used the find_jobs budget', async () => {
+  vi.useFakeTimers();
+  const e = await ready();
+  await putKv(e, 'upwork_tokens', await seal(e, { accessToken: 'synthetic', expiresAt: Date.now() + 3_600_000 }));
+  await approve(e, new Date(Date.now() - 2 * FRESH_JOB_DETAILS_MS).toISOString());
+  for (let i = 0; i < FIND_JOBS_PER_MINUTE; i++) await putKv(e, `upwork:findJobs:used${i}`, String(Date.now()));
+  let gets = 0;
+  vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+    const message = JSON.parse(String(init?.body ?? '{}')) as { id?: number; method?: string; params?: { name?: string; arguments?: { action?: string } } };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    if (message.method === 'tools/call' && message.params?.name === 'find_jobs' && message.params.arguments?.action === 'get') gets += 1;
+    const result = message.method === 'initialize' ? { protocolVersion: '2025-06-18' } : { structuredContent: { connectsBalance: 80, invitations: [] } };
+    return Response.json({ jsonrpc: '2.0', id: message.id, result });
+  });
+  await finish(runSender(e));
+  expect(gets).toBe(0);
+  expect(rowOf(e)).toEqual({ status: 'approved', error: null });
+  expect((await loadState(e)).mode).toBe('review');
 });

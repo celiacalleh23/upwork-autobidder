@@ -95,6 +95,8 @@ describe('classifyFailure', () => {
     const gone = new McpToolError('Upwork manage_proposals: {"error_code":"JOB_IS_NO_LONGER_AVAILABLE","reason":"This job is no longer available","retryable":false}');
     expect(classifyFailure(gone)).toBe('refused');
     expect(isJobClosedOrMissing(gone)).toBe(true);
+    expect(classifyFailure(new McpToolError('Upwork find_jobs: jobs are being opened too quickly'))).toBe('transient');
+    expect(classifyFailure(new McpToolError('Upwork find_jobs: {"error_code":"PERMISSION","reason":"Jobs are being opened too quickly. Slow down."}'))).toBe('transient');
   });
 });
 
